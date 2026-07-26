@@ -40,25 +40,37 @@ class _SyncScreenState extends ConsumerState<SyncScreen> {
     return Scaffold(
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       appBar: AppBar(
-        title: Text('同步 / 云端账号', style: TextStyle(color: AppColors.onScaffold(context))),
-        backgroundColor: AppColors.dialogBg(context),
+        title: Text(
+          '同步 / 云端账号',
+          style: TextStyle(color: AppColors.onScaffold(context)),
+        ),
+        backgroundColor: Theme.of(context).scaffoldBackgroundColor,
         iconTheme: IconThemeData(color: AppColors.onScaffold(context)),
       ),
       body: ListView(
-        padding: EdgeInsets.all(16),
+        padding: const EdgeInsets.fromLTRB(16, 20, 16, 32),
         children: [
           _card(
             child: ListTile(
               leading: Icon(Icons.dns_outlined, color: AppColors.amber),
-              title: Text('Workers 服务器', style: TextStyle(color: AppColors.onScaffold(context))),
+              title: Text(
+                'Workers 服务器',
+                style: TextStyle(color: AppColors.onScaffold(context)),
+              ),
               subtitle: Text(
                 session.baseUrl ?? '未配置（例如 https://xxx.workers.dev）',
                 style: TextStyle(
-                  color: session.baseUrl != null ? AppColors.textMuted : Colors.redAccent,
+                  color: session.baseUrl != null
+                      ? AppColors.mutedText(context)
+                      : AppColors.error,
                   fontSize: 12,
                 ),
               ),
-              trailing: Icon(Icons.edit, color: AppColors.mutedText(context), size: 18),
+              trailing: Icon(
+                Icons.edit,
+                color: AppColors.mutedText(context),
+                size: 18,
+              ),
               onTap: _editServerUrl,
             ),
           ),
@@ -67,7 +79,9 @@ class _SyncScreenState extends ConsumerState<SyncScreen> {
             child: ListTile(
               leading: Icon(
                 session.loggedIn ? Icons.cloud_done : Icons.cloud_off,
-                color: session.loggedIn ? Colors.greenAccent : AppColors.textMuted,
+                color: session.loggedIn
+                    ? AppColors.success
+                    : AppColors.mutedText(context),
               ),
               title: Text(
                 session.loggedIn ? '已登录：${session.username}' : '未登录',
@@ -77,13 +91,31 @@ class _SyncScreenState extends ConsumerState<SyncScreen> {
                 session.loggedIn
                     ? '角色：${session.role ?? 'user'}'
                     : '登录后可同步歌单、导入歌单',
-                style: TextStyle(color: AppColors.mutedText(context), fontSize: 12),
+                style: TextStyle(
+                  color: AppColors.mutedText(context),
+                  fontSize: 12,
+                ),
               ),
             ),
           ),
           if (_message != null) ...[
             const SizedBox(height: 8),
-            Text(_message!, style: TextStyle(color: AppColors.amber, fontSize: 12)),
+            DecoratedBox(
+              decoration: BoxDecoration(
+                color: AppColors.fill(context),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(10),
+                child: Text(
+                  _message!,
+                  style: TextStyle(
+                    color: AppColors.secondaryText(context),
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+            ),
           ],
           const SizedBox(height: 16),
           if (!session.loggedIn) _buildAuth(),
@@ -107,7 +139,10 @@ class _SyncScreenState extends ConsumerState<SyncScreen> {
   Widget _card({required Widget child}) {
     return Card(
       color: AppColors.card(context),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(color: AppColors.cardBorder(context)),
+      ),
       child: child,
     );
   }
@@ -145,6 +180,7 @@ class _SyncScreenState extends ConsumerState<SyncScreen> {
                 labelStyle: TextStyle(color: AppColors.mutedText(context)),
               ),
             ),
+            const SizedBox(height: 12),
             TextField(
               controller: _passCtrl,
               obscureText: true,
@@ -156,7 +192,10 @@ class _SyncScreenState extends ConsumerState<SyncScreen> {
             ),
             const SizedBox(height: 12),
             ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: AppColors.amber, foregroundColor: Colors.black),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Theme.of(context).colorScheme.primary,
+                foregroundColor: Theme.of(context).colorScheme.onPrimary,
+              ),
               onPressed: _busy ? null : _submitAuth,
               child: Text(_busy ? '请稍候…' : (_isLoginMode ? '登录' : '注册')),
             ),
@@ -171,7 +210,10 @@ class _SyncScreenState extends ConsumerState<SyncScreen> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         ElevatedButton.icon(
-          style: ElevatedButton.styleFrom(backgroundColor: AppColors.amber, foregroundColor: Colors.black),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Theme.of(context).colorScheme.primary,
+            foregroundColor: Theme.of(context).colorScheme.onPrimary,
+          ),
           onPressed: _busy ? null : _pullPlaylists,
           icon: Icon(Icons.cloud_download),
           label: Text(_busy ? '同步中…' : '从云端拉取歌单'),
@@ -183,16 +225,43 @@ class _SyncScreenState extends ConsumerState<SyncScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text('导入歌单（网易/QQ/酷我链接或 ID）', style: TextStyle(color: AppColors.onScaffold(context), fontWeight: FontWeight.w600)),
+                Text(
+                  '导入歌单（网易/QQ/酷我链接或 ID）',
+                  style: TextStyle(
+                    color: AppColors.onScaffold(context),
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
                 const SizedBox(height: 8),
                 DropdownButtonFormField<String>(
                   value: _importPlatform,
                   dropdownColor: AppColors.dialogBg(context),
-                  decoration: InputDecoration(labelText: '平台（纯数字 ID 时需要）', labelStyle: TextStyle(color: AppColors.mutedText(context))),
+                  decoration: InputDecoration(
+                    labelText: '平台（纯数字 ID 时需要）',
+                    labelStyle: TextStyle(color: AppColors.mutedText(context)),
+                  ),
                   items: [
-                    DropdownMenuItem(value: 'tx', child: Text('QQ 音乐', style: TextStyle(color: AppColors.onScaffold(context)))),
-                    DropdownMenuItem(value: 'kw', child: Text('酷我', style: TextStyle(color: AppColors.onScaffold(context)))),
-                    DropdownMenuItem(value: 'wy', child: Text('网易云', style: TextStyle(color: AppColors.onScaffold(context)))),
+                    DropdownMenuItem(
+                      value: 'tx',
+                      child: Text(
+                        'QQ 音乐',
+                        style: TextStyle(color: AppColors.onScaffold(context)),
+                      ),
+                    ),
+                    DropdownMenuItem(
+                      value: 'kw',
+                      child: Text(
+                        '酷我',
+                        style: TextStyle(color: AppColors.onScaffold(context)),
+                      ),
+                    ),
+                    DropdownMenuItem(
+                      value: 'wy',
+                      child: Text(
+                        '网易云',
+                        style: TextStyle(color: AppColors.onScaffold(context)),
+                      ),
+                    ),
                   ],
                   onChanged: (v) => setState(() => _importPlatform = v ?? 'tx'),
                 ),
@@ -204,10 +273,13 @@ class _SyncScreenState extends ConsumerState<SyncScreen> {
                     hintStyle: TextStyle(color: AppColors.mutedText(context)),
                   ),
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 12),
                 OutlinedButton(
                   onPressed: _busy ? null : _importPlaylist,
-                  child: const Text('预览并导入', style: TextStyle(color: AppColors.amber)),
+                  child: Text(
+                    '预览并导入',
+                    style: TextStyle(color: AppColors.accentOf(context)),
+                  ),
                 ),
               ],
             ),
@@ -219,7 +291,7 @@ class _SyncScreenState extends ConsumerState<SyncScreen> {
             await ref.read(cloudSessionProvider.notifier).logout();
             setState(() => _message = '已退出登录');
           },
-          child: const Text('退出登录', style: TextStyle(color: Colors.redAccent)),
+          child: const Text('退出登录', style: TextStyle(color: AppColors.error)),
         ),
       ],
     );
@@ -229,32 +301,55 @@ class _SyncScreenState extends ConsumerState<SyncScreen> {
     return _card(
       child: ListTile(
         leading: Icon(Icons.admin_panel_settings, color: AppColors.amber),
-        title: Text('用户管理（管理员）', style: TextStyle(color: AppColors.onScaffold(context))),
-        subtitle: Text('创建 / 删除 / 重置密码', style: TextStyle(color: AppColors.mutedText(context), fontSize: 12)),
-        trailing: Icon(Icons.chevron_right, color: AppColors.mutedText(context)),
+        title: Text(
+          '用户管理（管理员）',
+          style: TextStyle(color: AppColors.onScaffold(context)),
+        ),
+        subtitle: Text(
+          '创建 / 删除 / 重置密码',
+          style: TextStyle(color: AppColors.mutedText(context), fontSize: 12),
+        ),
+        trailing: Icon(
+          Icons.chevron_right,
+          color: AppColors.mutedText(context),
+        ),
         onTap: _openAdminUsers,
       ),
     );
   }
 
   Future<void> _editServerUrl() async {
-    final ctrl = TextEditingController(text: ref.read(cloudSessionProvider).baseUrl ?? '');
+    final ctrl = TextEditingController(
+      text: ref.read(cloudSessionProvider).baseUrl ?? '',
+    );
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.dialogBg(context),
-        title: Text('Workers 地址', style: TextStyle(color: AppColors.onScaffold(context))),
-        content: TextField(
-          controller: ctrl,
+        title: Text(
+          'Workers 地址',
           style: TextStyle(color: AppColors.onScaffold(context)),
-          decoration: InputDecoration(
-            hintText: 'https://lx-music-api.xxx.workers.dev',
-            hintStyle: TextStyle(color: AppColors.mutedText(context)),
+        ),
+        content: SingleChildScrollView(
+          child: TextField(
+            controller: ctrl,
+            style: TextStyle(color: AppColors.onScaffold(context)),
+            keyboardType: TextInputType.url,
+            decoration: InputDecoration(
+              hintText: 'https://lx-music-api.xxx.workers.dev',
+              hintStyle: TextStyle(color: AppColors.mutedText(context)),
+            ),
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
-          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('保存', style: TextStyle(color: AppColors.amber))),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('保存', style: TextStyle(color: AppColors.amber)),
+          ),
         ],
       ),
     );
@@ -309,18 +404,26 @@ class _SyncScreenState extends ConsumerState<SyncScreen> {
         final id = pl['id']?.toString() ?? '';
         final name = pl['name']?.toString() ?? '云端歌单';
         if (id.isEmpty || id == 'love') continue;
-        final songs = ((pl['list'] as List?) ?? []).map(_songFromCloud).whereType<MusicItem>().toList();
+        final songs = ((pl['list'] as List?) ?? [])
+            .map(_songFromCloud)
+            .whereType<MusicItem>()
+            .toList();
         final existing = playlistService.getPlaylist(id);
         if (existing != null) {
           playlistService.updatePlaylist(id: id, name: name, songs: songs);
         } else {
-          final created = playlistService.createPlaylist(name: name, description: '云端同步');
+          final created = playlistService.createPlaylist(
+            name: name,
+            description: '云端同步',
+          );
           // 用服务端 id 更稳：直接再 update 一次 songs，本地 id 可能不同
           playlistService.updatePlaylist(id: created.id, songs: songs);
         }
       }
       ref.read(playlistVersionProvider.notifier).state++;
-      setState(() => _message = '已同步：喜欢 ${favSongs.length} 首，歌单 ${userList.length} 个');
+      setState(
+        () => _message = '已同步：喜欢 ${favSongs.length} 首，歌单 ${userList.length} 个',
+      );
     } catch (e) {
       setState(() => _message = '同步失败: $e');
     } finally {
@@ -359,7 +462,10 @@ class _SyncScreenState extends ConsumerState<SyncScreen> {
       _message = '正在预览…';
     });
     try {
-      final preview = await _api.importPlaylistPreview(urlOrId: input, platform: _importPlatform);
+      final preview = await _api.importPlaylistPreview(
+        urlOrId: input,
+        platform: _importPlatform,
+      );
       if (preview['error'] != null) {
         setState(() => _message = preview['error'].toString());
         return;
@@ -373,11 +479,23 @@ class _SyncScreenState extends ConsumerState<SyncScreen> {
         context: context,
         builder: (ctx) => AlertDialog(
           backgroundColor: AppColors.dialogBg(context),
-          title: Text(name, style: TextStyle(color: AppColors.onScaffold(context))),
-          content: Text('共 ${songs.length} 首，确认导入到云端？', style: TextStyle(color: AppColors.mutedText(context))),
+          title: Text(
+            name,
+            style: TextStyle(color: AppColors.onScaffold(context)),
+          ),
+          content: Text(
+            '共 ${songs.length} 首，确认导入到云端？',
+            style: TextStyle(color: AppColors.mutedText(context)),
+          ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
-            TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('导入', style: TextStyle(color: AppColors.amber))),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('导入', style: TextStyle(color: AppColors.amber)),
+            ),
           ],
         ),
       );
@@ -413,6 +531,9 @@ class _SyncScreenState extends ConsumerState<SyncScreen> {
       await showModalBottomSheet(
         context: context,
         backgroundColor: AppColors.dialogBg(context),
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * 0.8,
+        ),
         isScrollControlled: true,
         builder: (ctx) {
           return SafeArea(
@@ -422,7 +543,14 @@ class _SyncScreenState extends ConsumerState<SyncScreen> {
                 children: [
                   Padding(
                     padding: EdgeInsets.all(16),
-                    child: Text('用户列表', style: TextStyle(color: AppColors.onScaffold(context), fontSize: 16, fontWeight: FontWeight.bold)),
+                    child: Text(
+                      '用户列表',
+                      style: TextStyle(
+                        color: AppColors.onScaffold(context),
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
                   ),
                   Expanded(
                     child: ListView.builder(
@@ -430,15 +558,33 @@ class _SyncScreenState extends ConsumerState<SyncScreen> {
                       itemBuilder: (_, i) {
                         final u = users[i];
                         return ListTile(
-                          title: Text('${u['username']} (${u['role']})', style: TextStyle(color: AppColors.onScaffold(context))),
-                          subtitle: Text('id=${u['id']}', style: TextStyle(color: AppColors.mutedText(context), fontSize: 11)),
+                          title: Text(
+                            '${u['username']} (${u['role']})',
+                            style: TextStyle(
+                              color: AppColors.onScaffold(context),
+                            ),
+                          ),
+                          subtitle: Text(
+                            'id=${u['id']}',
+                            style: TextStyle(
+                              color: AppColors.mutedText(context),
+                              fontSize: 11,
+                            ),
+                          ),
                           trailing: IconButton(
-                            icon: Icon(Icons.delete, color: Colors.redAccent),
+                            icon: const Icon(
+                              Icons.delete,
+                              color: AppColors.error,
+                            ),
                             onPressed: () async {
                               try {
-                                await _api.adminDeleteUser(int.parse(u['id'].toString()));
+                                await _api.adminDeleteUser(
+                                  int.parse(u['id'].toString()),
+                                );
                                 if (ctx.mounted) Navigator.pop(ctx);
-                                setState(() => _message = '已删除 ${u['username']}');
+                                setState(
+                                  () => _message = '已删除 ${u['username']}',
+                                );
                               } catch (e) {
                                 setState(() => _message = '删除失败: $e');
                               }
@@ -451,7 +597,12 @@ class _SyncScreenState extends ConsumerState<SyncScreen> {
                   Padding(
                     padding: EdgeInsets.all(12),
                     child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(backgroundColor: AppColors.amber, foregroundColor: Colors.black),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Theme.of(context).colorScheme.primary,
+                        foregroundColor: Theme.of(
+                          context,
+                        ).colorScheme.onPrimary,
+                      ),
                       onPressed: () async {
                         final u = TextEditingController();
                         final p = TextEditingController();
@@ -459,17 +610,51 @@ class _SyncScreenState extends ConsumerState<SyncScreen> {
                           context: ctx,
                           builder: (d) => AlertDialog(
                             backgroundColor: AppColors.dialogBg(context),
-                            title: Text('新建用户', style: TextStyle(color: AppColors.onScaffold(context))),
-                            content: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                TextField(controller: u, style: TextStyle(color: AppColors.onScaffold(context)), decoration: InputDecoration(labelText: '用户名')),
-                                TextField(controller: p, obscureText: true, style: TextStyle(color: AppColors.onScaffold(context)), decoration: InputDecoration(labelText: '密码')),
-                              ],
+                            title: Text(
+                              '新建用户',
+                              style: TextStyle(
+                                color: AppColors.onScaffold(context),
+                              ),
+                            ),
+                            content: SingleChildScrollView(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  TextField(
+                                    controller: u,
+                                    style: TextStyle(
+                                      color: AppColors.onScaffold(context),
+                                    ),
+                                    decoration: InputDecoration(
+                                      labelText: '用户名',
+                                    ),
+                                  ),
+                                  const SizedBox(height: 12),
+                                  TextField(
+                                    controller: p,
+                                    obscureText: true,
+                                    style: TextStyle(
+                                      color: AppColors.onScaffold(context),
+                                    ),
+                                    decoration: InputDecoration(
+                                      labelText: '密码',
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
                             actions: [
-                              TextButton(onPressed: () => Navigator.pop(d, false), child: const Text('取消')),
-                              TextButton(onPressed: () => Navigator.pop(d, true), child: const Text('创建', style: TextStyle(color: AppColors.amber))),
+                              TextButton(
+                                onPressed: () => Navigator.pop(d, false),
+                                child: const Text('取消'),
+                              ),
+                              TextButton(
+                                onPressed: () => Navigator.pop(d, true),
+                                child: const Text(
+                                  '创建',
+                                  style: TextStyle(color: AppColors.amber),
+                                ),
+                              ),
                             ],
                           ),
                         );

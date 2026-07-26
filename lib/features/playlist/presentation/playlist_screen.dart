@@ -33,7 +33,9 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
 
   List<Playlist> _filterAndSort(List<Playlist> playlists) {
     // 系统歌单：我喜欢 / 最近播放 单独展示，不进普通列表
-    var filtered = playlists.where((p) => p.id != 'favorites' && p.id != 'recent').toList();
+    var filtered = playlists
+        .where((p) => p.id != 'favorites' && p.id != 'recent')
+        .toList();
 
     if (_searchQuery.isNotEmpty) {
       final q = _searchQuery.toLowerCase();
@@ -57,7 +59,9 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
   }
 
   /// 在库中按歌曲搜索：返回 (playlist, song, index)
-  List<({Playlist playlist, MusicItem song, int index})> _searchSongsInLibrary(List<Playlist> playlists) {
+  List<({Playlist playlist, MusicItem song, int index})> _searchSongsInLibrary(
+    List<Playlist> playlists,
+  ) {
     if (_searchQuery.isEmpty) return const [];
     final q = _searchQuery.toLowerCase();
     final out = <({Playlist playlist, MusicItem song, int index})>[];
@@ -107,18 +111,33 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
                 child: Icon(Icons.music_note, color: scheme.primary, size: 20),
               ),
               const SizedBox(width: 12),
-              Text('我的歌单', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: scheme.onSurface)),
+              Text(
+                '我的歌单',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  color: scheme.onSurface,
+                ),
+              ),
             ],
           ),
           actions: [
             IconButton(
               tooltip: '导入歌单',
-              icon: Icon(Icons.playlist_add, color: AppColors.onScaffold(context), size: 24),
+              icon: Icon(
+                Icons.playlist_add,
+                color: AppColors.onScaffold(context),
+                size: 24,
+              ),
               onPressed: () => _showImportDialog(context, ref),
             ),
             IconButton(
               tooltip: '新建歌单',
-              icon: Icon(Icons.add, color: AppColors.onScaffold(context), size: 24),
+              icon: Icon(
+                Icons.add,
+                color: AppColors.onScaffold(context),
+                size: 24,
+              ),
               onPressed: () => _showCreateDialog(context, ref),
             ),
           ],
@@ -131,7 +150,10 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
               child: TextField(
                 controller: _searchController,
                 focusNode: _searchFocus,
-                style: TextStyle(color: AppColors.onScaffold(context), fontSize: 14),
+                style: TextStyle(
+                  color: AppColors.onScaffold(context),
+                  fontSize: 14,
+                ),
                 // 延迟过滤，避免每个字符整页 rebuild 抢焦点
                 onChanged: (_) {
                   Future.microtask(() {
@@ -141,22 +163,33 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
                 textInputAction: TextInputAction.search,
                 decoration: InputDecoration(
                   hintText: '在库中搜索歌曲/歌单',
-                  hintStyle: TextStyle(color: AppColors.mutedText(context), fontSize: 14),
-                  prefixIcon: Icon(Icons.search, color: AppColors.mutedText(context), size: 20),
+                  hintStyle: TextStyle(
+                    color: AppColors.mutedText(context),
+                    fontSize: 14,
+                  ),
+                  prefixIcon: Icon(
+                    Icons.search,
+                    color: AppColors.mutedText(context),
+                    size: 20,
+                  ),
                   filled: true,
                   fillColor: AppColors.miniBar(context),
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                     borderSide: BorderSide.none,
                   ),
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 12,
+                  ),
                 ),
               ),
             ),
             Expanded(
               child: ListView(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
-                keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+                keyboardDismissBehavior:
+                    ScrollViewKeyboardDismissBehavior.onDrag,
                 children: [
                   if (_searchQuery.isEmpty) ...[
                     _buildFavoritesCard(context, ref, favorites, playerService),
@@ -168,39 +201,74 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
                       children: [
                         Text(
                           '歌单 (${filteredPlaylists.length})',
-                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: scheme.onSurface),
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: scheme.onSurface,
+                          ),
                         ),
                         IconButton(
-                          icon: Icon(Icons.sort, color: scheme.onSurface.withAlpha(120), size: 20),
+                          icon: Icon(
+                            Icons.sort,
+                            color: scheme.onSurface.withAlpha(120),
+                            size: 20,
+                          ),
                           onPressed: () => _showSortMenu(context),
                         ),
                       ],
                     ),
                     const SizedBox(height: 12),
-                    ...filteredPlaylists.map((playlist) => _buildPlaylistItem(context, ref, playlist)),
+                    ...filteredPlaylists.map(
+                      (playlist) => _buildPlaylistItem(context, ref, playlist),
+                    ),
                   ] else ...[
                     if (songHits.isNotEmpty) ...[
                       Text(
                         '歌曲 (${songHits.length})',
-                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: scheme.onSurface),
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: scheme.onSurface,
+                        ),
                       ),
                       const SizedBox(height: 8),
-                      ...songHits.map((hit) => _buildSongHitItem(context, ref, hit.playlist, hit.song, hit.index, playerService)),
+                      ...songHits.map(
+                        (hit) => _buildSongHitItem(
+                          context,
+                          ref,
+                          hit.playlist,
+                          hit.song,
+                          hit.index,
+                          playerService,
+                        ),
+                      ),
                       const SizedBox(height: 16),
                     ],
                     if (filteredPlaylists.isNotEmpty) ...[
                       Text(
                         '歌单 (${filteredPlaylists.length})',
-                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: scheme.onSurface),
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: scheme.onSurface,
+                        ),
                       ),
                       const SizedBox(height: 8),
-                      ...filteredPlaylists.map((playlist) => _buildPlaylistItem(context, ref, playlist)),
+                      ...filteredPlaylists.map(
+                        (playlist) =>
+                            _buildPlaylistItem(context, ref, playlist),
+                      ),
                     ],
                     if (songHits.isEmpty && filteredPlaylists.isEmpty)
                       Padding(
                         padding: const EdgeInsets.symmetric(vertical: 32),
                         child: Center(
-                          child: Text('未找到匹配的歌曲或歌单', style: TextStyle(color: scheme.onSurface.withAlpha(120))),
+                          child: Text(
+                            '未找到匹配的歌曲或歌单',
+                            style: TextStyle(
+                              color: scheme.onSurface.withAlpha(120),
+                            ),
+                          ),
                         ),
                       ),
                   ],
@@ -213,9 +281,15 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
     );
   }
 
-  void _openPlaylist(BuildContext context, WidgetRef ref, Playlist playlist, {String? focusSongId}) {
+  void _openPlaylist(
+    BuildContext context,
+    WidgetRef ref,
+    Playlist playlist, {
+    String? focusSongId,
+  }) {
     // 用最新 playlistService 数据，避免 stale 引用
-    final latest = ref.read(playlistServiceProvider).getPlaylist(playlist.id) ?? playlist;
+    final latest =
+        ref.read(playlistServiceProvider).getPlaylist(playlist.id) ?? playlist;
     ref.read(currentPlaylistProvider.notifier).state = latest;
     ref.read(playlistFocusSongIdProvider.notifier).state = focusSongId;
     context.push('/playlist/detail');
@@ -237,18 +311,31 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
         border: Border.all(color: AppColors.cardBorder(context)),
       ),
       child: ListTile(
-        onTap: () => _openPlaylist(context, ref, playlist, focusSongId: song.id),
+        onTap: () =>
+            _openPlaylist(context, ref, playlist, focusSongId: song.id),
         leading: ClipRRect(
           borderRadius: BorderRadius.circular(8),
           child: SizedBox(
             width: 44,
             height: 44,
             child: song.artwork != null && song.artwork!.isNotEmpty
-                ? Image.network(song.artwork!, fit: BoxFit.cover, errorBuilder: (_, __, ___) => Icon(Icons.music_note, color: AppColors.mutedText(context)))
+                ? Image.network(
+                    song.artwork!,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => Icon(
+                      Icons.music_note,
+                      color: AppColors.mutedText(context),
+                    ),
+                  )
                 : Icon(Icons.music_note, color: AppColors.mutedText(context)),
           ),
         ),
-        title: Text(song.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: AppColors.onScaffold(context), fontSize: 14)),
+        title: Text(
+          song.name,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(color: AppColors.onScaffold(context), fontSize: 14),
+        ),
         subtitle: Text(
           '${song.singer} · ${playlist.name}',
           maxLines: 1,
@@ -256,19 +343,32 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
           style: TextStyle(color: AppColors.mutedText(context), fontSize: 12),
         ),
         trailing: IconButton(
-          icon: Icon(Icons.play_arrow_rounded, color: AppColors.accentOf(context)),
+          icon: Icon(
+            Icons.play_arrow_rounded,
+            color: AppColors.accentOf(context),
+          ),
           onPressed: () {
-            final latest = ref.read(playlistServiceProvider).getPlaylist(playlist.id) ?? playlist;
+            final latest =
+                ref.read(playlistServiceProvider).getPlaylist(playlist.id) ??
+                playlist;
             if (latest.songs.isEmpty) return;
             final idx = latest.songs.indexWhere((s) => s.id == song.id);
-            playerService.setQueue(latest.songs, startIndex: idx >= 0 ? idx : index);
+            playerService.setQueue(
+              latest.songs,
+              startIndex: idx >= 0 ? idx : index,
+            );
           },
         ),
       ),
     );
   }
 
-  Widget _buildFavoritesCard(BuildContext context, WidgetRef ref, Playlist? favorites, dynamic playerService) {
+  Widget _buildFavoritesCard(
+    BuildContext context,
+    WidgetRef ref,
+    Playlist? favorites,
+    dynamic playerService,
+  ) {
     final songCount = favorites?.songCount ?? 0;
     final accent = AppColors.accentOf(context);
     // 主题的 onPrimary 在深色下是黑色（黄底黑字），但渐变卡片视觉上应统一为白字。
@@ -307,9 +407,22 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('我喜欢的音乐', style: TextStyle(color: onAccent, fontSize: 16, fontWeight: FontWeight.bold)),
+                    Text(
+                      '我喜欢的音乐',
+                      style: TextStyle(
+                        color: onAccent,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
                     const SizedBox(height: 4),
-                    Text('$songCount 首歌曲', style: TextStyle(color: onAccent.withAlpha(200), fontSize: 13)),
+                    Text(
+                      '$songCount 首歌曲',
+                      style: TextStyle(
+                        color: onAccent.withAlpha(200),
+                        fontSize: 13,
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -326,7 +439,11 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
                     color: onAccent.withAlpha(40),
                     shape: BoxShape.circle,
                   ),
-                  child: Icon(Icons.play_arrow_rounded, color: onAccent, size: 30),
+                  child: Icon(
+                    Icons.play_arrow_rounded,
+                    color: onAccent,
+                    size: 30,
+                  ),
                 ),
               ),
             ],
@@ -336,7 +453,12 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
     );
   }
 
-  Widget _buildRecentCard(BuildContext context, WidgetRef ref, Playlist? recent, dynamic playerService) {
+  Widget _buildRecentCard(
+    BuildContext context,
+    WidgetRef ref,
+    Playlist? recent,
+    dynamic playerService,
+  ) {
     final songCount = recent?.songCount ?? 0;
     // 蓝色渐变（与“我喜欢的音乐”结构一致，仅替换为蓝色）
     const blue = Colors.blue;
@@ -375,9 +497,22 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('最近播放', style: TextStyle(color: onBlue, fontSize: 16, fontWeight: FontWeight.bold)),
+                    Text(
+                      '最近播放',
+                      style: TextStyle(
+                        color: onBlue,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
                     const SizedBox(height: 4),
-                    Text('$songCount 首歌曲', style: TextStyle(color: onBlue.withAlpha(200), fontSize: 13)),
+                    Text(
+                      '$songCount 首歌曲',
+                      style: TextStyle(
+                        color: onBlue.withAlpha(200),
+                        fontSize: 13,
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -394,7 +529,11 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
                     color: onBlue.withAlpha(40),
                     shape: BoxShape.circle,
                   ),
-                  child: Icon(Icons.play_arrow_rounded, color: onBlue, size: 30),
+                  child: Icon(
+                    Icons.play_arrow_rounded,
+                    color: onBlue,
+                    size: 30,
+                  ),
                 ),
               ),
             ],
@@ -404,7 +543,11 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
     );
   }
 
-  Widget _buildPlaylistItem(BuildContext context, WidgetRef ref, Playlist playlist) {
+  Widget _buildPlaylistItem(
+    BuildContext context,
+    WidgetRef ref,
+    Playlist playlist,
+  ) {
     return Container(
       margin: EdgeInsets.only(bottom: 12),
       padding: EdgeInsets.all(12),
@@ -433,7 +576,11 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
               child: Center(
                 child: Text(
                   playlist.name.substring(0, 1),
-                  style: TextStyle(color: AppColors.onScaffold(context), fontSize: 24, fontWeight: FontWeight.bold),
+                  style: TextStyle(
+                    color: AppColors.onScaffold(context),
+                    fontSize: 24,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
               ),
             ),
@@ -442,14 +589,35 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(playlist.name, style: TextStyle(color: AppColors.onScaffold(context), fontSize: 14, fontWeight: FontWeight.w500), maxLines: 1, overflow: TextOverflow.ellipsis),
+                  Text(
+                    playlist.name,
+                    style: TextStyle(
+                      color: AppColors.onScaffold(context),
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                   const SizedBox(height: 4),
-                  Text('${playlist.songCount} 首歌曲 · ${playlist.description ?? "私人"}', style: TextStyle(color: AppColors.mutedText(context), fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis),
+                  Text(
+                    '${playlist.songCount} 首歌曲 · ${playlist.description ?? "私人"}',
+                    style: TextStyle(
+                      color: AppColors.mutedText(context),
+                      fontSize: 12,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ],
               ),
             ),
             IconButton(
-              icon: Icon(Icons.more_vert, color: AppColors.mutedText(context), size: 20),
+              icon: Icon(
+                Icons.more_vert,
+                color: AppColors.mutedText(context),
+                size: 20,
+              ),
               onPressed: () => _showPlaylistMoreMenu(context, ref, playlist),
             ),
           ],
@@ -467,7 +635,10 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
       builder: (context) => AlertDialog(
         backgroundColor: AppColors.dialogBg(context),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Text('创建歌单', style: TextStyle(color: AppColors.onScaffold(context))),
+        title: Text(
+          '创建歌单',
+          style: TextStyle(color: AppColors.onScaffold(context)),
+        ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -479,7 +650,10 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
                 hintStyle: TextStyle(color: AppColors.mutedText(context)),
                 filled: true,
                 fillColor: AppColors.fill2(context),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: BorderSide.none,
+                ),
               ),
             ),
             const SizedBox(height: 8),
@@ -491,21 +665,38 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
                 hintStyle: TextStyle(color: AppColors.mutedText(context)),
                 filled: true,
                 fillColor: AppColors.fill2(context),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: BorderSide.none,
+                ),
               ),
             ),
           ],
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: Text('取消', style: TextStyle(color: AppColors.mutedText(context)))),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(
+              '取消',
+              style: TextStyle(color: AppColors.mutedText(context)),
+            ),
+          ),
           TextButton(
             onPressed: () {
               if (nameController.text.isNotEmpty) {
-                ref.read(createPlaylistProvider)(nameController.text, description: descController.text.isEmpty ? null : descController.text);
+                ref.read(createPlaylistProvider)(
+                  nameController.text,
+                  description: descController.text.isEmpty
+                      ? null
+                      : descController.text,
+                );
                 Navigator.pop(context);
               }
             },
-            child: Text('创建', style: TextStyle(color: AppColors.accentOf(context))),
+            child: Text(
+              '创建',
+              style: TextStyle(color: AppColors.accentOf(context)),
+            ),
           ),
         ],
       ),
@@ -514,14 +705,19 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
 
   void _showEditDialog(BuildContext context, WidgetRef ref, Playlist playlist) {
     final nameController = TextEditingController(text: playlist.name);
-    final descController = TextEditingController(text: playlist.description ?? '');
+    final descController = TextEditingController(
+      text: playlist.description ?? '',
+    );
 
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.dialogBg(context),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Text('编辑歌单', style: TextStyle(color: AppColors.onScaffold(context))),
+        title: Text(
+          '编辑歌单',
+          style: TextStyle(color: AppColors.onScaffold(context)),
+        ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -533,7 +729,10 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
                 hintStyle: TextStyle(color: AppColors.mutedText(context)),
                 filled: true,
                 fillColor: AppColors.fill2(context),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: BorderSide.none,
+                ),
               ),
             ),
             const SizedBox(height: 8),
@@ -545,26 +744,42 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
                 hintStyle: TextStyle(color: AppColors.mutedText(context)),
                 filled: true,
                 fillColor: AppColors.fill2(context),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: BorderSide.none,
+                ),
               ),
             ),
           ],
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: Text('取消', style: TextStyle(color: AppColors.mutedText(context)))),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(
+              '取消',
+              style: TextStyle(color: AppColors.mutedText(context)),
+            ),
+          ),
           TextButton(
             onPressed: () {
               if (nameController.text.isNotEmpty) {
-                ref.read(playlistServiceProvider).updatePlaylist(
-                  id: playlist.id,
-                  name: nameController.text,
-                  description: descController.text.isEmpty ? null : descController.text,
-                );
+                ref
+                    .read(playlistServiceProvider)
+                    .updatePlaylist(
+                      id: playlist.id,
+                      name: nameController.text,
+                      description: descController.text.isEmpty
+                          ? null
+                          : descController.text,
+                    );
                 setState(() {});
                 Navigator.pop(ctx);
               }
             },
-            child: Text('保存', style: TextStyle(color: AppColors.accentOf(context))),
+            child: Text(
+              '保存',
+              style: TextStyle(color: AppColors.accentOf(context)),
+            ),
           ),
         ],
       ),
@@ -575,28 +790,83 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
     showModalBottomSheet(
       context: context,
       backgroundColor: AppColors.dialogBg(context),
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
       builder: (context) => SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Container(width: 32, height: 4, margin: EdgeInsets.symmetric(vertical: 12), decoration: BoxDecoration(color: AppColors.mutedText(context), borderRadius: BorderRadius.circular(2))),
-            Padding(padding: EdgeInsets.all(16), child: Text('排序方式', style: TextStyle(color: AppColors.onScaffold(context), fontSize: 16, fontWeight: FontWeight.w600))),
-            _sortOption(context, PlaylistSortMode.recent, Icons.access_time, '最近添加'),
-            _sortOption(context, PlaylistSortMode.name, Icons.sort_by_alpha, '名称排序'),
-            _sortOption(context, PlaylistSortMode.songCount, Icons.music_note, '歌曲数量'),
+            Container(
+              width: 32,
+              height: 4,
+              margin: EdgeInsets.symmetric(vertical: 12),
+              decoration: BoxDecoration(
+                color: AppColors.mutedText(context),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            Padding(
+              padding: EdgeInsets.all(16),
+              child: Text(
+                '排序方式',
+                style: TextStyle(
+                  color: AppColors.onScaffold(context),
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            _sortOption(
+              context,
+              PlaylistSortMode.recent,
+              Icons.access_time,
+              '最近添加',
+            ),
+            _sortOption(
+              context,
+              PlaylistSortMode.name,
+              Icons.sort_by_alpha,
+              '名称排序',
+            ),
+            _sortOption(
+              context,
+              PlaylistSortMode.songCount,
+              Icons.music_note,
+              '歌曲数量',
+            ),
           ],
         ),
       ),
     );
   }
 
-  Widget _sortOption(BuildContext context, PlaylistSortMode mode, IconData icon, String label) {
+  Widget _sortOption(
+    BuildContext context,
+    PlaylistSortMode mode,
+    IconData icon,
+    String label,
+  ) {
     final isSelected = _sortMode == mode;
     return ListTile(
-      leading: Icon(icon, color: isSelected ? AppColors.accentOf(context) : AppColors.onScaffold(context)),
-      title: Text(label, style: TextStyle(color: isSelected ? AppColors.accentOf(context) : AppColors.onScaffold(context), fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal)),
-      trailing: isSelected ? Icon(Icons.check, color: AppColors.accentOf(context), size: 20) : null,
+      leading: Icon(
+        icon,
+        color: isSelected
+            ? AppColors.accentOf(context)
+            : AppColors.onScaffold(context),
+      ),
+      title: Text(
+        label,
+        style: TextStyle(
+          color: isSelected
+              ? AppColors.accentOf(context)
+              : AppColors.onScaffold(context),
+          fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+        ),
+      ),
+      trailing: isSelected
+          ? Icon(Icons.check, color: AppColors.accentOf(context), size: 20)
+          : null,
       onTap: () {
         setState(() => _sortMode = mode);
         Navigator.pop(context);
@@ -617,49 +887,114 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
           builder: (ctx, setLocal) {
             return AlertDialog(
               backgroundColor: AppColors.dialogBg(context),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-              title: Text('导入歌单', style: TextStyle(color: AppColors.onScaffold(context))),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    '支持 QQ / 酷我 / 网易云 链接或纯数字 ID，无需登录',
-                    style: TextStyle(color: AppColors.mutedText(context), fontSize: 12),
-                  ),
-                  const SizedBox(height: 12),
-                  DropdownButtonFormField<String>(
-                    initialValue: platform,
-                    dropdownColor: AppColors.dialogBg(context),
-                    decoration: InputDecoration(
-                      labelText: '平台（纯 ID 时必选）',
-                      labelStyle: TextStyle(color: AppColors.mutedText(context)),
-                    ),
-                    items: [
-                      DropdownMenuItem(value: 'tx', child: Text('QQ 音乐', style: TextStyle(color: AppColors.onScaffold(context)))),
-                      DropdownMenuItem(value: 'kw', child: Text('酷我', style: TextStyle(color: AppColors.onScaffold(context)))),
-                      DropdownMenuItem(value: 'wy', child: Text('网易云', style: TextStyle(color: AppColors.onScaffold(context)))),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              title: Text(
+                '导入歌单',
+                style: TextStyle(color: AppColors.onScaffold(context)),
+              ),
+              content: ConstrainedBox(
+                constraints: const BoxConstraints(
+                  maxWidth: 420,
+                  maxHeight: 420,
+                ),
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        '支持 QQ / 酷我 / 网易云 链接或纯数字 ID，无需登录',
+                        style: TextStyle(
+                          color: AppColors.mutedText(context),
+                          fontSize: 12,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      DropdownButtonFormField<String>(
+                        initialValue: platform,
+                        dropdownColor: AppColors.dialogBg(context),
+                        decoration: InputDecoration(
+                          labelText: '平台（纯 ID 时必选）',
+                          labelStyle: TextStyle(
+                            color: AppColors.mutedText(context),
+                          ),
+                        ),
+                        items: [
+                          DropdownMenuItem(
+                            value: 'tx',
+                            child: Text(
+                              'QQ 音乐',
+                              style: TextStyle(
+                                color: AppColors.onScaffold(context),
+                              ),
+                            ),
+                          ),
+                          DropdownMenuItem(
+                            value: 'kw',
+                            child: Text(
+                              '酷我',
+                              style: TextStyle(
+                                color: AppColors.onScaffold(context),
+                              ),
+                            ),
+                          ),
+                          DropdownMenuItem(
+                            value: 'wy',
+                            child: Text(
+                              '网易云',
+                              style: TextStyle(
+                                color: AppColors.onScaffold(context),
+                              ),
+                            ),
+                          ),
+                        ],
+                        onChanged: busy
+                            ? null
+                            : (v) => setLocal(() => platform = v ?? 'tx'),
+                      ),
+                      TextField(
+                        controller: inputCtrl,
+                        enabled: !busy,
+                        style: TextStyle(color: AppColors.onScaffold(context)),
+                        decoration: InputDecoration(
+                          hintText: '粘贴歌单链接或 ID',
+                          hintStyle: TextStyle(
+                            color: AppColors.mutedText(context),
+                          ),
+                        ),
+                      ),
+                      if (error != null) ...[
+                        const SizedBox(height: 12),
+                        DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: AppColors.error.withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Padding(
+                            padding: const EdgeInsets.all(10),
+                            child: Text(
+                              error!,
+                              style: const TextStyle(
+                                color: AppColors.error,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
                     ],
-                    onChanged: busy ? null : (v) => setLocal(() => platform = v ?? 'tx'),
                   ),
-                  TextField(
-                    controller: inputCtrl,
-                    enabled: !busy,
-                    style: TextStyle(color: AppColors.onScaffold(context)),
-                    decoration: InputDecoration(
-                      hintText: '粘贴歌单链接或 ID',
-                      hintStyle: TextStyle(color: AppColors.mutedText(context)),
-                    ),
-                  ),
-                  if (error != null) ...[
-                    const SizedBox(height: 8),
-                    Text(error!, style: TextStyle(color: Colors.redAccent, fontSize: 12)),
-                  ],
-                ],
+                ),
               ),
               actions: [
                 TextButton(
                   onPressed: busy ? null : () => Navigator.pop(ctx),
-                  child: Text('取消', style: TextStyle(color: AppColors.mutedText(context))),
+                  child: Text(
+                    '取消',
+                    style: TextStyle(color: AppColors.mutedText(context)),
+                  ),
                 ),
                 TextButton(
                   onPressed: busy
@@ -675,43 +1010,71 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
                             error = null;
                           });
                           try {
-                            final imported = await PlaylistImportService().import(
-                              input: input,
-                              platformHint: platform,
-                            );
+                            final imported = await PlaylistImportService()
+                                .import(input: input, platformHint: platform);
                             if (!ctx.mounted) return;
                             final ok = await showDialog<bool>(
                               context: ctx,
                               builder: (c2) => AlertDialog(
                                 backgroundColor: AppColors.dialogBg(context),
-                                title: Text(imported.name, style: TextStyle(color: AppColors.onScaffold(context))),
+                                title: Text(
+                                  imported.name,
+                                  style: TextStyle(
+                                    color: AppColors.onScaffold(context),
+                                  ),
+                                ),
                                 content: Text(
                                   '共 ${imported.songs.length} 首，确认导入到本地歌单？',
-                                  style: TextStyle(color: AppColors.mutedText(context)),
+                                  style: TextStyle(
+                                    color: AppColors.mutedText(context),
+                                  ),
                                 ),
                                 actions: [
-                                  TextButton(onPressed: () => Navigator.pop(c2, false), child: Text('取消', style: TextStyle(color: AppColors.mutedText(context)))),
+                                  TextButton(
+                                    onPressed: () => Navigator.pop(c2, false),
+                                    child: Text(
+                                      '取消',
+                                      style: TextStyle(
+                                        color: AppColors.mutedText(context),
+                                      ),
+                                    ),
+                                  ),
                                   TextButton(
                                     onPressed: () => Navigator.pop(c2, true),
-                                    child: Text('导入', style: TextStyle(color: AppColors.accentOf(context))),
+                                    child: Text(
+                                      '导入',
+                                      style: TextStyle(
+                                        color: AppColors.accentOf(context),
+                                      ),
+                                    ),
                                   ),
                                 ],
                               ),
                             );
                             if (ok == true) {
-                              final created = ref.read(playlistServiceProvider).createPlaylist(
+                              final created = ref
+                                  .read(playlistServiceProvider)
+                                  .createPlaylist(
                                     name: imported.name,
                                     description: '导入自${imported.source}',
                                   );
-                              ref.read(playlistServiceProvider).updatePlaylist(
+                              ref
+                                  .read(playlistServiceProvider)
+                                  .updatePlaylist(
                                     id: created.id,
                                     songs: imported.songs,
                                   );
-                              ref.read(playlistVersionProvider.notifier).state++;
+                              ref
+                                  .read(playlistVersionProvider.notifier)
+                                  .state++;
                               if (ctx.mounted) Navigator.pop(ctx);
                               if (context.mounted) {
                                 ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(content: Text('已导入「${imported.name}」${imported.songs.length} 首')),
+                                  SnackBar(
+                                    content: Text(
+                                      '已导入「${imported.name}」${imported.songs.length} 首',
+                                    ),
+                                  ),
                                 );
                               }
                             } else {
@@ -720,11 +1083,26 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
                           } catch (e) {
                             setLocal(() {
                               busy = false;
-                              error = e.toString().replaceFirst('Exception: ', '');
+                              error = e.toString().replaceFirst(
+                                'Exception: ',
+                                '',
+                              );
                             });
                           }
                         },
-                  child: Text(busy ? '解析中…' : '解析导入', style: TextStyle(color: AppColors.accentOf(context))),
+                  child: busy
+                      ? SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: AppColors.accentOf(context),
+                          ),
+                        )
+                      : Text(
+                          '解析导入',
+                          style: TextStyle(color: AppColors.accentOf(context)),
+                        ),
                 ),
               ],
             );
@@ -734,28 +1112,61 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
     );
   }
 
-  void _showPlaylistMoreMenu(BuildContext context, WidgetRef ref, Playlist playlist) {
+  void _showPlaylistMoreMenu(
+    BuildContext context,
+    WidgetRef ref,
+    Playlist playlist,
+  ) {
     showModalBottomSheet(
       context: context,
       backgroundColor: AppColors.dialogBg(context),
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
       builder: (context) => SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Container(width: 32, height: 4, margin: EdgeInsets.symmetric(vertical: 12), decoration: BoxDecoration(color: AppColors.mutedText(context), borderRadius: BorderRadius.circular(2))),
-            Padding(padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8), child: Text(playlist.name, style: TextStyle(color: AppColors.onScaffold(context), fontSize: 16, fontWeight: FontWeight.w600))),
+            Container(
+              width: 32,
+              height: 4,
+              margin: EdgeInsets.symmetric(vertical: 12),
+              decoration: BoxDecoration(
+                color: AppColors.mutedText(context),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Text(
+                playlist.name,
+                style: TextStyle(
+                  color: AppColors.onScaffold(context),
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
             Divider(color: AppColors.cardBorder(context), height: 1),
             if (playlist.id != 'recent')
               ListTile(
                 leading: Icon(Icons.edit, color: AppColors.onScaffold(context)),
-                title: Text('编辑歌单', style: TextStyle(color: AppColors.onScaffold(context))),
-                onTap: () { Navigator.pop(context); _showEditDialog(context, ref, playlist); },
+                title: Text(
+                  '编辑歌单',
+                  style: TextStyle(color: AppColors.onScaffold(context)),
+                ),
+                onTap: () {
+                  Navigator.pop(context);
+                  _showEditDialog(context, ref, playlist);
+                },
               ),
             if (playlist.id != 'favorites' && playlist.id != 'recent')
               ListTile(
                 leading: Icon(Icons.delete, color: AppColors.error),
-                title: const Text('删除歌单', style: TextStyle(color: AppColors.error)),
+                title: const Text(
+                  '删除歌单',
+                  style: TextStyle(color: AppColors.error),
+                ),
                 onTap: () {
                   ref.read(playlistServiceProvider).deletePlaylist(playlist.id);
                   Navigator.pop(context);

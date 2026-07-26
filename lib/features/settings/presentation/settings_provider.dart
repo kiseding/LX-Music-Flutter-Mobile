@@ -4,45 +4,47 @@ import '../../../core/storage/storage_service.dart';
 
 // 音质选择
 enum AudioQualityOption {
-  low,        // 128kbps
-  high,       // 320kbps
-  lossless,   // FLAC
+  low, // 128kbps
+  high, // 320kbps
+  lossless, // FLAC
   lossless24, // FLAC 24bit（臻品母带）
-  hires,      // Hi-Res
+  hires, // Hi-Res
 }
 
 /// 持久化设置 Provider
 /// 使用 StorageService（SharedPreferences）存储，重启后保留
 
-final themeModeProvider = StateNotifierProvider<ThemeModeNotifier, ThemeMode>((ref) {
+final themeModeProvider = StateNotifierProvider<ThemeModeNotifier, ThemeMode>((
+  ref,
+) {
   return ThemeModeNotifier();
 });
 
-final localeProvider = StateNotifierProvider<LocaleNotifier, Locale>((ref) {
-  return LocaleNotifier();
-});
+final audioQualityProvider =
+    StateNotifierProvider<AudioQualityNotifier, AudioQualityOption>((ref) {
+      return AudioQualityNotifier();
+    });
 
-final audioQualityProvider = StateNotifierProvider<AudioQualityNotifier, AudioQualityOption>((ref) {
-  return AudioQualityNotifier();
-});
+final downloadQualityProvider =
+    StateNotifierProvider<DownloadQualityNotifier, AudioQualityOption>((ref) {
+      return DownloadQualityNotifier();
+    });
 
-final downloadQualityProvider = StateNotifierProvider<DownloadQualityNotifier, AudioQualityOption>((ref) {
-  return DownloadQualityNotifier();
-});
+final wifiOnlyDownloadProvider =
+    StateNotifierProvider<WifiOnlyDownloadNotifier, bool>((ref) {
+      return WifiOnlyDownloadNotifier();
+    });
 
-final wifiOnlyDownloadProvider = StateNotifierProvider<WifiOnlyDownloadNotifier, bool>((ref) {
-  return WifiOnlyDownloadNotifier();
-});
-
-final syncServerUrlProvider = StateNotifierProvider<SyncServerUrlNotifier, String?>((ref) {
-  return SyncServerUrlNotifier();
-});
+final syncServerUrlProvider =
+    StateNotifierProvider<SyncServerUrlNotifier, String?>((ref) {
+      return SyncServerUrlNotifier();
+    });
 
 /// 默认搜索平台：tx / kw / wy
 final defaultSearchPlatformProvider =
     StateNotifierProvider<DefaultSearchPlatformNotifier, String>((ref) {
-  return DefaultSearchPlatformNotifier();
-});
+      return DefaultSearchPlatformNotifier();
+    });
 
 // ---- Notifiers ----
 
@@ -66,26 +68,6 @@ class ThemeModeNotifier extends StateNotifier<ThemeMode> {
   }
 }
 
-class LocaleNotifier extends StateNotifier<Locale> {
-  LocaleNotifier() : super(const Locale('zh', 'CN')) {
-    _load();
-  }
-
-  Future<void> _load() async {
-    final storage = await StorageService.instance;
-    final code = storage.getString('locale');
-    if (code != null) {
-      state = Locale(code);
-    }
-  }
-
-  Future<void> setLocale(Locale locale) async {
-    state = locale;
-    final storage = await StorageService.instance;
-    await storage.setString('locale', locale.languageCode);
-  }
-}
-
 class AudioQualityNotifier extends StateNotifier<AudioQualityOption> {
   AudioQualityNotifier() : super(AudioQualityOption.high) {
     _load();
@@ -95,7 +77,8 @@ class AudioQualityNotifier extends StateNotifier<AudioQualityOption> {
     final storage = await StorageService.instance;
     final index = storage.getInt('audio_quality');
     if (index != null) {
-      state = AudioQualityOption.values[index.clamp(0, AudioQualityOption.values.length - 1)];
+      state = AudioQualityOption
+          .values[index.clamp(0, AudioQualityOption.values.length - 1)];
     }
   }
 
@@ -115,7 +98,8 @@ class DownloadQualityNotifier extends StateNotifier<AudioQualityOption> {
     final storage = await StorageService.instance;
     final index = storage.getInt('download_quality');
     if (index != null) {
-      state = AudioQualityOption.values[index.clamp(0, AudioQualityOption.values.length - 1)];
+      state = AudioQualityOption
+          .values[index.clamp(0, AudioQualityOption.values.length - 1)];
     }
   }
 
