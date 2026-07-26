@@ -63,13 +63,20 @@ abstract final class AppTheme {
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: AppColors.surface,
+        fillColor: AppColors.surface2,
         hintStyle: const TextStyle(color: AppColors.textMuted),
         labelStyle: const TextStyle(color: AppColors.textSecondary),
+        floatingLabelStyle: const TextStyle(color: AppColors.amber),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide.none,
+          borderSide: const BorderSide(color: AppColors.border),
         ),
+        enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: const BorderSide(color: AppColors.border)),
+        focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: const BorderSide(color: AppColors.amber, width: 1.5)),
       ),
       popupMenuTheme: const PopupMenuThemeData(
         color: AppColors.surfaceDark,
@@ -94,12 +101,18 @@ abstract final class AppTheme {
       ),
       switchTheme: SwitchThemeData(
         thumbColor: WidgetStateProperty.resolveWith((s) =>
-            s.contains(WidgetState.selected) ? AppColors.amber : AppColors.textMuted),
+            s.contains(WidgetState.selected)
+                ? AppColors.amber
+                : AppColors.textMuted),
         trackColor: WidgetStateProperty.resolveWith((s) =>
-            s.contains(WidgetState.selected) ? AppColors.amberDim : AppColors.surface2),
+            s.contains(WidgetState.selected)
+                ? AppColors.amberDim
+                : AppColors.surface2),
       ),
-      dividerTheme: const DividerThemeData(color: AppColors.border, thickness: 0.5),
-      progressIndicatorTheme: const ProgressIndicatorThemeData(color: AppColors.amber),
+      dividerTheme:
+          const DividerThemeData(color: AppColors.border, thickness: 0.5),
+      progressIndicatorTheme:
+          const ProgressIndicatorThemeData(color: AppColors.amber),
     );
   }
 
@@ -146,7 +159,8 @@ abstract final class AppTheme {
       listTileTheme: const ListTileThemeData(
         iconColor: AppColors.lightTextSecondary,
         textColor: AppColors.lightText,
-        subtitleTextStyle: TextStyle(color: AppColors.lightTextMuted, fontSize: 12),
+        subtitleTextStyle:
+            TextStyle(color: AppColors.lightTextMuted, fontSize: 12),
       ),
       iconTheme: const IconThemeData(color: AppColors.lightTextSecondary),
       primaryIconTheme: const IconThemeData(color: AppColors.lightText),
@@ -163,13 +177,21 @@ abstract final class AppTheme {
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: AppColors.lightSurface,
+        fillColor: AppColors.lightBg,
         hintStyle: const TextStyle(color: AppColors.lightTextMuted),
         labelStyle: const TextStyle(color: AppColors.lightTextSecondary),
+        floatingLabelStyle: const TextStyle(color: AppColors.lightAccent),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide.none,
+          borderSide: const BorderSide(color: AppColors.lightBorderActive),
         ),
+        enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: const BorderSide(color: AppColors.lightBorderActive)),
+        focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide:
+                const BorderSide(color: AppColors.lightAccent, width: 1.5)),
       ),
       popupMenuTheme: const PopupMenuThemeData(
         color: AppColors.lightSurface,
@@ -193,12 +215,18 @@ abstract final class AppTheme {
       ),
       switchTheme: SwitchThemeData(
         thumbColor: WidgetStateProperty.resolveWith((s) =>
-            s.contains(WidgetState.selected) ? AppColors.lightAccent : AppColors.lightTextMuted),
+            s.contains(WidgetState.selected)
+                ? AppColors.lightAccent
+                : AppColors.lightTextMuted),
         trackColor: WidgetStateProperty.resolveWith((s) =>
-            s.contains(WidgetState.selected) ? const Color(0x331DB954) : const Color(0x1A000000)),
+            s.contains(WidgetState.selected)
+                ? const Color(0x331DB954)
+                : const Color(0x1A000000)),
       ),
-      dividerTheme: const DividerThemeData(color: AppColors.lightBorder, thickness: 0.5),
-      progressIndicatorTheme: const ProgressIndicatorThemeData(color: AppColors.lightAccent),
+      dividerTheme:
+          const DividerThemeData(color: AppColors.lightBorder, thickness: 0.5),
+      progressIndicatorTheme:
+          const ProgressIndicatorThemeData(color: AppColors.lightAccent),
     );
   }
 }

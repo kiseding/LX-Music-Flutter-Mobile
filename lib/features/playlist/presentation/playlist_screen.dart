@@ -350,7 +350,7 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
           onPressed: () {
             final latest =
                 ref.read(playlistServiceProvider).getPlaylist(playlist.id) ??
-                playlist;
+                    playlist;
             if (latest.songs.isEmpty) return;
             final idx = latest.songs.indexWhere((s) => s.id == song.id);
             playerService.setQueue(
@@ -686,9 +686,8 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
               if (nameController.text.isNotEmpty) {
                 ref.read(createPlaylistProvider)(
                   nameController.text,
-                  description: descController.text.isEmpty
-                      ? null
-                      : descController.text,
+                  description:
+                      descController.text.isEmpty ? null : descController.text,
                 );
                 Navigator.pop(context);
               }
@@ -763,9 +762,7 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
           TextButton(
             onPressed: () {
               if (nameController.text.isNotEmpty) {
-                ref
-                    .read(playlistServiceProvider)
-                    .updatePlaylist(
+                ref.read(playlistServiceProvider).updatePlaylist(
                       id: playlist.id,
                       name: nameController.text,
                       description: descController.text.isEmpty
@@ -880,231 +877,283 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
     var busy = false;
     String? error;
 
-    await showDialog(
+    await showModalBottomSheet(
       context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
       builder: (ctx) {
         return StatefulBuilder(
           builder: (ctx, setLocal) {
-            return AlertDialog(
-              backgroundColor: AppColors.dialogBg(context),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-              ),
-              title: Text(
-                '导入歌单',
-                style: TextStyle(color: AppColors.onScaffold(context)),
-              ),
-              content: ConstrainedBox(
-                constraints: const BoxConstraints(
-                  maxWidth: 420,
-                  maxHeight: 420,
+            return SafeArea(
+              top: false,
+              child: Padding(
+                padding: EdgeInsets.only(
+                  bottom: MediaQuery.viewInsetsOf(ctx).bottom,
                 ),
-                child: SingleChildScrollView(
+                child: Container(
+                  constraints: BoxConstraints(
+                    maxHeight: MediaQuery.sizeOf(ctx).height * .78,
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppColors.dialogBg(context),
+                    borderRadius: const BorderRadius.vertical(
+                      top: Radius.circular(28),
+                    ),
+                    border: Border.all(color: AppColors.cardBorder(context)),
+                  ),
                   child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      Text(
-                        '支持 QQ / 酷我 / 网易云 链接或纯数字 ID，无需登录',
-                        style: TextStyle(
-                          color: AppColors.mutedText(context),
-                          fontSize: 12,
+                      Container(
+                        width: 36,
+                        height: 4,
+                        margin: const EdgeInsets.only(top: 12, bottom: 18),
+                        decoration: BoxDecoration(
+                          color: AppColors.fill2(context),
+                          borderRadius: BorderRadius.circular(99),
                         ),
                       ),
-                      const SizedBox(height: 12),
-                      DropdownButtonFormField<String>(
-                        initialValue: platform,
-                        dropdownColor: AppColors.dialogBg(context),
-                        decoration: InputDecoration(
-                          labelText: '平台（纯 ID 时必选）',
-                          labelStyle: TextStyle(
-                            color: AppColors.mutedText(context),
-                          ),
-                        ),
-                        items: [
-                          DropdownMenuItem(
-                            value: 'tx',
-                            child: Text(
-                              'QQ 音乐',
-                              style: TextStyle(
-                                color: AppColors.onScaffold(context),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 42,
+                              height: 42,
+                              decoration: BoxDecoration(
+                                color:
+                                    Theme.of(ctx).colorScheme.primaryContainer,
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                              child: Icon(
+                                Icons.playlist_add_rounded,
+                                color: AppColors.accentOf(ctx),
                               ),
                             ),
-                          ),
-                          DropdownMenuItem(
-                            value: 'kw',
-                            child: Text(
-                              '酷我',
-                              style: TextStyle(
-                                color: AppColors.onScaffold(context),
+                            const SizedBox(width: 12),
+                            const Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text('导入歌单',
+                                      style: TextStyle(
+                                          fontSize: 18,
+                                          fontWeight: FontWeight.w700)),
+                                  SizedBox(height: 2),
+                                  Text('粘贴分享链接或输入歌单 ID',
+                                      style: TextStyle(fontSize: 12)),
+                                ],
                               ),
                             ),
-                          ),
-                          DropdownMenuItem(
-                            value: 'wy',
-                            child: Text(
-                              '网易云',
-                              style: TextStyle(
-                                color: AppColors.onScaffold(context),
-                              ),
+                            IconButton(
+                              onPressed: busy ? null : () => Navigator.pop(ctx),
+                              icon: const Icon(Icons.close_rounded),
                             ),
-                          ),
-                        ],
-                        onChanged: busy
-                            ? null
-                            : (v) => setLocal(() => platform = v ?? 'tx'),
-                      ),
-                      TextField(
-                        controller: inputCtrl,
-                        enabled: !busy,
-                        style: TextStyle(color: AppColors.onScaffold(context)),
-                        decoration: InputDecoration(
-                          hintText: '粘贴歌单链接或 ID',
-                          hintStyle: TextStyle(
-                            color: AppColors.mutedText(context),
-                          ),
+                          ],
                         ),
                       ),
-                      if (error != null) ...[
-                        const SizedBox(height: 12),
-                        DecoratedBox(
-                          decoration: BoxDecoration(
-                            color: AppColors.error.withValues(alpha: 0.12),
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          child: Padding(
-                            padding: const EdgeInsets.all(10),
-                            child: Text(
-                              error!,
-                              style: const TextStyle(
-                                color: AppColors.error,
-                                fontSize: 12,
+                      const SizedBox(height: 20),
+                      Flexible(
+                        child: SingleChildScrollView(
+                          padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Text('来源平台',
+                                  style: TextStyle(
+                                      color: AppColors.secondaryText(ctx),
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600)),
+                              const SizedBox(height: 8),
+                              SegmentedButton<String>(
+                                segments: const [
+                                  ButtonSegment(
+                                      value: 'tx',
+                                      label: Text('QQ'),
+                                      icon: Icon(Icons.music_note_rounded)),
+                                  ButtonSegment(
+                                      value: 'kw',
+                                      label: Text('酷我'),
+                                      icon: Icon(Icons.graphic_eq_rounded)),
+                                  ButtonSegment(
+                                      value: 'wy',
+                                      label: Text('网易'),
+                                      icon: Icon(Icons.album_rounded)),
+                                ],
+                                selected: {platform},
+                                onSelectionChanged: busy
+                                    ? null
+                                    : (value) =>
+                                        setLocal(() => platform = value.first),
                               ),
-                            ),
+                              const SizedBox(height: 20),
+                              Text('歌单链接或 ID',
+                                  style: TextStyle(
+                                      color: AppColors.secondaryText(ctx),
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600)),
+                              const SizedBox(height: 8),
+                              TextField(
+                                controller: inputCtrl,
+                                enabled: !busy,
+                                minLines: 2,
+                                maxLines: 3,
+                                style:
+                                    TextStyle(color: AppColors.onScaffold(ctx)),
+                                decoration: const InputDecoration(
+                                  hintText:
+                                      '例如：https://y.qq.com/n/ryqq/playlist/123\n或直接输入数字 ID',
+                                  alignLabelWithHint: true,
+                                  prefixIcon: Icon(Icons.link_rounded),
+                                ),
+                              ),
+                              if (error != null) ...[
+                                const SizedBox(height: 12),
+                                DecoratedBox(
+                                  decoration: BoxDecoration(
+                                      color: AppColors.error
+                                          .withValues(alpha: .12),
+                                      borderRadius: BorderRadius.circular(12)),
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(12),
+                                    child: Text(error!,
+                                        style: const TextStyle(
+                                            color: AppColors.error,
+                                            fontSize: 12)),
+                                  ),
+                                ),
+                              ],
+                            ],
                           ),
                         ),
-                      ],
+                      ),
+                      Container(
+                        padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+                        decoration: BoxDecoration(
+                            border: Border(
+                                top: BorderSide(
+                                    color: AppColors.cardBorder(ctx))),
+                            color: AppColors.dialogBg(ctx)),
+                        child: FilledButton.icon(
+                          style: FilledButton.styleFrom(
+                              minimumSize: const Size.fromHeight(50)),
+                          onPressed: busy
+                              ? null
+                              : () async {
+                                  final input = inputCtrl.text.trim();
+                                  if (input.isEmpty) {
+                                    setLocal(() => error = '请输入链接或 ID');
+                                    return;
+                                  }
+                                  setLocal(() {
+                                    busy = true;
+                                    error = null;
+                                  });
+                                  try {
+                                    final imported =
+                                        await PlaylistImportService().import(
+                                            input: input,
+                                            platformHint: platform);
+                                    if (!ctx.mounted) return;
+                                    final ok = await showDialog<bool>(
+                                      context: ctx,
+                                      builder: (c2) => AlertDialog(
+                                        backgroundColor:
+                                            AppColors.dialogBg(context),
+                                        title: Text(
+                                          imported.name,
+                                          style: TextStyle(
+                                            color:
+                                                AppColors.onScaffold(context),
+                                          ),
+                                        ),
+                                        content: Text(
+                                          '共 ${imported.songs.length} 首，确认导入到本地歌单？',
+                                          style: TextStyle(
+                                            color: AppColors.mutedText(context),
+                                          ),
+                                        ),
+                                        actions: [
+                                          TextButton(
+                                            onPressed: () =>
+                                                Navigator.pop(c2, false),
+                                            child: Text(
+                                              '取消',
+                                              style: TextStyle(
+                                                color: AppColors.mutedText(
+                                                    context),
+                                              ),
+                                            ),
+                                          ),
+                                          TextButton(
+                                            onPressed: () =>
+                                                Navigator.pop(c2, true),
+                                            child: Text(
+                                              '导入',
+                                              style: TextStyle(
+                                                color:
+                                                    AppColors.accentOf(context),
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    );
+                                    if (ok == true) {
+                                      final created = ref
+                                          .read(playlistServiceProvider)
+                                          .createPlaylist(
+                                            name: imported.name,
+                                            description:
+                                                '导入自${imported.source}',
+                                          );
+                                      ref
+                                          .read(playlistServiceProvider)
+                                          .updatePlaylist(
+                                            id: created.id,
+                                            songs: imported.songs,
+                                          );
+                                      ref
+                                          .read(
+                                              playlistVersionProvider.notifier)
+                                          .state++;
+                                      if (ctx.mounted) Navigator.pop(ctx);
+                                      if (context.mounted) {
+                                        ScaffoldMessenger.of(context)
+                                            .showSnackBar(
+                                          SnackBar(
+                                            content: Text(
+                                              '已导入「${imported.name}」${imported.songs.length} 首',
+                                            ),
+                                          ),
+                                        );
+                                      }
+                                    } else {
+                                      setLocal(() => busy = false);
+                                    }
+                                  } catch (e) {
+                                    setLocal(() {
+                                      busy = false;
+                                      error = e.toString().replaceFirst(
+                                            'Exception: ',
+                                            '',
+                                          );
+                                    });
+                                  }
+                                },
+                          icon: busy
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child:
+                                      CircularProgressIndicator(strokeWidth: 2))
+                              : const Icon(Icons.auto_awesome_rounded),
+                          label: Text(busy ? '正在解析歌单…' : '解析歌单'),
+                        ),
+                      ),
                     ],
                   ),
                 ),
               ),
-              actions: [
-                TextButton(
-                  onPressed: busy ? null : () => Navigator.pop(ctx),
-                  child: Text(
-                    '取消',
-                    style: TextStyle(color: AppColors.mutedText(context)),
-                  ),
-                ),
-                TextButton(
-                  onPressed: busy
-                      ? null
-                      : () async {
-                          final input = inputCtrl.text.trim();
-                          if (input.isEmpty) {
-                            setLocal(() => error = '请输入链接或 ID');
-                            return;
-                          }
-                          setLocal(() {
-                            busy = true;
-                            error = null;
-                          });
-                          try {
-                            final imported = await PlaylistImportService()
-                                .import(input: input, platformHint: platform);
-                            if (!ctx.mounted) return;
-                            final ok = await showDialog<bool>(
-                              context: ctx,
-                              builder: (c2) => AlertDialog(
-                                backgroundColor: AppColors.dialogBg(context),
-                                title: Text(
-                                  imported.name,
-                                  style: TextStyle(
-                                    color: AppColors.onScaffold(context),
-                                  ),
-                                ),
-                                content: Text(
-                                  '共 ${imported.songs.length} 首，确认导入到本地歌单？',
-                                  style: TextStyle(
-                                    color: AppColors.mutedText(context),
-                                  ),
-                                ),
-                                actions: [
-                                  TextButton(
-                                    onPressed: () => Navigator.pop(c2, false),
-                                    child: Text(
-                                      '取消',
-                                      style: TextStyle(
-                                        color: AppColors.mutedText(context),
-                                      ),
-                                    ),
-                                  ),
-                                  TextButton(
-                                    onPressed: () => Navigator.pop(c2, true),
-                                    child: Text(
-                                      '导入',
-                                      style: TextStyle(
-                                        color: AppColors.accentOf(context),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            );
-                            if (ok == true) {
-                              final created = ref
-                                  .read(playlistServiceProvider)
-                                  .createPlaylist(
-                                    name: imported.name,
-                                    description: '导入自${imported.source}',
-                                  );
-                              ref
-                                  .read(playlistServiceProvider)
-                                  .updatePlaylist(
-                                    id: created.id,
-                                    songs: imported.songs,
-                                  );
-                              ref
-                                  .read(playlistVersionProvider.notifier)
-                                  .state++;
-                              if (ctx.mounted) Navigator.pop(ctx);
-                              if (context.mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text(
-                                      '已导入「${imported.name}」${imported.songs.length} 首',
-                                    ),
-                                  ),
-                                );
-                              }
-                            } else {
-                              setLocal(() => busy = false);
-                            }
-                          } catch (e) {
-                            setLocal(() {
-                              busy = false;
-                              error = e.toString().replaceFirst(
-                                'Exception: ',
-                                '',
-                              );
-                            });
-                          }
-                        },
-                  child: busy
-                      ? SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: AppColors.accentOf(context),
-                          ),
-                        )
-                      : Text(
-                          '解析导入',
-                          style: TextStyle(color: AppColors.accentOf(context)),
-                        ),
-                ),
-              ],
             );
           },
         );
