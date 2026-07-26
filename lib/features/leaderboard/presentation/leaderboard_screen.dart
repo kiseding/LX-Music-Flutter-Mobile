@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/app_colors.dart';
+import '../../../core/widgets/artwork_image.dart';
 import '../../../core/music_source/platform/music_platform.dart';
 import '../../player/domain/music_item.dart';
 import '../../player/presentation/player_provider.dart';
@@ -20,14 +21,24 @@ class LeaderboardScreen extends ConsumerWidget {
       child: Scaffold(
         backgroundColor: Colors.transparent,
         appBar: AppBar(
-          title: Text('排行榜', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: AppColors.onScaffold(context))),
+          title: Text('排行榜',
+              style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.onScaffold(context))),
         ),
         body: categoriesAsync.when(
-          loading: () => Center(child: CircularProgressIndicator(color: AppColors.accentOf(context))),
-          error: (e, _) => Center(child: Text('加载失败: $e', style: TextStyle(color: AppColors.mutedText(context)))),
+          loading: () => Center(
+              child: CircularProgressIndicator(
+                  color: AppColors.accentOf(context))),
+          error: (e, _) => Center(
+              child: Text('加载失败: $e',
+                  style: TextStyle(color: AppColors.mutedText(context)))),
           data: (categories) {
             if (categories.isEmpty) {
-              return Center(child: Text('暂无排行榜数据', style: TextStyle(color: AppColors.mutedText(context))));
+              return Center(
+                  child: Text('暂无排行榜数据',
+                      style: TextStyle(color: AppColors.mutedText(context))));
             }
             return ListView.builder(
               padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -43,7 +54,8 @@ class LeaderboardScreen extends ConsumerWidget {
     );
   }
 
-  Widget _buildCategoryCard(BuildContext context, WidgetRef ref, LeaderboardCategory category) {
+  Widget _buildCategoryCard(
+      BuildContext context, WidgetRef ref, LeaderboardCategory category) {
     return Container(
       margin: EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
@@ -55,7 +67,8 @@ class LeaderboardScreen extends ConsumerWidget {
         borderRadius: BorderRadius.circular(16),
         onTap: () => Navigator.push(
           context,
-          MaterialPageRoute(builder: (_) => LeaderboardDetailScreen(category: category)),
+          MaterialPageRoute(
+              builder: (_) => LeaderboardDetailScreen(category: category)),
         ),
         child: Padding(
           padding: EdgeInsets.all(16),
@@ -65,19 +78,29 @@ class LeaderboardScreen extends ConsumerWidget {
                 width: 48,
                 height: 48,
                 decoration: BoxDecoration(
-                  gradient: LinearGradient(colors: [AppColors.accentOf(context).withAlpha(80), AppColors.accentOf(context).withAlpha(30)]),
+                  gradient: LinearGradient(colors: [
+                    AppColors.accentOf(context).withAlpha(80),
+                    AppColors.accentOf(context).withAlpha(30)
+                  ]),
                   borderRadius: BorderRadius.circular(12),
                 ),
-                child: Icon(Icons.trending_up, color: AppColors.accentOf(context), size: 24),
+                child: Icon(Icons.trending_up,
+                    color: AppColors.accentOf(context), size: 24),
               ),
               const SizedBox(width: 16),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(category.name, style: TextStyle(color: AppColors.onScaffold(context), fontSize: 16, fontWeight: FontWeight.w600)),
+                    Text(category.name,
+                        style: TextStyle(
+                            color: AppColors.onScaffold(context),
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600)),
                     const SizedBox(height: 4),
-                    Text('${category.platform?.toUpperCase() ?? ""} 排行榜', style: TextStyle(color: AppColors.mutedText(context), fontSize: 12)),
+                    Text('${category.platform?.toUpperCase() ?? ""} 排行榜',
+                        style: TextStyle(
+                            color: AppColors.mutedText(context), fontSize: 12)),
                   ],
                 ),
               ),
@@ -105,19 +128,30 @@ class LeaderboardDetailScreen extends ConsumerWidget {
       child: Scaffold(
         backgroundColor: Colors.transparent,
         appBar: AppBar(
-          title: Text(category.name, style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppColors.onScaffold(context))),
+          title: Text(category.name,
+              style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.onScaffold(context))),
         ),
         body: songsAsync.when(
-          loading: () => Center(child: CircularProgressIndicator(color: AppColors.accentOf(context))),
-          error: (e, _) => Center(child: Text('加载失败: $e', style: TextStyle(color: AppColors.mutedText(context)))),
+          loading: () => Center(
+              child: CircularProgressIndicator(
+                  color: AppColors.accentOf(context))),
+          error: (e, _) => Center(
+              child: Text('加载失败: $e',
+                  style: TextStyle(color: AppColors.mutedText(context)))),
           data: (songs) {
             if (songs.isEmpty) {
-              return Center(child: Text('暂无歌曲数据', style: TextStyle(color: AppColors.mutedText(context))));
+              return Center(
+                  child: Text('暂无歌曲数据',
+                      style: TextStyle(color: AppColors.mutedText(context))));
             }
             return ListView.builder(
               padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               itemCount: songs.length,
-              itemBuilder: (context, index) => _buildSongItem(context, ref, songs[index], index, category.id),
+              itemBuilder: (context, index) => _buildSongItem(
+                  context, ref, songs[index], index, category.id),
             );
           },
         ),
@@ -125,7 +159,8 @@ class LeaderboardDetailScreen extends ConsumerWidget {
     );
   }
 
-  Widget _buildSongItem(BuildContext context, WidgetRef ref, MusicItem song, int index, String leaderboardId) {
+  Widget _buildSongItem(BuildContext context, WidgetRef ref, MusicItem song,
+      int index, String leaderboardId) {
     final playerService = ref.read(playerServiceProvider);
     final currentMusic = ref.watch(currentMusicProvider);
     final isPlaying = currentMusic?.id == song.id;
@@ -149,7 +184,9 @@ class LeaderboardDetailScreen extends ConsumerWidget {
                   '${index + 1}',
                   textAlign: TextAlign.center,
                   style: TextStyle(
-                    color: index < 3 ? AppColors.accentOf(context) : AppColors.mutedText(context),
+                    color: index < 3
+                        ? AppColors.accentOf(context)
+                        : AppColors.mutedText(context),
                     fontSize: 14,
                     fontWeight: index < 3 ? FontWeight.bold : FontWeight.normal,
                   ),
@@ -166,8 +203,12 @@ class LeaderboardDetailScreen extends ConsumerWidget {
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(8),
                   child: song.artwork != null && song.artwork!.isNotEmpty
-                      ? Image.network(song.artwork!, fit: BoxFit.cover, errorBuilder: (_, __, ___) => Icon(Icons.music_note, color: AppColors.mutedText(context), size: 20))
-                      : Icon(Icons.music_note, color: AppColors.mutedText(context), size: 20),
+                      ? ArtworkImage(song.artwork!,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) => Icon(Icons.music_note,
+                              color: AppColors.mutedText(context), size: 20))
+                      : Icon(Icons.music_note,
+                          color: AppColors.mutedText(context), size: 20),
                 ),
               ),
               const SizedBox(width: 12),
@@ -175,9 +216,21 @@ class LeaderboardDetailScreen extends ConsumerWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(song.name, style: TextStyle(color: isPlaying ? AppColors.accentOf(context) : AppColors.onScaffold(context), fontSize: 14, fontWeight: FontWeight.w500), maxLines: 1, overflow: TextOverflow.ellipsis),
+                    Text(song.name,
+                        style: TextStyle(
+                            color: isPlaying
+                                ? AppColors.accentOf(context)
+                                : AppColors.onScaffold(context),
+                            fontSize: 14,
+                            fontWeight: FontWeight.w500),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis),
                     const SizedBox(height: 2),
-                    Text(song.singer, style: TextStyle(color: AppColors.mutedText(context), fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis),
+                    Text(song.singer,
+                        style: TextStyle(
+                            color: AppColors.mutedText(context), fontSize: 12),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis),
                   ],
                 ),
               ),
@@ -193,7 +246,8 @@ class LeaderboardDetailScreen extends ConsumerWidget {
 class LeaderboardDetailScreenById extends ConsumerWidget {
   final String id;
   final String name;
-  const LeaderboardDetailScreenById({super.key, required this.id, required this.name});
+  const LeaderboardDetailScreenById(
+      {super.key, required this.id, required this.name});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -206,19 +260,30 @@ class LeaderboardDetailScreenById extends ConsumerWidget {
       child: Scaffold(
         backgroundColor: Colors.transparent,
         appBar: AppBar(
-          title: Text(name, style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppColors.onScaffold(context))),
+          title: Text(name,
+              style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.onScaffold(context))),
         ),
         body: songsAsync.when(
-          loading: () => Center(child: CircularProgressIndicator(color: AppColors.accentOf(context))),
-          error: (e, _) => Center(child: Text('加载失败: $e', style: TextStyle(color: AppColors.mutedText(context)))),
+          loading: () => Center(
+              child: CircularProgressIndicator(
+                  color: AppColors.accentOf(context))),
+          error: (e, _) => Center(
+              child: Text('加载失败: $e',
+                  style: TextStyle(color: AppColors.mutedText(context)))),
           data: (songs) {
             if (songs.isEmpty) {
-              return Center(child: Text('暂无歌曲数据', style: TextStyle(color: AppColors.mutedText(context))));
+              return Center(
+                  child: Text('暂无歌曲数据',
+                      style: TextStyle(color: AppColors.mutedText(context))));
             }
             return ListView.builder(
               padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               itemCount: songs.length,
-              itemBuilder: (context, index) => _buildSongItem(context, ref, songs[index], index),
+              itemBuilder: (context, index) =>
+                  _buildSongItem(context, ref, songs[index], index),
             );
           },
         ),
@@ -226,7 +291,8 @@ class LeaderboardDetailScreenById extends ConsumerWidget {
     );
   }
 
-  Widget _buildSongItem(BuildContext context, WidgetRef ref, MusicItem song, int index) {
+  Widget _buildSongItem(
+      BuildContext context, WidgetRef ref, MusicItem song, int index) {
     final playerService = ref.read(playerServiceProvider);
     final currentMusic = ref.watch(currentMusicProvider);
     final isPlaying = currentMusic?.id == song.id;
@@ -250,7 +316,9 @@ class LeaderboardDetailScreenById extends ConsumerWidget {
                   '${index + 1}',
                   textAlign: TextAlign.center,
                   style: TextStyle(
-                    color: index < 3 ? AppColors.accentOf(context) : AppColors.mutedText(context),
+                    color: index < 3
+                        ? AppColors.accentOf(context)
+                        : AppColors.mutedText(context),
                     fontSize: 14,
                     fontWeight: index < 3 ? FontWeight.bold : FontWeight.normal,
                   ),
@@ -267,8 +335,12 @@ class LeaderboardDetailScreenById extends ConsumerWidget {
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(8),
                   child: song.artwork != null && song.artwork!.isNotEmpty
-                      ? Image.network(song.artwork!, fit: BoxFit.cover, errorBuilder: (_, __, ___) => Icon(Icons.music_note, color: AppColors.mutedText(context), size: 20))
-                      : Icon(Icons.music_note, color: AppColors.mutedText(context), size: 20),
+                      ? ArtworkImage(song.artwork!,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) => Icon(Icons.music_note,
+                              color: AppColors.mutedText(context), size: 20))
+                      : Icon(Icons.music_note,
+                          color: AppColors.mutedText(context), size: 20),
                 ),
               ),
               const SizedBox(width: 12),
@@ -276,9 +348,21 @@ class LeaderboardDetailScreenById extends ConsumerWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(song.name, style: TextStyle(color: isPlaying ? AppColors.accentOf(context) : AppColors.onScaffold(context), fontSize: 14, fontWeight: FontWeight.w500), maxLines: 1, overflow: TextOverflow.ellipsis),
+                    Text(song.name,
+                        style: TextStyle(
+                            color: isPlaying
+                                ? AppColors.accentOf(context)
+                                : AppColors.onScaffold(context),
+                            fontSize: 14,
+                            fontWeight: FontWeight.w500),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis),
                     const SizedBox(height: 2),
-                    Text(song.singer, style: TextStyle(color: AppColors.mutedText(context), fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis),
+                    Text(song.singer,
+                        style: TextStyle(
+                            color: AppColors.mutedText(context), fontSize: 12),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis),
                   ],
                 ),
               ),

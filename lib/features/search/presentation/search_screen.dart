@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/app_colors.dart';
+import '../../../core/widgets/artwork_image.dart';
 import '../../player/presentation/player_provider.dart';
 import '../../playlist/presentation/playlist_provider.dart';
 import '../../playlist/presentation/playlist_picker.dart';
@@ -324,7 +325,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
               width: 48,
               height: 48,
               child: item.artwork != null && item.artwork!.isNotEmpty
-                  ? Image.network(item.artwork!,
+                  ? ArtworkImage(item.artwork!,
                       fit: BoxFit.cover,
                       errorBuilder: (_, __, ___) => _placeholder())
                   : _placeholder(),

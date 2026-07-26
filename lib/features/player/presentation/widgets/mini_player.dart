@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../../core/theme/app_colors.dart';
+import '../../../../core/widgets/artwork_image.dart';
 import '../../../../core/widgets/pressable.dart';
 import '../../../../core/widgets/play_pulse_button.dart';
 import '../../../../core/audio/audio_handler.dart';
@@ -54,17 +55,22 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer> {
     final isPlayingValue = isPlaying.value ?? false;
     final totalMs = durationValue.inMilliseconds.toDouble();
     if (_pendingSeek != null && !_seeking && totalMs > 0) {
-      final delta = (position.inMilliseconds - _pendingSeek!.inMilliseconds).abs();
+      final delta =
+          (position.inMilliseconds - _pendingSeek!.inMilliseconds).abs();
       if (delta < 800) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted && _pendingSeek != null) setState(() => _pendingSeek = null);
+          if (mounted && _pendingSeek != null)
+            setState(() => _pendingSeek = null);
         });
       }
     }
     final effectivePos = _seeking
-        ? Duration(milliseconds: (_seekValue * (totalMs > 0 ? totalMs : 0)).round())
+        ? Duration(
+            milliseconds: (_seekValue * (totalMs > 0 ? totalMs : 0)).round())
         : (_pendingSeek ?? position);
-    final progress = totalMs > 0 ? (effectivePos.inMilliseconds / totalMs).clamp(0.0, 1.0) : 0.0;
+    final progress = totalMs > 0
+        ? (effectivePos.inMilliseconds / totalMs).clamp(0.0, 1.0)
+        : 0.0;
     final displayPos = effectivePos;
 
     final titleColor = AppColors.onScaffold(context);
@@ -95,7 +101,9 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer> {
           boxShadow: widget.floating
               ? [
                   BoxShadow(
-                    color: isDark ? const Color(0x66000000) : const Color(0x1A000000),
+                    color: isDark
+                        ? const Color(0x66000000)
+                        : const Color(0x1A000000),
                     blurRadius: 12,
                     offset: const Offset(0, 2),
                   ),
@@ -139,7 +147,8 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer> {
                                       _seeking = true;
                                       _pendingSeek = null;
                                       _wasPlaying = playing;
-                                      _seekValue = (d.localPosition.dx / w).clamp(0.0, 1.0);
+                                      _seekValue = (d.localPosition.dx / w)
+                                          .clamp(0.0, 1.0);
                                     });
                                     if (playing) await audioHandler.pause();
                                   },
@@ -147,13 +156,16 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer> {
                                 ? null
                                 : (d) {
                                     setState(() {
-                                      _seekValue = (d.localPosition.dx / w).clamp(0.0, 1.0);
+                                      _seekValue = (d.localPosition.dx / w)
+                                          .clamp(0.0, 1.0);
                                     });
                                   },
                             onHorizontalDragEnd: !canSeek
                                 ? null
                                 : (_) async {
-                                    final target = Duration(milliseconds: (_seekValue * totalMs).round());
+                                    final target = Duration(
+                                        milliseconds:
+                                            (_seekValue * totalMs).round());
                                     setState(() {
                                       _pendingSeek = target;
                                       _seeking = false;
@@ -166,8 +178,10 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer> {
                             onTapDown: !canSeek
                                 ? null
                                 : (d) async {
-                                    final v = (d.localPosition.dx / w).clamp(0.0, 1.0);
-                                    final target = Duration(milliseconds: (v * totalMs).round());
+                                    final v = (d.localPosition.dx / w)
+                                        .clamp(0.0, 1.0);
+                                    final target = Duration(
+                                        milliseconds: (v * totalMs).round());
                                     setState(() {
                                       _seekValue = v;
                                       _pendingSeek = target;
@@ -215,7 +229,9 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer> {
                                           color: accent,
                                           shape: BoxShape.circle,
                                           boxShadow: [
-                                            BoxShadow(color: accent.withAlpha(140), blurRadius: 8),
+                                            BoxShadow(
+                                                color: accent.withAlpha(140),
+                                                blurRadius: 8),
                                           ],
                                         ),
                                       ),
@@ -250,7 +266,9 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer> {
                 child: Row(
                   children: [
                     GestureDetector(
-                      onTap: currentMusic != null ? () => context.push('/player') : null,
+                      onTap: currentMusic != null
+                          ? () => context.push('/player')
+                          : null,
                       child: Container(
                         width: 42,
                         height: 42,
@@ -259,12 +277,15 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer> {
                           color: surface,
                         ),
                         clipBehavior: Clip.antiAlias,
-                        child: currentMusic?.artwork != null && currentMusic!.artwork!.isNotEmpty
-                            ? Image.network(
+                        child: currentMusic?.artwork != null &&
+                                currentMusic!.artwork!.isNotEmpty
+                            ? ArtworkImage(
                                 currentMusic.artwork!,
                                 fit: BoxFit.cover,
-                                errorBuilder: (_, __, ___) =>
-                                    Icon(Icons.music_note, color: subColor, size: 20),
+                                errorBuilder: (_, __, ___) => Icon(
+                                    Icons.music_note,
+                                    color: subColor,
+                                    size: 20),
                               )
                             : Icon(Icons.music_note, color: subColor, size: 20),
                       ),
@@ -272,7 +293,9 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer> {
                     const SizedBox(width: 10),
                     Expanded(
                       child: GestureDetector(
-                        onTap: currentMusic != null ? () => context.push('/player') : null,
+                        onTap: currentMusic != null
+                            ? () => context.push('/player')
+                            : null,
                         behavior: HitTestBehavior.opaque,
                         child: Column(
                           mainAxisAlignment: MainAxisAlignment.center,
@@ -280,7 +303,10 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer> {
                           children: [
                             Text(
                               title,
-                              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: titleColor),
+                              style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  color: titleColor),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                             ),
@@ -301,20 +327,34 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer> {
                         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                         children: [
                           Pressable(
-                            onTap: currentMusic == null ? null : () => playerService.previous(),
-                            child: Icon(Icons.skip_previous_rounded, size: 26, color: currentMusic == null ? subColor : titleColor),
+                            onTap: currentMusic == null
+                                ? null
+                                : () => playerService.previous(),
+                            child: Icon(Icons.skip_previous_rounded,
+                                size: 26,
+                                color: currentMusic == null
+                                    ? subColor
+                                    : titleColor),
                           ),
                           PlayPulseButton(
                             isPlaying: isPlayingValue,
-                            onPressed: currentMusic == null ? null : () => playerService.togglePlay(),
+                            onPressed: currentMusic == null
+                                ? null
+                                : () => playerService.togglePlay(),
                             enabled: currentMusic != null,
                             size: 36,
                             iconSize: 22,
                             mini: true,
                           ),
                           Pressable(
-                            onTap: currentMusic == null ? null : () => playerService.next(),
-                            child: Icon(Icons.skip_next_rounded, size: 26, color: currentMusic == null ? subColor : titleColor),
+                            onTap: currentMusic == null
+                                ? null
+                                : () => playerService.next(),
+                            child: Icon(Icons.skip_next_rounded,
+                                size: 26,
+                                color: currentMusic == null
+                                    ? subColor
+                                    : titleColor),
                           ),
                         ],
                       ),

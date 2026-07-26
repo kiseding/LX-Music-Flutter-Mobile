@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/theme/app_colors.dart';
+import '../../../core/widgets/artwork_image.dart';
 import '../domain/playlist.dart';
 import '../domain/playlist_import_service.dart';
 import '../../player/domain/music_item.dart';
@@ -319,7 +320,7 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
             width: 44,
             height: 44,
             child: song.artwork != null && song.artwork!.isNotEmpty
-                ? Image.network(
+                ? ArtworkImage(
                     song.artwork!,
                     fit: BoxFit.cover,
                     errorBuilder: (_, __, ___) => Icon(

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/theme/app_colors.dart';
+import '../../../core/widgets/artwork_image.dart';
 import '../../../core/widgets/pressable.dart';
 import '../../../core/music_source/platform/music_platform.dart';
 import '../../leaderboard/presentation/leaderboard_provider.dart';
@@ -14,7 +15,8 @@ class HomeScreen extends ConsumerStatefulWidget {
   ConsumerState<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends ConsumerState<HomeScreen> with SingleTickerProviderStateMixin {
+class _HomeScreenState extends ConsumerState<HomeScreen>
+    with SingleTickerProviderStateMixin {
   late TabController _tabController;
   final List<String> _platforms = ['tx', 'kw', 'wy'];
   final Map<String, String> _platformNames = {
@@ -73,13 +75,18 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with SingleTickerProvid
                   indicatorWeight: 2.5,
                   dividerColor: Colors.transparent,
                   dividerHeight: 0,
-                  overlayColor: const WidgetStatePropertyAll(Colors.transparent),
+                  overlayColor:
+                      const WidgetStatePropertyAll(Colors.transparent),
                   splashFactory: NoSplash.splashFactory,
                   labelColor: scheme.primary,
                   unselectedLabelColor: AppColors.secondaryText(context),
-                  labelStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-                  unselectedLabelStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.normal),
-                  tabs: _platforms.map((p) => Tab(text: _platformNames[p], height: 42)).toList(),
+                  labelStyle: const TextStyle(
+                      fontSize: 14, fontWeight: FontWeight.w600),
+                  unselectedLabelStyle: const TextStyle(
+                      fontSize: 14, fontWeight: FontWeight.normal),
+                  tabs: _platforms
+                      .map((p) => Tab(text: _platformNames[p], height: 42))
+                      .toList(),
                 ),
               ),
               // Leaderboard grid
@@ -91,7 +98,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with SingleTickerProvid
                       height: 24,
                       child: CircularProgressIndicator(
                         strokeWidth: 2,
-                        valueColor: AlwaysStoppedAnimation<Color>(AppColors.amber),
+                        valueColor:
+                            AlwaysStoppedAnimation<Color>(AppColors.amber),
                       ),
                     ),
                   ),
@@ -99,12 +107,16 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with SingleTickerProvid
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Icon(Icons.error_outline, color: AppColors.error, size: 48),
+                        Icon(Icons.error_outline,
+                            color: AppColors.error, size: 48),
                         const SizedBox(height: 16),
-                        Text('加载失败: $error', style: TextStyle(color: AppColors.secondaryText(context))),
+                        Text('加载失败: $error',
+                            style: TextStyle(
+                                color: AppColors.secondaryText(context))),
                         const SizedBox(height: 16),
                         ElevatedButton(
-                          onPressed: () => ref.invalidate(leaderboardCategoriesProvider),
+                          onPressed: () =>
+                              ref.invalidate(leaderboardCategoriesProvider),
                           child: const Text('重试'),
                         ),
                       ],
@@ -113,9 +125,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with SingleTickerProvid
                   data: (categories) {
                     // 若首屏拉取分类成功但全部封面为空（网络抖动导致首曲封面未回），
                     // 自动重试一次，避免"只要不重启 app 就一张封面都没有"。
-                    final hasNoCover =
-                        categories.isNotEmpty &&
-                        categories.every((c) => c.coverUrl == null || c.coverUrl!.isEmpty);
+                    final hasNoCover = categories.isNotEmpty &&
+                        categories.every(
+                            (c) => c.coverUrl == null || c.coverUrl!.isEmpty);
                     if (hasNoCover && _coverRetry < 2) {
                       _coverRetry++;
                       Future.microtask(() {
@@ -123,7 +135,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with SingleTickerProvid
                       });
                     }
                     final grouped = _platforms.map((platform) {
-                      final filtered = categories.where((c) => c.platform == platform).toList();
+                      final filtered = categories
+                          .where((c) => c.platform == platform)
+                          .toList();
                       return _buildLeaderboardGrid(context, filtered, platform);
                     }).toList();
                     return TabBarView(
@@ -141,10 +155,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with SingleTickerProvid
     );
   }
 
-  Widget _buildLeaderboardGrid(BuildContext context, List<LeaderboardCategory> categories, String platform) {
+  Widget _buildLeaderboardGrid(BuildContext context,
+      List<LeaderboardCategory> categories, String platform) {
     if (categories.isEmpty) {
       return Center(
-        child: Text('暂无排行榜数据', style: TextStyle(color: AppColors.mutedText(context))),
+        child: Text('暂无排行榜数据',
+            style: TextStyle(color: AppColors.mutedText(context))),
       );
     }
     return GridView.builder(
@@ -163,10 +179,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with SingleTickerProvid
     );
   }
 
-  Widget _buildLeaderboardCard(BuildContext context, LeaderboardCategory category, String platform, int index) {
+  Widget _buildLeaderboardCard(BuildContext context,
+      LeaderboardCategory category, String platform, int index) {
     final cover = category.coverUrl;
     return Pressable(
-      onTap: () => context.push('/leaderboard/detail?id=${Uri.encodeComponent(category.id)}&name=${Uri.encodeComponent(category.name)}'),
+      onTap: () => context.push(
+          '/leaderboard/detail?id=${Uri.encodeComponent(category.id)}&name=${Uri.encodeComponent(category.name)}'),
       borderRadius: BorderRadius.circular(12),
       child: Container(
         decoration: BoxDecoration(
@@ -185,16 +203,20 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with SingleTickerProvid
             fit: StackFit.expand,
             children: [
               if (cover != null && cover.isNotEmpty)
-                Image.network(
+                ArtworkImage(
                   cover,
                   fit: BoxFit.cover,
                   // 首屏未加载完先显示占位，避免空白
-                  frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+                  frameBuilder:
+                      (context, child, frame, wasSynchronouslyLoaded) {
                     if (wasSynchronouslyLoaded || frame != null) return child;
                     return Stack(
                       fit: StackFit.expand,
                       children: [
-                        _LeaderboardCover(platform: platform, index: index, name: category.name),
+                        _LeaderboardCover(
+                            platform: platform,
+                            index: index,
+                            name: category.name),
                         child,
                       ],
                     );
@@ -256,11 +278,26 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with SingleTickerProvid
   List<Color> _getPlatformPalette(String platform) {
     switch (platform) {
       case 'kw':
-        return const [Color(0xFF6B3FA0), Color(0xFF9B59B6), Color(0xFF8E44AD), Color(0xFF7D3C98)];
+        return const [
+          Color(0xFF6B3FA0),
+          Color(0xFF9B59B6),
+          Color(0xFF8E44AD),
+          Color(0xFF7D3C98)
+        ];
       case 'tx':
-        return const [Color(0xFF2355C0), Color(0xFF3498DB), Color(0xFF2980B9), Color(0xFF1F6FBB)];
+        return const [
+          Color(0xFF2355C0),
+          Color(0xFF3498DB),
+          Color(0xFF2980B9),
+          Color(0xFF1F6FBB)
+        ];
       case 'wy':
-        return const [Color(0xFF9B3060), Color(0xFFE74C3C), Color(0xFFC0392B), Color(0xFFD35400)];
+        return const [
+          Color(0xFF9B3060),
+          Color(0xFFE74C3C),
+          Color(0xFFC0392B),
+          Color(0xFFD35400)
+        ];
       default:
         return const [Color(0xFF3D4A5A), Color(0xFF5D6D7E)];
     }
@@ -328,7 +365,9 @@ class _LeaderboardCover extends StatelessWidget {
                     fontSize: 11,
                     fontWeight: FontWeight.bold,
                     color: Colors.white.withAlpha(200),
-                    shadows: const [Shadow(blurRadius: 4, color: Colors.black38)],
+                    shadows: const [
+                      Shadow(blurRadius: 4, color: Colors.black38)
+                    ],
                   ),
                 ),
               ],
@@ -371,11 +410,26 @@ class _LeaderboardCover extends StatelessWidget {
   List<Color> _getPalette(String platform) {
     switch (platform) {
       case 'kw':
-        return const [Color(0xFF6B3FA0), Color(0xFF9B59B6), Color(0xFF8E44AD), Color(0xFF5B2C6F)];
+        return const [
+          Color(0xFF6B3FA0),
+          Color(0xFF9B59B6),
+          Color(0xFF8E44AD),
+          Color(0xFF5B2C6F)
+        ];
       case 'tx':
-        return const [Color(0xFF2355C0), Color(0xFF3498DB), Color(0xFF2980B9), Color(0xFF1A5276)];
+        return const [
+          Color(0xFF2355C0),
+          Color(0xFF3498DB),
+          Color(0xFF2980B9),
+          Color(0xFF1A5276)
+        ];
       case 'wy':
-        return const [Color(0xFF9B3060), Color(0xFFE74C3C), Color(0xFFC0392B), Color(0xFF7B241C)];
+        return const [
+          Color(0xFF9B3060),
+          Color(0xFFE74C3C),
+          Color(0xFFC0392B),
+          Color(0xFF7B241C)
+        ];
       default:
         return const [Color(0xFF3D4A5A), Color(0xFF5D6D7E)];
     }

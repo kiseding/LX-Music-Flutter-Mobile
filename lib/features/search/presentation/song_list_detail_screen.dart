@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/app_colors.dart';
+import '../../../core/widgets/artwork_image.dart';
 import '../../player/domain/music_item.dart';
 import '../../player/presentation/player_provider.dart';
 import '../../search/presentation/search_provider.dart';
@@ -10,7 +11,8 @@ class SongListDetailScreen extends ConsumerStatefulWidget {
   const SongListDetailScreen({super.key, required this.songList});
 
   @override
-  ConsumerState<SongListDetailScreen> createState() => _SongListDetailScreenState();
+  ConsumerState<SongListDetailScreen> createState() =>
+      _SongListDetailScreenState();
 }
 
 class _SongListDetailScreenState extends ConsumerState<SongListDetailScreen> {
@@ -27,14 +29,23 @@ class _SongListDetailScreenState extends ConsumerState<SongListDetailScreen> {
   Future<void> _loadDetail() async {
     try {
       final musicSourceService = ref.read(musicSourceServiceProvider);
-      final platform = widget.songList.platform.isNotEmpty ? widget.songList.platform : widget.songList.source;
-      final songs = await musicSourceService.getSongListDetail(platform, widget.songList.id);
+      final platform = widget.songList.platform.isNotEmpty
+          ? widget.songList.platform
+          : widget.songList.source;
+      final songs = await musicSourceService.getSongListDetail(
+          platform, widget.songList.id);
       if (mounted) {
-        setState(() { _songs.addAll(songs); _isLoading = false; });
+        setState(() {
+          _songs.addAll(songs);
+          _isLoading = false;
+        });
       }
     } catch (e) {
       if (mounted) {
-        setState(() { _error = e.toString(); _isLoading = false; });
+        setState(() {
+          _error = e.toString();
+          _isLoading = false;
+        });
       }
     }
   }
@@ -46,7 +57,9 @@ class _SongListDetailScreenState extends ConsumerState<SongListDetailScreen> {
       child: Scaffold(
         backgroundColor: Colors.transparent,
         appBar: AppBar(
-          title: Text(widget.songList.name, style: TextStyle(color: AppColors.onScaffold(context), fontSize: 18)),
+          title: Text(widget.songList.name,
+              style: TextStyle(
+                  color: AppColors.onScaffold(context), fontSize: 18)),
           leading: IconButton(
             icon: Icon(Icons.arrow_back, color: AppColors.onScaffold(context)),
             onPressed: () => Navigator.pop(context),
@@ -59,16 +72,29 @@ class _SongListDetailScreenState extends ConsumerState<SongListDetailScreen> {
                   playerService.setQueue(_songs, startIndex: 0);
                 },
                 icon: Icon(Icons.play_arrow, color: AppColors.amber, size: 20),
-                label: const Text('播放全部', style: TextStyle(color: AppColors.amber, fontSize: 13)),
+                label: const Text('播放全部',
+                    style: TextStyle(color: AppColors.amber, fontSize: 13)),
               ),
           ],
         ),
         body: _isLoading
-            ? const Center(child: SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2, valueColor: AlwaysStoppedAnimation<Color>(AppColors.amber))))
+            ? const Center(
+                child: SizedBox(
+                    width: 24,
+                    height: 24,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        valueColor:
+                            AlwaysStoppedAnimation<Color>(AppColors.amber))))
             : _error != null
-                ? Center(child: Text('加载失败: $_error', style: TextStyle(color: AppColors.error)))
+                ? Center(
+                    child: Text('加载失败: $_error',
+                        style: TextStyle(color: AppColors.error)))
                 : _songs.isEmpty
-                    ? Center(child: Text('歌单为空', style: TextStyle(color: AppColors.mutedText(context))))
+                    ? Center(
+                        child: Text('歌单为空',
+                            style:
+                                TextStyle(color: AppColors.mutedText(context))))
                     : ListView.builder(
                         padding: EdgeInsets.symmetric(horizontal: 16),
                         itemCount: _songs.length,
@@ -82,13 +108,16 @@ class _SongListDetailScreenState extends ConsumerState<SongListDetailScreen> {
                             decoration: BoxDecoration(
                               color: AppColors.fill(context),
                               borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: AppColors.cardBorder(context)),
+                              border: Border.all(
+                                  color: AppColors.cardBorder(context)),
                             ),
                             child: InkWell(
                               borderRadius: BorderRadius.circular(12),
                               onTap: () {
-                                final playerService = ref.read(playerServiceProvider);
-                                playerService.setQueue(_songs, startIndex: index);
+                                final playerService =
+                                    ref.read(playerServiceProvider);
+                                playerService.setQueue(_songs,
+                                    startIndex: index);
                               },
                               child: Padding(
                                 padding: EdgeInsets.all(12),
@@ -100,27 +129,51 @@ class _SongListDetailScreenState extends ConsumerState<SongListDetailScreen> {
                                         '${index + 1}',
                                         textAlign: TextAlign.center,
                                         style: TextStyle(
-                                          color: isPlaying ? AppColors.amber : AppColors.textMuted,
+                                          color: isPlaying
+                                              ? AppColors.amber
+                                              : AppColors.textMuted,
                                           fontSize: 13,
-                                          fontWeight: isPlaying ? FontWeight.bold : FontWeight.normal,
+                                          fontWeight: isPlaying
+                                              ? FontWeight.bold
+                                              : FontWeight.normal,
                                         ),
                                       ),
                                     ),
                                     const SizedBox(width: 10),
                                     ClipRRect(
                                       borderRadius: BorderRadius.circular(4),
-                                      child: song.artwork != null && song.artwork!.isNotEmpty
-                                          ? Image.network(song.artwork!, width: 40, height: 40, fit: BoxFit.cover, errorBuilder: (_, __, ___) => _placeholder())
+                                      child: song.artwork != null &&
+                                              song.artwork!.isNotEmpty
+                                          ? ArtworkImage(song.artwork!,
+                                              width: 40,
+                                              height: 40,
+                                              fit: BoxFit.cover,
+                                              errorBuilder: (_, __, ___) =>
+                                                  _placeholder())
                                           : _placeholder(),
                                     ),
                                     const SizedBox(width: 12),
                                     Expanded(
                                       child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
                                         children: [
-                                          Text(song.name, style: TextStyle(color: isPlaying ? AppColors.amber : AppColors.textPrimary, fontSize: 14), maxLines: 1, overflow: TextOverflow.ellipsis),
+                                          Text(song.name,
+                                              style: TextStyle(
+                                                  color: isPlaying
+                                                      ? AppColors.amber
+                                                      : AppColors.textPrimary,
+                                                  fontSize: 14),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis),
                                           const SizedBox(height: 4),
-                                          Text('${song.singer} · ${song.album}', style: TextStyle(color: AppColors.mutedText(context), fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis),
+                                          Text('${song.singer} · ${song.album}',
+                                              style: TextStyle(
+                                                  color: AppColors.mutedText(
+                                                      context),
+                                                  fontSize: 12),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis),
                                         ],
                                       ),
                                     ),
@@ -140,7 +193,8 @@ class _SongListDetailScreenState extends ConsumerState<SongListDetailScreen> {
       width: 40,
       height: 40,
       color: AppColors.cardAlt(context),
-      child: Icon(Icons.music_note, color: AppColors.mutedText(context), size: 20),
+      child:
+          Icon(Icons.music_note, color: AppColors.mutedText(context), size: 20),
     );
   }
 }

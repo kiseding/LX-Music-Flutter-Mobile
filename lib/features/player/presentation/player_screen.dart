@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/audio/audio_handler.dart';
 import '../../../core/theme/app_colors.dart';
+import '../../../core/widgets/artwork_image.dart';
 import '../../../core/widgets/pressable.dart';
 import '../../../core/widgets/play_pulse_button.dart';
 import '../../../core/network/play_url_result.dart';
@@ -73,9 +74,11 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(Icons.music_note, size: 64, color: AppColors.mutedText(context)),
+              Icon(Icons.music_note,
+                  size: 64, color: AppColors.mutedText(context)),
               SizedBox(height: 16),
-              Text('暂无播放内容', style: TextStyle(color: AppColors.mutedText(context))),
+              Text('暂无播放内容',
+                  style: TextStyle(color: AppColors.mutedText(context))),
             ],
           ),
         ),
@@ -103,7 +106,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
             ),
           ),
           AnimatedContainer(
-            duration: _draggingDown ? Duration.zero : const Duration(milliseconds: 220),
+            duration: _draggingDown
+                ? Duration.zero
+                : const Duration(milliseconds: 220),
             curve: Curves.easeOutCubic,
             transform: Matrix4.translationValues(0, _dragOffset, 0),
             child: Material(
@@ -121,12 +126,14 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                   onVerticalDragUpdate: (d) {
                     if (d.delta.dy > 0 || _dragOffset > 0) {
                       setState(() {
-                        _dragOffset = (_dragOffset + d.delta.dy).clamp(0.0, screenH);
+                        _dragOffset =
+                            (_dragOffset + d.delta.dy).clamp(0.0, screenH);
                       });
                     }
                   },
                   onVerticalDragEnd: (d) {
-                    final shouldClose = _dragOffset > dismissThreshold || (d.primaryVelocity ?? 0) > 900;
+                    final shouldClose = _dragOffset > dismissThreshold ||
+                        (d.primaryVelocity ?? 0) > 900;
                     if (shouldClose) {
                       Navigator.of(context).maybePop();
                     } else {
@@ -142,24 +149,30 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                       Expanded(
                         child: PageView(
                           controller: _pageController,
-                          onPageChanged: (index) => setState(() => _currentPage = index),
+                          onPageChanged: (index) =>
+                              setState(() => _currentPage = index),
                           children: [
                             Column(
                               children: [
                                 const SizedBox(height: 12),
-                                Expanded(child: _buildArtwork(currentMusic.artwork)),
+                                Expanded(
+                                    child: _buildArtwork(currentMusic.artwork)),
                                 _buildSongInfo(currentMusic, isFavorite),
                                 _buildCurrentLyricLine(),
-                                _buildProgressSection(playerService, position, duration),
-                                _buildControls(playerService, isPlaying, playMode),
+                                _buildProgressSection(
+                                    playerService, position, duration),
+                                _buildControls(
+                                    playerService, isPlaying, playMode),
                                 _buildSourceQualityBar(currentMusic),
                                 const SizedBox(height: 12),
                               ],
                             ),
                             Column(
                               children: [
-                                const Expanded(child: LyricView(isFullScreen: true)),
-                                _buildLyricMiniBar(currentMusic, playerService, isPlaying),
+                                const Expanded(
+                                    child: LyricView(isFullScreen: true)),
+                                _buildLyricMiniBar(
+                                    currentMusic, playerService, isPlaying),
                               ],
                             ),
                           ],
@@ -180,7 +193,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     final media = ref.watch(currentMediaItemProvider).value;
     final extras = media?.extras ?? music.toJson();
     final platform = (extras['platform'] ?? music.platform).toString();
-    final actual = (extras['actualQuality'] ?? extras['requestedQuality'] ?? '320k').toString();
+    final actual =
+        (extras['actualQuality'] ?? extras['requestedQuality'] ?? '320k')
+            .toString();
     // 纯透明底，整体下移 10px
     return Padding(
       padding: EdgeInsets.only(top: 14, bottom: 4),
@@ -213,19 +228,25 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                 borderRadius: BorderRadius.circular(18),
                 border: Border.all(color: AppColors.cardBorder(context)),
               ),
-              child: Icon(Icons.keyboard_arrow_down, color: AppColors.secondaryText(context), size: 20),
+              child: Icon(Icons.keyboard_arrow_down,
+                  color: AppColors.secondaryText(context), size: 20),
             ),
           ),
           Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(_currentPage == 0 ? '正在播放' : '歌词', style: TextStyle(color: AppColors.mutedText(context), fontSize: 12, letterSpacing: 2)),
+              Text(_currentPage == 0 ? '正在播放' : '歌词',
+                  style: TextStyle(
+                      color: AppColors.mutedText(context),
+                      fontSize: 12,
+                      letterSpacing: 2)),
               const SizedBox(height: 6),
               _buildPageIndicator(),
             ],
           ),
           IconButton(
-            icon: Icon(Icons.more_vert, color: AppColors.secondaryText(context)),
+            icon:
+                Icon(Icons.more_vert, color: AppColors.secondaryText(context)),
             onPressed: () => _showMoreMenu(context, music),
           ),
         ],
@@ -277,7 +298,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
             child: ClipRRect(
               borderRadius: BorderRadius.circular(22),
               child: artwork != null && artwork.isNotEmpty
-                  ? Image.network(artwork, fit: BoxFit.cover, errorBuilder: (_, __, ___) => _defaultArtwork())
+                  ? ArtworkImage(artwork,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => _defaultArtwork())
                   : _defaultArtwork(),
             ),
           ),
@@ -289,7 +312,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   Widget _defaultArtwork() {
     return Container(
       color: AppColors.cardAlt(context),
-      child: Icon(Icons.music_note, color: AppColors.mutedText(context), size: 80),
+      child:
+          Icon(Icons.music_note, color: AppColors.mutedText(context), size: 80),
     );
   }
 
@@ -304,14 +328,18 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
               children: [
                 Text(
                   music.name,
-                  style: TextStyle(color: AppColors.onScaffold(context), fontSize: 22, fontWeight: FontWeight.bold),
+                  style: TextStyle(
+                      color: AppColors.onScaffold(context),
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
                 const SizedBox(height: 6),
                 Text(
                   music.singer,
-                  style: TextStyle(color: AppColors.secondaryText(context), fontSize: 15),
+                  style: TextStyle(
+                      color: AppColors.secondaryText(context), fontSize: 15),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -319,18 +347,22 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
             ),
           ),
           IconButton(
-            icon: Icon(Icons.download, color: AppColors.secondaryText(context), size: 24),
+            icon: Icon(Icons.download,
+                color: AppColors.secondaryText(context), size: 24),
             onPressed: () {
               ref.read(downloadSongProvider)(music);
               ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('已添加到下载队列'), duration: Duration(seconds: 1)),
+                const SnackBar(
+                    content: Text('已添加到下载队列'), duration: Duration(seconds: 1)),
               );
             },
           ),
           IconButton(
             icon: Icon(
               isFavorite ? Icons.favorite : Icons.favorite_border,
-              color: isFavorite ? AppColors.error : AppColors.secondaryText(context),
+              color: isFavorite
+                  ? AppColors.error
+                  : AppColors.secondaryText(context),
               size: 28,
             ),
             onPressed: () => ref.read(toggleFavoriteProvider)(music),
@@ -348,7 +380,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     String text = ' ';
     String? translation;
     var hasLine = false;
-    if (lyrics.isNotEmpty && currentLineIndex >= 0 && currentLineIndex < lyrics.lines.length) {
+    if (lyrics.isNotEmpty &&
+        currentLineIndex >= 0 &&
+        currentLineIndex < lyrics.lines.length) {
       final line = lyrics.lines[currentLineIndex];
       text = line.text.isEmpty ? ' ' : line.text;
       translation = line.translation;
@@ -366,7 +400,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
               text,
               textAlign: TextAlign.center,
               style: TextStyle(
-                color: hasLine ? AppColors.accentOf(context) : AppColors.mutedText(context).withValues(alpha: 0.01),
+                color: hasLine
+                    ? AppColors.accentOf(context)
+                    : AppColors.mutedText(context).withValues(alpha: 0.01),
                 fontSize: 14,
                 fontWeight: FontWeight.w500,
                 height: 1.2,
@@ -395,7 +431,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   }
 
   /// 全屏歌词页底部简约栏：歌名-歌手 | 播放键（下移 10px，字号加大）
-  Widget _buildLyricMiniBar(MusicItem music, PlayerService playerService, bool isPlaying) {
+  Widget _buildLyricMiniBar(
+      MusicItem music, PlayerService playerService, bool isPlaying) {
     return SafeArea(
       top: false,
       child: Padding(
@@ -428,14 +465,18 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     );
   }
 
-  Widget _buildProgressSection(PlayerService playerService, Duration position, Duration duration) {
-    final totalMs = duration.inMilliseconds > 0 ? duration.inMilliseconds.toDouble() : 1.0;
+  Widget _buildProgressSection(
+      PlayerService playerService, Duration position, Duration duration) {
+    final totalMs =
+        duration.inMilliseconds > 0 ? duration.inMilliseconds.toDouble() : 1.0;
     // 松手后 position 流可能仍滞后：用 _pendingSeek 顶住显示，避免回弹再跳
     if (_pendingSeek != null && !_seeking) {
-      final delta = (position.inMilliseconds - _pendingSeek!.inMilliseconds).abs();
+      final delta =
+          (position.inMilliseconds - _pendingSeek!.inMilliseconds).abs();
       if (delta < 800) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted && _pendingSeek != null) setState(() => _pendingSeek = null);
+          if (mounted && _pendingSeek != null)
+            setState(() => _pendingSeek = null);
         });
       }
     }
@@ -455,7 +496,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
             width: 36,
             child: Text(
               _formatDuration(displayPos),
-              style: TextStyle(color: AppColors.mutedText(context), fontSize: 11, fontFeatures: [FontFeature.tabularFigures()]),
+              style: TextStyle(
+                  color: AppColors.mutedText(context),
+                  fontSize: 11,
+                  fontFeatures: [FontFeature.tabularFigures()]),
             ),
           ),
           const SizedBox(width: 5),
@@ -466,7 +510,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                 return GestureDetector(
                   behavior: HitTestBehavior.opaque,
                   onHorizontalDragStart: (d) async {
-                    final playing = ref.read(playbackStateProvider).value?.playing ?? false;
+                    final playing =
+                        ref.read(playbackStateProvider).value?.playing ?? false;
                     setState(() {
                       _seeking = true;
                       _pendingSeek = null;
@@ -481,7 +526,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                     });
                   },
                   onHorizontalDragEnd: (_) async {
-                    final target = Duration(milliseconds: (_seekValue * totalMs).round());
+                    final target =
+                        Duration(milliseconds: (_seekValue * totalMs).round());
                     setState(() {
                       _pendingSeek = target;
                       _seeking = false;
@@ -493,7 +539,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                   },
                   onTapDown: (d) async {
                     final v = (d.localPosition.dx / width).clamp(0.0, 1.0);
-                    final target = Duration(milliseconds: (v * totalMs).round());
+                    final target =
+                        Duration(milliseconds: (v * totalMs).round());
                     setState(() {
                       _seekValue = v;
                       _pendingSeek = target;
@@ -535,7 +582,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                                 shape: BoxShape.circle,
                                 boxShadow: [
                                   BoxShadow(
-                                    color: AppColors.accentOf(context).withAlpha(120),
+                                    color: AppColors.accentOf(context)
+                                        .withAlpha(120),
                                     blurRadius: 12,
                                   ),
                                 ],
@@ -556,7 +604,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
             child: Text(
               _formatDuration(duration),
               textAlign: TextAlign.right,
-              style: TextStyle(color: AppColors.mutedText(context), fontSize: 11, fontFeatures: [FontFeature.tabularFigures()]),
+              style: TextStyle(
+                  color: AppColors.mutedText(context),
+                  fontSize: 11,
+                  fontFeatures: [FontFeature.tabularFigures()]),
             ),
           ),
         ],
@@ -564,7 +615,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     );
   }
 
-  Widget _buildControls(PlayerService playerService, bool isPlaying, PlayMode playMode) {
+  Widget _buildControls(
+      PlayerService playerService, bool isPlaying, PlayMode playMode) {
     return Padding(
       padding: EdgeInsets.symmetric(horizontal: 32, vertical: 16),
       child: Row(
@@ -586,7 +638,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
             onTap: playerService.previous,
             child: Padding(
               padding: EdgeInsets.all(8),
-              child: Icon(Icons.skip_previous, color: AppColors.onScaffold(context), size: 32),
+              child: Icon(Icons.skip_previous,
+                  color: AppColors.onScaffold(context), size: 32),
             ),
           ),
           PlayPulseButton(
@@ -599,11 +652,13 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
             onTap: playerService.next,
             child: Padding(
               padding: EdgeInsets.all(8),
-              child: Icon(Icons.skip_next, color: AppColors.onScaffold(context), size: 32),
+              child: Icon(Icons.skip_next,
+                  color: AppColors.onScaffold(context), size: 32),
             ),
           ),
           IconButton(
-            icon: Icon(Icons.queue_music, color: AppColors.mutedText(context), size: 22),
+            icon: Icon(Icons.queue_music,
+                color: AppColors.mutedText(context), size: 22),
             onPressed: () => _showPlaylist(context),
           ),
         ],
@@ -613,17 +668,23 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
 
   PlayMode _getNextPlayMode(PlayMode current) {
     switch (current) {
-      case PlayMode.repeatOne: return PlayMode.sequential;
-      case PlayMode.sequential: return PlayMode.shuffle;
-      case PlayMode.shuffle: return PlayMode.repeatOne;
+      case PlayMode.repeatOne:
+        return PlayMode.sequential;
+      case PlayMode.sequential:
+        return PlayMode.shuffle;
+      case PlayMode.shuffle:
+        return PlayMode.repeatOne;
     }
   }
 
   IconData _getPlayModeIcon(PlayMode mode) {
     switch (mode) {
-      case PlayMode.repeatOne: return Icons.repeat_one;
-      case PlayMode.sequential: return Icons.trending_flat;
-      case PlayMode.shuffle: return Icons.shuffle;
+      case PlayMode.repeatOne:
+        return Icons.repeat_one;
+      case PlayMode.sequential:
+        return Icons.trending_flat;
+      case PlayMode.shuffle:
+        return Icons.shuffle;
     }
   }
 
@@ -652,19 +713,31 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     showModalBottomSheet(
       context: context,
       backgroundColor: AppColors.dialogBg(context),
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       builder: (context) => SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Container(width: 32, height: 4, margin: EdgeInsets.symmetric(vertical: 12), decoration: BoxDecoration(color: AppColors.mutedText(context), borderRadius: BorderRadius.circular(2))),
+            Container(
+                width: 32,
+                height: 4,
+                margin: EdgeInsets.symmetric(vertical: 12),
+                decoration: BoxDecoration(
+                    color: AppColors.mutedText(context),
+                    borderRadius: BorderRadius.circular(2))),
             Padding(
               padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               child: Row(
                 children: [
-                  Icon(Icons.queue_music, color: AppColors.accentOf(context), size: 20),
+                  Icon(Icons.queue_music,
+                      color: AppColors.accentOf(context), size: 20),
                   const SizedBox(width: 8),
-                  Text('播放列表 (${queue.length})', style: TextStyle(color: AppColors.onScaffold(context), fontSize: 16, fontWeight: FontWeight.w600)),
+                  Text('播放列表 (${queue.length})',
+                      style: TextStyle(
+                          color: AppColors.onScaffold(context),
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600)),
                 ],
               ),
             ),
@@ -672,40 +745,55 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
             if (queue.isEmpty)
               Padding(
                 padding: EdgeInsets.all(32),
-                child: Text('播放列表为空', style: TextStyle(color: AppColors.mutedText(context), fontSize: 14)),
+                child: Text('播放列表为空',
+                    style: TextStyle(
+                        color: AppColors.mutedText(context), fontSize: 14)),
               )
             else
               ConstrainedBox(
-                constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.6),
+                constraints: BoxConstraints(
+                    maxHeight: MediaQuery.of(context).size.height * 0.6),
                 child: ListView.builder(
                   shrinkWrap: true,
                   itemCount: queue.length,
                   itemBuilder: (context, index) {
                     final item = queue[index];
                     final isPlaying = index == currentIndex;
-                    
+
                     return ListTile(
                       leading: isPlaying
-                          ? Icon(Icons.play_arrow, color: AppColors.accentOf(context))
-                          : Text('${index + 1}', style: TextStyle(color: AppColors.mutedText(context), fontSize: 14)),
+                          ? Icon(Icons.play_arrow,
+                              color: AppColors.accentOf(context))
+                          : Text('${index + 1}',
+                              style: TextStyle(
+                                  color: AppColors.mutedText(context),
+                                  fontSize: 14)),
                       title: Text(
                         item.title,
                         style: TextStyle(
-                          color: isPlaying ? AppColors.accentOf(context) : AppColors.onScaffold(context),
+                          color: isPlaying
+                              ? AppColors.accentOf(context)
+                              : AppColors.onScaffold(context),
                           fontSize: 14,
-                          fontWeight: isPlaying ? FontWeight.w600 : FontWeight.normal,
+                          fontWeight:
+                              isPlaying ? FontWeight.w600 : FontWeight.normal,
                         ),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
                       subtitle: Text(
                         item.artist ?? '',
-                        style: TextStyle(color: AppColors.mutedText(context), fontSize: 12),
+                        style: TextStyle(
+                            color: AppColors.mutedText(context), fontSize: 12),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
                       onTap: () {
-                        playerService.setQueue(queue.map((e) => MusicItem.fromJson(e.extras ?? {})).toList(), startIndex: index);
+                        playerService.setQueue(
+                            queue
+                                .map((e) => MusicItem.fromJson(e.extras ?? {}))
+                                .toList(),
+                            startIndex: index);
                         Navigator.pop(context);
                       },
                     );
@@ -717,8 +805,6 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       ),
     );
   }
-
-
 
   String _formatDuration(Duration d) {
     final minutes = d.inMinutes.remainder(60).toString().padLeft(2, '0');
@@ -737,21 +823,78 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Container(width: 32, height: 4, margin: EdgeInsets.symmetric(vertical: 12), decoration: BoxDecoration(color: AppColors.mutedText(context), borderRadius: BorderRadius.circular(2))),
+            Container(
+                width: 32,
+                height: 4,
+                margin: EdgeInsets.symmetric(vertical: 12),
+                decoration: BoxDecoration(
+                    color: AppColors.mutedText(context),
+                    borderRadius: BorderRadius.circular(2))),
             Padding(
               padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               child: Row(
                 children: [
-                  Container(width: 40, height: 40, decoration: BoxDecoration(color: AppColors.fill(context), borderRadius: BorderRadius.circular(8)), child: Icon(Icons.music_note, color: AppColors.mutedText(context))),
+                  Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                          color: AppColors.fill(context),
+                          borderRadius: BorderRadius.circular(8)),
+                      child: Icon(Icons.music_note,
+                          color: AppColors.mutedText(context))),
                   const SizedBox(width: 12),
-                  Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(music.name, style: TextStyle(color: AppColors.onScaffold(context), fontSize: 14, fontWeight: FontWeight.w500), maxLines: 1, overflow: TextOverflow.ellipsis), Text(music.singer, style: TextStyle(color: AppColors.mutedText(context), fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis)])),
+                  Expanded(
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                        Text(music.name,
+                            style: TextStyle(
+                                color: AppColors.onScaffold(context),
+                                fontSize: 14,
+                                fontWeight: FontWeight.w500),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis),
+                        Text(music.singer,
+                            style: TextStyle(
+                                color: AppColors.mutedText(context),
+                                fontSize: 12),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis)
+                      ])),
                 ],
               ),
             ),
             Divider(color: AppColors.cardBorder(context), height: 1),
-            ListTile(leading: Icon(Icons.favorite_border, color: AppColors.onScaffold(context)), title: Text('收藏', style: TextStyle(color: AppColors.onScaffold(context))), onTap: () { Navigator.pop(context); ref.read(toggleFavoriteProvider)(music); }),
-            ListTile(leading: Icon(Icons.playlist_add, color: AppColors.onScaffold(context)), title: Text('添加到歌单', style: TextStyle(color: AppColors.onScaffold(context))), onTap: () { Navigator.pop(context); showPlaylistPicker(context: context, ref: ref, song: music); }),
-            ListTile(leading: Icon(Icons.download, color: AppColors.onScaffold(context)), title: Text('下载', style: TextStyle(color: AppColors.onScaffold(context))), onTap: () { Navigator.pop(context); ref.read(downloadSongProvider)(music); ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已添加到下载队列'), duration: Duration(seconds: 1))); }),
+            ListTile(
+                leading: Icon(Icons.favorite_border,
+                    color: AppColors.onScaffold(context)),
+                title: Text('收藏',
+                    style: TextStyle(color: AppColors.onScaffold(context))),
+                onTap: () {
+                  Navigator.pop(context);
+                  ref.read(toggleFavoriteProvider)(music);
+                }),
+            ListTile(
+                leading: Icon(Icons.playlist_add,
+                    color: AppColors.onScaffold(context)),
+                title: Text('添加到歌单',
+                    style: TextStyle(color: AppColors.onScaffold(context))),
+                onTap: () {
+                  Navigator.pop(context);
+                  showPlaylistPicker(context: context, ref: ref, song: music);
+                }),
+            ListTile(
+                leading:
+                    Icon(Icons.download, color: AppColors.onScaffold(context)),
+                title: Text('下载',
+                    style: TextStyle(color: AppColors.onScaffold(context))),
+                onTap: () {
+                  Navigator.pop(context);
+                  ref.read(downloadSongProvider)(music);
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                      content: Text('已添加到下载队列'),
+                      duration: Duration(seconds: 1)));
+                }),
           ],
         ),
       ),
