@@ -37,6 +37,19 @@ void main() {
       expect(music.lyricsUrl, 'https://example.com/lyrics.lrc');
     });
 
+    test('normalizes custom netease artwork to HTTPS', () {
+      final music = MusicItem(
+        id: '1',
+        name: 'Test Song',
+        singer: 'Test Artist',
+        source: 'custom-source',
+        platform: 'wy',
+        artwork: 'http://p1.music.126.net/artwork.jpg',
+      );
+
+      expect(music.artwork, 'https://p1.music.126.net/artwork.jpg');
+    });
+
     test('should copy MusicItem with new values', () {
       final music = MusicItem(
         id: '1',

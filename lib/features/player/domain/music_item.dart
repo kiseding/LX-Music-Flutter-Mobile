@@ -14,7 +14,7 @@ class MusicItem {
   final String? hash;
   final Map<String, dynamic>? meta; // 保存原始元数据，供自定义脚本使用
 
-  const MusicItem({
+  MusicItem({
     required this.id,
     required this.name,
     required this.singer,
@@ -22,14 +22,14 @@ class MusicItem {
     this.duration = Duration.zero,
     required this.source,
     this.platform = 'kw',
-    this.artwork,
+    String? artwork,
     this.url,
     this.lyricsUrl,
     this.isPlayable = true,
     this.songmid,
     this.hash,
     this.meta,
-  });
+  }) : artwork = _normalizeArtwork(source, platform, artwork);
 
   MusicItem copyWith({
     String? id,
@@ -96,7 +96,6 @@ class MusicItem {
   factory MusicItem.fromJson(Map<String, dynamic> json) {
     final source = json['source'] ?? '';
     final platform = json['platform'] ?? 'kw';
-    final artwork = json['artwork']?.toString();
     return MusicItem(
       id: json['id'] ?? '',
       name: json['name'] ?? '',
@@ -105,11 +104,7 @@ class MusicItem {
       duration: Duration(seconds: json['duration'] ?? 0),
       source: source,
       platform: platform,
-      artwork: (source == 'wy' || platform == 'wy') &&
-              artwork != null &&
-              artwork.startsWith('http://')
-          ? 'https://${artwork.substring(7)}'
-          : artwork,
+      artwork: json['artwork']?.toString(),
       url: json['url'],
       lyricsUrl: json['lyricsUrl'],
       isPlayable: json['isPlayable'] ?? true,
@@ -118,5 +113,15 @@ class MusicItem {
       meta:
           json['meta'] != null ? Map<String, dynamic>.from(json['meta']) : null,
     );
+  }
+
+  static String? _normalizeArtwork(
+      String source, String platform, String? artwork) {
+    if ((source == 'wy' || platform == 'wy') &&
+        artwork != null &&
+        artwork.startsWith('http://')) {
+      return 'https://${artwork.substring(7)}';
+    }
+    return artwork;
   }
 }
