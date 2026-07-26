@@ -22,94 +22,173 @@ class _EqualizerScreenState extends ConsumerState<EqualizerScreen> {
         appBar: AppBar(
           backgroundColor: Colors.transparent,
           elevation: 0,
-          title: Text('均衡器', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: AppColors.onScaffold(context))),
+          title: Text('均衡器',
+              style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.onScaffold(context))),
           actions: [
             TextButton(
               onPressed: () => ref.read(equalizerProvider.notifier).reset(),
-              child: Text('重置', style: TextStyle(color: AppColors.secondaryText(context), fontSize: 13)),
+              child: Text('重置',
+                  style: TextStyle(
+                      color: AppColors.secondaryText(context), fontSize: 13)),
             ),
           ],
         ),
-        body: Column(
-          children: [
-            // 启用开关
-            _buildEnableToggle(eqState.enabled),
-            // 预设芯片
-            _buildPresetChips(eqState),
-            // 频段推子区域
-            Expanded(
-              child: _buildFrequencyBars(eqState),
-            ),
-            // 低音/高音滑块
-            _buildBassTrebleSliders(eqState),
-            const SizedBox(height: 16),
-          ],
+        body: SafeArea(
+          top: false,
+          child: Column(
+            children: [
+              _buildEnableCard(eqState),
+              _buildPresetSection(eqState),
+              Expanded(child: _buildFrequencyPanel(eqState)),
+              _buildBassTrebleSliders(eqState),
+              const SizedBox(height: 20),
+            ],
+          ),
         ),
       ),
     );
   }
 
-  Widget _buildEnableToggle(bool enabled) {
-    return Padding(
-      padding: EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+  Widget _buildEnableCard(EqualizerState eqState) {
+    final enabled = eqState.enabled;
+    final theme = Theme.of(context);
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.card(context),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppColors.cardBorder(context)),
+      ),
       child: Row(
         children: [
-          Text('启用均衡器', style: TextStyle(color: AppColors.onScaffold(context), fontSize: 14, fontWeight: FontWeight.w500)),
-          const Spacer(),
+          Container(
+            width: 42,
+            height: 42,
+            decoration: BoxDecoration(
+              color: enabled
+                  ? theme.colorScheme.primaryContainer
+                  : AppColors.fill(context),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Icon(
+              Icons.equalizer_rounded,
+              color: enabled
+                  ? theme.colorScheme.primary
+                  : AppColors.mutedText(context),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('均衡器状态',
+                    style:
+                        TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+                const SizedBox(height: 3),
+                Text(
+                  enabled ? '正在使用 ${eqState.preset.label} 预设' : '开启后可调节 10 个频段',
+                  style: TextStyle(
+                      color: AppColors.mutedText(context), fontSize: 12),
+                ),
+              ],
+            ),
+          ),
           Switch.adaptive(
             value: enabled,
-            onChanged: (v) => ref.read(equalizerProvider.notifier).setEnabled(v),
-            activeColor: AppColors.amber,
+            onChanged: (v) =>
+                ref.read(equalizerProvider.notifier).setEnabled(v),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildPresetChips(EqualizerState eqState) {
+  Widget _buildPresetSection(EqualizerState eqState) {
     final presets = EqPreset.values.where((p) => p != EqPreset.custom).toList();
-    return SizedBox(
-      height: 40,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        padding: EdgeInsets.symmetric(horizontal: 16),
-        itemCount: presets.length,
-        separatorBuilder: (_, __) => const SizedBox(width: 8),
-        itemBuilder: (context, index) {
-          final preset = presets[index];
-          final isSelected = eqState.preset == preset;
-          return GestureDetector(
-            onTap: () => ref.read(equalizerProvider.notifier).selectPreset(preset),
-            child: Container(
-              padding: EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-              decoration: BoxDecoration(
-                color: isSelected ? AppColors.amber.withAlpha(40) : AppColors.surface,
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(
-                  color: isSelected ? AppColors.amber.withAlpha(100) : AppColors.border,
-                  width: 1,
-                ),
-              ),
-              child: Text(
-                preset.label,
-                style: TextStyle(
-                  color: isSelected ? AppColors.amber : AppColors.textSecondary,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: Row(
+            children: [
+              const Text('当前预设',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+              const Spacer(),
+              Text(eqState.preset.label,
+                  style: TextStyle(
+                      color: AppColors.accentOf(context),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600)),
+            ],
+          ),
+        ),
+        const SizedBox(height: 10),
+        SizedBox(
+          height: 38,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            itemCount: presets.length,
+            separatorBuilder: (_, __) => const SizedBox(width: 8),
+            itemBuilder: (context, index) {
+              final preset = presets[index];
+              final isSelected = eqState.preset == preset;
+              return ChoiceChip(
+                label: Text(preset.label),
+                selected: isSelected,
+                onSelected: (_) =>
+                    ref.read(equalizerProvider.notifier).selectPreset(preset),
+                selectedColor: Theme.of(context).colorScheme.primaryContainer,
+                side: BorderSide(
+                    color: isSelected
+                        ? AppColors.accentOf(context)
+                        : AppColors.cardBorder(context)),
+                labelStyle: TextStyle(
+                  color: isSelected
+                      ? AppColors.accentOf(context)
+                      : AppColors.secondaryText(context),
                   fontSize: 12,
-                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
                 ),
-              ),
-            ),
-          );
-        },
-      ),
+              );
+            },
+          ),
+        ),
+        const SizedBox(height: 12),
+      ],
     );
   }
 
-  Widget _buildFrequencyBars(EqualizerState eqState) {
-    return Padding(
-      padding: EdgeInsets.symmetric(horizontal: 16),
+  Widget _buildFrequencyPanel(EqualizerState eqState) {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16),
+      padding: const EdgeInsets.fromLTRB(12, 14, 12, 10),
+      decoration: BoxDecoration(
+        color: AppColors.card(context),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppColors.cardBorder(context)),
+      ),
       child: Column(
         children: [
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 4),
+            child: Row(
+              children: [
+                Text('10 段频率调节',
+                    style:
+                        TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+                Spacer(),
+                Text('±12 dB', style: TextStyle(fontSize: 11)),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
           Expanded(
             child: Stack(
               children: [
@@ -120,7 +199,8 @@ class _EqualizerScreenState extends ConsumerState<EqualizerScreen> {
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: List.generate(10, (index) {
-                    return _buildFrequencyBand(index, eqState.gains[index], eqState.enabled);
+                    return _buildFrequencyBand(
+                        index, eqState.gains[index], eqState.enabled);
                   }),
                 ),
               ],
@@ -137,7 +217,10 @@ class _EqualizerScreenState extends ConsumerState<EqualizerScreen> {
                   child: Text(
                     label,
                     textAlign: TextAlign.center,
-                    style: TextStyle(color: AppColors.mutedText(context), fontSize: 9),
+                    style: TextStyle(
+                        color: AppColors.mutedText(context),
+                        fontSize: 9,
+                        fontWeight: FontWeight.w500),
                   ),
                 );
               }).toList(),
@@ -198,7 +281,9 @@ class _EqualizerScreenState extends ConsumerState<EqualizerScreen> {
   Widget _gridLine(bool isZero) {
     return Container(
       height: 1,
-      color: isZero ? AppColors.border.withAlpha(80) : AppColors.border.withAlpha(30),
+      color: isZero
+          ? AppColors.border.withAlpha(80)
+          : AppColors.border.withAlpha(30),
     );
   }
 
@@ -218,8 +303,11 @@ class _EqualizerScreenState extends ConsumerState<EqualizerScreen> {
                 ? (details) {
                     final newY = details.localPosition.dy.clamp(0.0, height);
                     final newNormalized = 1 - (newY / height);
-                    final newGain = (newNormalized * 24 - 12).round().clamp(-12, 12);
-                    ref.read(equalizerProvider.notifier).setBandGain(index, newGain);
+                    final newGain =
+                        (newNormalized * 24 - 12).round().clamp(-12, 12);
+                    ref
+                        .read(equalizerProvider.notifier)
+                        .setBandGain(index, newGain);
                   }
                 : null,
             child: Stack(
@@ -238,8 +326,12 @@ class _EqualizerScreenState extends ConsumerState<EqualizerScreen> {
                 Positioned(
                   left: 12,
                   right: 12,
-                  top: gain >= 0 ? center - (gain / 12.0) * (height / 2) : center,
-                  bottom: gain >= 0 ? center : center + (gain.abs() / 12.0) * (height / 2),
+                  top: gain >= 0
+                      ? center - (gain / 12.0) * (height / 2)
+                      : center,
+                  bottom: gain >= 0
+                      ? center
+                      : center + (gain.abs() / 12.0) * (height / 2),
                   child: Container(
                     decoration: BoxDecoration(
                       gradient: gain >= 0
@@ -267,10 +359,13 @@ class _EqualizerScreenState extends ConsumerState<EqualizerScreen> {
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
                       color: gain >= 0 ? AppColors.amber : AppColors.info,
-                      border: Border.all(color: Theme.of(context).scaffoldBackgroundColor, width: 2.5),
+                      border: Border.all(
+                          color: Theme.of(context).scaffoldBackgroundColor,
+                          width: 2.5),
                       boxShadow: [
                         BoxShadow(
-                          color: (gain >= 0 ? AppColors.amber : AppColors.info).withAlpha(100),
+                          color: (gain >= 0 ? AppColors.amber : AppColors.info)
+                              .withAlpha(100),
                           blurRadius: 8,
                         ),
                       ],
@@ -287,16 +382,18 @@ class _EqualizerScreenState extends ConsumerState<EqualizerScreen> {
 
   Widget _buildBassTrebleSliders(EqualizerState eqState) {
     // 低音 = 前3个频段的平均值，高音 = 后3个频段的平均值
-    final bassGain = ((eqState.gains[0] + eqState.gains[1] + eqState.gains[2]) / 3).round();
-    final trebleGain = ((eqState.gains[7] + eqState.gains[8] + eqState.gains[9]) / 3).round();
+    final bassGain =
+        ((eqState.gains[0] + eqState.gains[1] + eqState.gains[2]) / 3).round();
+    final trebleGain =
+        ((eqState.gains[7] + eqState.gains[8] + eqState.gains[9]) / 3).round();
 
     return Padding(
       padding: EdgeInsets.symmetric(horizontal: 20),
       child: Column(
         children: [
-          _buildSliderRow('低音', bassGain, AppColors.amber),
+          _buildSliderRow('低频', bassGain, AppColors.amber),
           const SizedBox(height: 12),
-          _buildSliderRow('高音', trebleGain, AppColors.info),
+          _buildSliderRow('高频', trebleGain, AppColors.info),
         ],
       ),
     );
@@ -307,7 +404,11 @@ class _EqualizerScreenState extends ConsumerState<EqualizerScreen> {
       children: [
         SizedBox(
           width: 48,
-          child: Text(label, style: TextStyle(color: AppColors.secondaryText(context), fontSize: 12, fontWeight: FontWeight.w500)),
+          child: Text(label,
+              style: TextStyle(
+                  color: AppColors.secondaryText(context),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500)),
         ),
         Expanded(
           child: SliderTheme(
@@ -330,7 +431,8 @@ class _EqualizerScreenState extends ConsumerState<EqualizerScreen> {
           child: Text(
             '${value > 0 ? '+' : ''}$value dB',
             textAlign: TextAlign.right,
-            style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w500),
+            style: TextStyle(
+                color: color, fontSize: 11, fontWeight: FontWeight.w500),
           ),
         ),
       ],
