@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/audio/audio_handler.dart';
 import '../../../core/storage/storage_service.dart';
 
 // 音质选择
@@ -22,29 +23,29 @@ final themeModeProvider = StateNotifierProvider<ThemeModeNotifier, ThemeMode>((
 
 final audioQualityProvider =
     StateNotifierProvider<AudioQualityNotifier, AudioQualityOption>((ref) {
-      return AudioQualityNotifier();
-    });
+  return AudioQualityNotifier();
+});
 
 final downloadQualityProvider =
     StateNotifierProvider<DownloadQualityNotifier, AudioQualityOption>((ref) {
-      return DownloadQualityNotifier();
-    });
+  return DownloadQualityNotifier();
+});
 
 final wifiOnlyDownloadProvider =
     StateNotifierProvider<WifiOnlyDownloadNotifier, bool>((ref) {
-      return WifiOnlyDownloadNotifier();
-    });
+  return WifiOnlyDownloadNotifier();
+});
 
 final syncServerUrlProvider =
     StateNotifierProvider<SyncServerUrlNotifier, String?>((ref) {
-      return SyncServerUrlNotifier();
-    });
+  return SyncServerUrlNotifier();
+});
 
 /// 默认搜索平台：tx / kw / wy
 final defaultSearchPlatformProvider =
     StateNotifierProvider<DefaultSearchPlatformNotifier, String>((ref) {
-      return DefaultSearchPlatformNotifier();
-    });
+  return DefaultSearchPlatformNotifier();
+});
 
 // ---- Notifiers ----
 
@@ -86,6 +87,21 @@ class AudioQualityNotifier extends StateNotifier<AudioQualityOption> {
     state = quality;
     final storage = await StorageService.instance;
     await storage.setInt('audio_quality', quality.index);
+    // 立即让正在播放的队列按新音质重解析，避免继续用旧 extras.url
+    final token = switch (quality) {
+      AudioQualityOption.low => '128k',
+      AudioQualityOption.high => '320k',
+      AudioQualityOption.lossless => 'flac',
+      AudioQualityOption.lossless24 => 'flac24bit',
+      AudioQualityOption.hires => 'hires',
+    };
+    try {
+      if (audioHandler is LxAudioHandler) {
+        await (audioHandler as LxAudioHandler).applyPreferredQuality(token);
+      }
+    } catch (_) {
+      // audioHandler 可能尚未 init（单测）；忽略
+    }
   }
 }
 

@@ -81,6 +81,38 @@ int previousQueueIndex({
   return loop ? queueLength - 1 : -1;
 }
 
+/// 已缓存的播放地址仅在「请求音质一致」时可复用；否则改音质设置会不生效。
+bool shouldReuseCachedPlayUrl({
+  required String? cachedUrl,
+  required String? cachedRequestedQuality,
+  required String currentRequestedQuality,
+}) {
+  if (cachedUrl == null || cachedUrl.isEmpty) return false;
+  if (cachedUrl.startsWith('data:')) return false;
+  if (cachedRequestedQuality == null || cachedRequestedQuality.isEmpty) {
+    return false;
+  }
+  return cachedRequestedQuality == currentRequestedQuality;
+}
+
+/// 与设置页 AudioQualityOption 对齐的音质 token（避免 audio_handler 依赖 settings）。
+enum AudioQualityToken { low, high, lossless, lossless24, hires }
+
+String playQualityToken(AudioQualityToken token) {
+  switch (token) {
+    case AudioQualityToken.low:
+      return '128k';
+    case AudioQualityToken.high:
+      return '320k';
+    case AudioQualityToken.lossless:
+      return 'flac';
+    case AudioQualityToken.lossless24:
+      return 'flac24bit';
+    case AudioQualityToken.hires:
+      return 'hires';
+  }
+}
+
 class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   final AudioPlayer _player = AudioPlayer();
   final List<MediaItem> _queue = [];
@@ -97,6 +129,9 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
   // 注入 URL 解析器
   UrlResolver? urlResolver;
+
+  /// 当前播放偏好音质（由设置页同步）；用于判断 extras 缓存 url 是否可复用。
+  String preferredQuality = '320k';
 
   // 注入错误回调
   void Function(String message)? onError;
@@ -342,8 +377,12 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         final item = _queue[idx];
         final itemId = item.id;
         final existing = item.extras?['url']?.toString() ?? '';
-        if (existing.isNotEmpty &&
-            (existing.startsWith('file://') || existing.startsWith('/'))) {
+        final existingQ = item.extras?['requestedQuality']?.toString();
+        if (shouldReuseCachedPlayUrl(
+          cachedUrl: existing,
+          cachedRequestedQuality: existingQ,
+          currentRequestedQuality: preferredQuality,
+        )) {
           continue;
         }
         try {
@@ -382,10 +421,14 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     final item = _queue[index];
     final itemId = item.id;
     _activeItemId = itemId;
-    String? currentUrl = item.extras?['url']?.toString();
-    if (currentUrl != null && currentUrl.startsWith('data:')) {
-      currentUrl = null;
-    }
+    final cachedUrl = item.extras?['url']?.toString();
+    final cachedQ = item.extras?['requestedQuality']?.toString();
+    final canReuse = shouldReuseCachedPlayUrl(
+      cachedUrl: cachedUrl,
+      cachedRequestedQuality: cachedQ,
+      currentRequestedQuality: preferredQuality,
+    );
+    String? currentUrl = canReuse ? cachedUrl : null;
 
     _currentIndex = index;
     mediaItem.add(item);
@@ -399,12 +442,14 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
             playbackState.add(playbackState.value.copyWith(
               processingState: AudioProcessingState.buffering,
             ));
-            url = await urlResolver!(
-              item.id,
-              item.extras == null
-                  ? null
-                  : Map<String, dynamic>.from(item.extras!),
-            );
+            // 强制按当前 preferredQuality 重新解析，忽略过期的 extras.url
+            final resolveExtras = item.extras == null
+                ? <String, dynamic>{}
+                : Map<String, dynamic>.from(item.extras!);
+            resolveExtras.remove('url');
+            resolveExtras.remove('remoteUrl');
+            resolveExtras['requestedQuality'] = preferredQuality;
+            url = await urlResolver!(item.id, resolveExtras);
           }
         }
 
@@ -436,6 +481,8 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         final baseExtras =
             Map<String, dynamic>.from(_queue[index].extras ?? {});
         baseExtras['url'] = url;
+        baseExtras['requestedQuality'] =
+            baseExtras['requestedQuality']?.toString() ?? preferredQuality;
         final updatedItem = _queue[index].copyWith(extras: baseExtras);
         _queue[index] = updatedItem;
         queue.add(List.from(_queue));
@@ -586,5 +633,26 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     final enabled = shuffleMode == AudioServiceShuffleMode.all;
     playbackState.add(playbackState.value.copyWith(shuffleMode: shuffleMode));
     await _player.setShuffleModeEnabled(enabled);
+  }
+
+  /// 设置页改音质后调用：清掉队列里过期的 url，并让当前曲按新音质重解析。
+  Future<void> applyPreferredQuality(String quality) async {
+    preferredQuality = quality;
+    if (_queue.isEmpty) return;
+    for (var i = 0; i < _queue.length; i++) {
+      final extras = Map<String, dynamic>.from(_queue[i].extras ?? {});
+      final cachedQ = extras['requestedQuality']?.toString();
+      if (cachedQ != quality) {
+        extras.remove('url');
+        extras.remove('remoteUrl');
+        extras['requestedQuality'] = quality;
+        _queue[i] = _queue[i].copyWith(extras: extras);
+      }
+    }
+    queue.add(List.from(_queue));
+    final idx = _currentIndex;
+    if (idx >= 0 && idx < _queue.length && _userWantsPlay) {
+      await skipToQueueItem(idx);
+    }
   }
 }

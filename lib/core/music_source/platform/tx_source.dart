@@ -23,7 +23,8 @@ class TxSource extends MusicPlatform {
   }
 
   @override
-  Future<List<MusicItem>> search(String keyword, {int page = 1, int limit = 20}) async {
+  Future<List<MusicItem>> search(String keyword,
+      {int page = 1, int limit = 20}) async {
     try {
       final response = await _dio.get(
         'https://c.y.qq.com/soso/fcgi-bin/client_search_cp',
@@ -93,9 +94,13 @@ class TxSource extends MusicPlatform {
     return list;
   }
 
-  static String _staticFormatSingerName(List<dynamic> singers, {String nameKey = 'name'}) {
+  static String _staticFormatSingerName(List<dynamic> singers,
+      {String nameKey = 'name'}) {
     if (singers.isEmpty) return '未知歌手';
-    return singers.map((s) => (s as Map)[nameKey]?.toString() ?? '').where((s) => s.isNotEmpty).join('、');
+    return singers
+        .map((s) => (s as Map)[nameKey]?.toString() ?? '')
+        .where((s) => s.isNotEmpty)
+        .join('、');
   }
 
   List<MusicItem> _handleResult(List<dynamic> rawList) {
@@ -103,39 +108,85 @@ class TxSource extends MusicPlatform {
   }
 
   @override
-  Future<String?> getMusicUrl(MusicItem music, {String quality = '128k'}) async {
+  Future<String?> getMusicUrl(MusicItem music,
+      {String quality = '128k'}) async {
     try {
       final songmid = music.songmid ?? music.id;
       if (songmid.isEmpty) return null;
 
-      final guid = (DateTime.now().millisecondsSinceEpoch % 10000000000).toString();
-      final filename = 'C400$songmid.m4a';
-      final urlDio = createDioForService(headers: {'Referer': 'https://y.qq.com/'});
+      final mediaMid = music.meta?['strMediaMid']?.toString() ??
+          music.meta?['media_mid']?.toString() ??
+          songmid;
+      final guid =
+          (DateTime.now().millisecondsSinceEpoch % 10000000000).toString();
+      final urlDio =
+          createDioForService(headers: {'Referer': 'https://y.qq.com/'});
 
-      final resp = await urlDio.get(
-        'https://c.y.qq.com/base/fcgi-bin/fcg_music_express_mobile3.fcg',
-        queryParameters: {
-          'format': 'json',
-          'filename': filename,
-          'guid': guid,
-          'songmid': songmid,
-          'uin': '0',
-          'platform': 'h5',
-        },
-      );
-
-      final body = resp.data;
-      if (body is! Map) return null;
-
-      final data = body['data'] as Map?;
-      if (data == null) return null;
-
-      final vkey = data['vkey'] as String?;
-      if (vkey == null || vkey.isEmpty) return null;
-
-      return 'https://dl.stream.qqmusic.qq.com/$filename?vkey=$vkey&guid=$guid&uin=0&fromtag=66';
+      // 按音质尝试文件名前缀；高音质失败时由外层 qualityChain 降级再调本方法
+      for (final filename in _txFilenames(songmid, mediaMid, quality)) {
+        try {
+          final resp = await urlDio.get(
+            'https://c.y.qq.com/base/fcgi-bin/fcg_music_express_mobile3.fcg',
+            queryParameters: {
+              'format': 'json205361747',
+              'cid': '205361747',
+              'filename': filename,
+              'guid': guid,
+              'songmid': songmid,
+              'uin': '0',
+              'platform': 'yqq',
+            },
+          );
+          final body = resp.data is String ? jsonDecode(resp.data) : resp.data;
+          if (body is! Map) continue;
+          final data = body['data'];
+          String? vkey;
+          String? outName = filename;
+          if (data is Map) {
+            vkey = data['vkey']?.toString();
+            final items = data['items'];
+            if ((vkey == null || vkey.isEmpty) &&
+                items is List &&
+                items.isNotEmpty) {
+              final first = items.first;
+              if (first is Map) {
+                vkey = first['vkey']?.toString();
+                final fn = first['filename']?.toString();
+                if (fn != null && fn.isNotEmpty) outName = fn;
+              }
+            }
+          }
+          if (vkey == null || vkey.isEmpty) continue;
+          return 'https://dl.stream.qqmusic.qq.com/$outName?vkey=$vkey&guid=$guid&uin=0&fromtag=66';
+        } catch (_) {
+          continue;
+        }
+      }
+      return null;
     } catch (e) {
       return null;
+    }
+  }
+
+  /// QQ 文件名前缀：F000 flac / M800 320k / M500 128k mp3 / C400 m4a
+  static List<String> _txFilenames(
+      String songmid, String mediaMid, String quality) {
+    switch (quality) {
+      case 'hires':
+      case 'flac24bit':
+      case 'flac':
+        return [
+          'F000$mediaMid.flac',
+          if (mediaMid != songmid) 'F000$songmid.flac',
+          'M800$songmid.mp3',
+          'C400$songmid.m4a',
+        ];
+      case '320k':
+        return ['M800$songmid.mp3', 'M500$songmid.mp3', 'C400$songmid.m4a'];
+      case '192k':
+        return ['M500$songmid.mp3', 'C400$songmid.m4a'];
+      default:
+        return ['C400$songmid.m4a', 'M500$songmid.mp3'];
     }
   }
 
@@ -145,7 +196,8 @@ class TxSource extends MusicPlatform {
       final songmid = music.songmid ?? music.id;
       if (songmid.isEmpty) return null;
 
-      final lyricDio = createDioForService(headers: {'Referer': 'https://y.qq.com/'});
+      final lyricDio =
+          createDioForService(headers: {'Referer': 'https://y.qq.com/'});
 
       final resp = await lyricDio.get(
         'https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg',
@@ -172,7 +224,9 @@ class TxSource extends MusicPlatform {
   @override
   MusicItem parseItem(Map<String, dynamic> raw, String source) {
     final list = _handleResult([raw]);
-    return list.isNotEmpty ? list.first : MusicItem(id: '', name: '', singer: '', source: 'tx', platform: 'tx');
+    return list.isNotEmpty
+        ? list.first
+        : MusicItem(id: '', name: '', singer: '', source: 'tx', platform: 'tx');
   }
 
   @override
@@ -192,7 +246,8 @@ class TxSource extends MusicPlatform {
       try {
         final songs = await getLeaderboardSongs(c.id, limit: 1);
         final cover = songs.isNotEmpty ? songs.first.artwork : null;
-        return c.copyWith(coverUrl: (cover != null && cover.isNotEmpty) ? cover : null);
+        return c.copyWith(
+            coverUrl: (cover != null && cover.isNotEmpty) ? cover : null);
       } catch (_) {
         return c;
       }
@@ -201,7 +256,8 @@ class TxSource extends MusicPlatform {
   }
 
   @override
-  Future<List<MusicItem>> getLeaderboardSongs(String leaderboardId, {int page = 1, int limit = 100}) async {
+  Future<List<MusicItem>> getLeaderboardSongs(String leaderboardId,
+      {int page = 1, int limit = 100}) async {
     try {
       final parts = leaderboardId.split(':');
       final topid = int.parse(parts.length == 2 ? parts[1] : leaderboardId);
@@ -231,14 +287,15 @@ class TxSource extends MusicPlatform {
         options: Options(
           headers: {
             'Content-Type': 'application/json',
-            'User-Agent': 'Mozilla/5.0 (compatible; MSIE 9.0; Windows NT 6.1; WOW64; Trident/5.0)',
+            'User-Agent':
+                'Mozilla/5.0 (compatible; MSIE 9.0; Windows NT 6.1; WOW64; Trident/5.0)',
           },
         ),
       );
 
       final body = response.data;
       debugPrint('[TX] getLeaderboardSongs response: ${body.runtimeType}');
-      
+
       Map<String, dynamic> bodyMap;
       if (body is Map) {
         bodyMap = body.map((k, v) => MapEntry(k.toString(), v));
@@ -249,23 +306,26 @@ class TxSource extends MusicPlatform {
           if (callbackIdx != -1 && jsonStr.endsWith(')')) {
             jsonStr = jsonStr.substring(callbackIdx + 1, jsonStr.length - 1);
           }
-          bodyMap = (jsonDecode(jsonStr) as Map).map((k, v) => MapEntry(k.toString(), v));
+          bodyMap = (jsonDecode(jsonStr) as Map)
+              .map((k, v) => MapEntry(k.toString(), v));
         } catch (e) {
           debugPrint('[TX] getLeaderboardSongs: jsonDecode failed: $e');
-          debugPrint('[TX] response preview: ${body.toString().substring(0, body.toString().length > 300 ? 300 : body.toString().length)}');
+          debugPrint(
+              '[TX] response preview: ${body.toString().substring(0, body.toString().length > 300 ? 300 : body.toString().length)}');
           return [];
         }
       } else {
         debugPrint('[TX] getLeaderboardSongs: unexpected type');
         return [];
       }
-      
+
       if (bodyMap['code'] != 0) {
         debugPrint('[TX] getLeaderboardSongs: code=${bodyMap['code']}');
         return [];
       }
 
-      final songList = bodyMap['toplist']?['data']?['songInfoList'] as List<dynamic>?;
+      final songList =
+          bodyMap['toplist']?['data']?['songInfoList'] as List<dynamic>?;
       if (songList == null) {
         debugPrint('[TX] getLeaderboardSongs: no songInfoList');
         debugPrint('[TX] toplist keys: ${bodyMap['toplist']?.keys}');
@@ -274,7 +334,9 @@ class TxSource extends MusicPlatform {
 
       debugPrint('[TX] getLeaderboardSongs: ${songList.length} songs');
 
-      return songList.map((item) => _parseItem(item as Map<String, dynamic>)).toList();
+      return songList
+          .map((item) => _parseItem(item as Map<String, dynamic>))
+          .toList();
     } catch (e) {
       debugPrint('[TX] getLeaderboardSongs error: $e');
       return [];
@@ -292,10 +354,15 @@ class TxSource extends MusicPlatform {
     // 桌面版: 专辑名为空时用歌手封面
     String artwork;
     if (albumName.isEmpty || albumName == '空') {
-      final singerMid = (singer != null && singer.isNotEmpty) ? singer[0]['mid'] as String? ?? '' : '';
-      artwork = singerMid.isNotEmpty ? 'https://y.gtimg.cn/music/photo_new/T001R500x500M000$singerMid.jpg' : '';
+      final singerMid = (singer != null && singer.isNotEmpty)
+          ? singer[0]['mid'] as String? ?? ''
+          : '';
+      artwork = singerMid.isNotEmpty
+          ? 'https://y.gtimg.cn/music/photo_new/T001R500x500M000$singerMid.jpg'
+          : '';
     } else {
-      artwork = 'https://y.gtimg.cn/music/photo_new/T002R500x500M000$albumMid.jpg';
+      artwork =
+          'https://y.gtimg.cn/music/photo_new/T002R500x500M000$albumMid.jpg';
     }
 
     // songmid 必须是歌曲 mid。

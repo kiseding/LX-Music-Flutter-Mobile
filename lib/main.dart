@@ -4,6 +4,7 @@ import 'package:audio_service/audio_service.dart';
 import 'package:lx_music_flutter/app.dart';
 import 'package:lx_music_flutter/core/audio/audio_handler.dart';
 import 'package:lx_music_flutter/core/audio/playback_cache_service.dart';
+import 'package:lx_music_flutter/core/network/music_source_service.dart';
 import 'package:lx_music_flutter/core/network/play_url_result.dart';
 import 'package:lx_music_flutter/features/custom_source/presentation/custom_source_provider.dart';
 import 'package:lx_music_flutter/features/search/presentation/search_provider.dart';
@@ -16,7 +17,7 @@ import 'package:audio_session/audio_session.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
+
   // 初始化音频会话，确保正确处理音频焦点
   final session = await AudioSession.instance;
   await session.configure(const AudioSessionConfiguration.music());
@@ -35,16 +36,16 @@ void main() async {
 
   // 2. 创建 Riverpod Container 以在应用启动前访问 Providers
   final container = ProviderContainer();
-  
+
   // 3. 初始化自定义音源
   await container.read(customSourceServiceProvider).init();
-  
+
   // 3.5 初始化歌单持久化
   await container.read(playlistServiceProvider).init();
-  
+
   // 3.6 初始化下载服务持久化
   await container.read(downloadServiceProvider).init();
-  
+
   // 4. 关键：连接 AudioHandler 和 MusicSourceService + 播放缓存
   final playbackCache = PlaybackCacheService();
   await playbackCache.init();
@@ -52,7 +53,7 @@ void main() async {
   if (audioHandler is LxAudioHandler) {
     final lxHandler = audioHandler as LxAudioHandler;
     final sourceService = container.read(musicSourceServiceProvider);
-    
+
     // 设置 URL 解析器：解析远程地址 → 下载到本地缓存 → 返回 file:// 供播放
     lxHandler.urlResolver = (mediaId, [extras]) async {
       debugPrint('[urlResolver] 开始解析: mediaId=$mediaId');
@@ -73,8 +74,10 @@ void main() async {
             return null;
           }();
       if (rawExtras != null) {
-        final musicItem = MusicItem.fromJson(Map<String, dynamic>.from(rawExtras));
-        debugPrint('[urlResolver] 歌曲信息: platform=${musicItem.platform}, source=${musicItem.source}, songmid=${musicItem.songmid}');
+        final musicItem =
+            MusicItem.fromJson(Map<String, dynamic>.from(rawExtras));
+        debugPrint(
+            '[urlResolver] 歌曲信息: platform=${musicItem.platform}, source=${musicItem.source}, songmid=${musicItem.songmid}');
         final qualityOption = container.read(audioQualityProvider);
         const qualityMap = {
           AudioQualityOption.low: '128k',
@@ -83,14 +86,18 @@ void main() async {
           AudioQualityOption.lossless24: 'flac24bit',
           AudioQualityOption.hires: 'hires',
         };
-        final requested = qualityMap[qualityOption] ?? '320k';
-        // 音质降级链：用户选择 → 320k → 128k（每级单独向源请求，互不短路）
-        final qualitiesToTry = <String>[
-          requested,
-          if (requested != '320k') '320k',
-          if (requested != '128k') '128k',
-        ];
+        // extras 可携带强制音质（改设置后 re-resolve）；否则读全局设置
+        final forced = rawExtras['requestedQuality']?.toString();
+        final requested = (forced != null && forced.isNotEmpty)
+            ? forced
+            : (qualityMap[qualityOption] ?? '320k');
+        if (audioHandler is LxAudioHandler) {
+          (audioHandler as LxAudioHandler).preferredQuality = requested;
+        }
+        // 完整降级链：hires→flac24bit→flac→320k→…→128k
+        final qualitiesToTry = MusicSourceService.qualityChain(requested);
         String? lastFail;
+        PlayUrlResult? bestBelow;
         for (final cacheQuality in qualitiesToTry) {
           debugPrint('[urlResolver] 尝试音质 q=$cacheQuality');
           final result = await sourceService.getPlayUrlDetailed(
@@ -108,6 +115,16 @@ void main() async {
             debugPrint('[urlResolver] $lastFail');
             continue;
           }
+          // 源用低码率冒充高音质：继续降级尝试，最后再接受偏低结果
+          if (MusicSourceService.isQualityBelow(
+                  result.actualQuality, requested) &&
+              cacheQuality == requested) {
+            debugPrint(
+                '[urlResolver] q=$cacheQuality 实际=${result.actualQuality} 偏低，继续');
+            bestBelow ??= result;
+            continue;
+          }
+          bestBelow = null;
           final songId = (musicItem.songmid?.isNotEmpty == true)
               ? musicItem.songmid!
               : (musicItem.hash?.isNotEmpty == true
@@ -138,7 +155,8 @@ void main() async {
             extras['url'] = playUrl;
             extras['remoteUrl'] = result.url;
             extras['actualQuality'] = result.actualQuality;
-            extras['requestedQuality'] = result.requestedQuality;
+            // 记录用户偏好音质（非降级后的实际音质），供下次判断是否可复用缓存
+            extras['requestedQuality'] = requested;
             extras['platform'] = result.platform;
             lxHandler.mediaItem.add(current.copyWith(extras: extras));
           }
@@ -146,10 +164,43 @@ void main() async {
               '[urlResolver] 成功 q=${result.actualQuality} local=true ${playUrl.length > 80 ? playUrl.substring(0, 80) : playUrl}');
           return playUrl;
         }
+        // 请求档全部失败时，接受之前保留的偏低可播结果
+        if (bestBelow != null) {
+          final songId = (musicItem.songmid?.isNotEmpty == true)
+              ? musicItem.songmid!
+              : (musicItem.hash?.isNotEmpty == true
+                  ? musicItem.hash!
+                  : musicItem.id);
+          final qualityKey = bestBelow.actualQuality.isNotEmpty
+              ? bestBelow.actualQuality
+              : requested;
+          final localPath = await playbackCache.getOrDownload(
+            remoteUrl: bestBelow.url,
+            platform: bestBelow.platform,
+            songId: songId,
+            quality: qualityKey,
+          );
+          final playUrl = PlaybackCacheService.cachedPlayableUri(localPath);
+          if (playUrl != null) {
+            final current = lxHandler.mediaItem.value;
+            if (current != null && current.id == mediaId) {
+              final extras = Map<String, dynamic>.from(current.extras ?? {});
+              extras['url'] = playUrl;
+              extras['remoteUrl'] = bestBelow.url;
+              extras['actualQuality'] = bestBelow.actualQuality;
+              extras['requestedQuality'] = requested;
+              extras['platform'] = bestBelow.platform;
+              lxHandler.mediaItem.add(current.copyWith(extras: extras));
+            }
+            debugPrint('[urlResolver] 使用偏低结果 q=${bestBelow.actualQuality}');
+            return playUrl;
+          }
+        }
         debugPrint('[urlResolver] 全部失败 last=$lastFail');
         return null;
       }
-      debugPrint('[urlResolver] 无法获取歌曲信息: mediaId=$mediaId hasExtras=${rawExtras != null}');
+      debugPrint(
+          '[urlResolver] 无法获取歌曲信息: mediaId=$mediaId hasExtras=${rawExtras != null}');
       return null;
     };
 
@@ -158,7 +209,7 @@ void main() async {
       container.read(playerMessageProvider.notifier).state = message;
     };
   }
-  
+
   runApp(
     UncontrolledProviderScope(
       container: container,

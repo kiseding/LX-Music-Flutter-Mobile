@@ -12,13 +12,33 @@ class MusicSourceService {
 
   BuiltInSourceManager get builtInSources => _builtInSources;
 
+  /// 从高到低的音质降级链。优先 preferred，再依次更低档。
+  static const qualityRank = [
+    'hires',
+    'flac24bit',
+    'flac',
+    '320k',
+    '192k',
+    '128k',
+  ];
+
   static List<String> qualityChain(String preferred) {
-    const all = ['320k', '128k', 'flac', 'flac24bit', 'hires'];
-    final result = <String>[if (preferred.isNotEmpty) preferred];
-    for (final q in all) {
-      if (!result.contains(q)) result.add(q);
+    final p = preferred.isEmpty ? '320k' : preferred;
+    final start = qualityRank.indexOf(p);
+    if (start < 0) {
+      return [p, ...qualityRank.where((q) => q != p)];
     }
-    return result;
+    return qualityRank.sublist(start);
+  }
+
+  static int qualityRankIndex(String q) {
+    final i = qualityRank.indexOf(q);
+    return i < 0 ? qualityRank.length : i;
+  }
+
+  /// actual 是否明显低于 requested（用于拒绝“假成功”低码率 URL）
+  static bool isQualityBelow(String actual, String requested) {
+    return qualityRankIndex(actual) > qualityRankIndex(requested);
   }
 
   Future<List<MusicItem>> search(
@@ -33,14 +53,16 @@ class MusicSourceService {
 
     if (enabledCustomSources.isNotEmpty) {
       try {
-        final results = await _customSourceService.searchWithSource(
-          enabledCustomSources.first.id,
-          keyword,
-          source: platform,
-          page: page,
-          limit: limit,
-          type: type,
-        ).timeout(const Duration(seconds: 15));
+        final results = await _customSourceService
+            .searchWithSource(
+              enabledCustomSources.first.id,
+              keyword,
+              source: platform,
+              page: page,
+              limit: limit,
+              type: type,
+            )
+            .timeout(const Duration(seconds: 15));
         if (results.isNotEmpty) {
           return results;
         }
@@ -54,22 +76,26 @@ class MusicSourceService {
     }
 
     if (type == 'songlist') {
-      final builtInResult = await _builtInSources.searchSongLists(platform, keyword, page: page, limit: limit);
+      final builtInResult = await _builtInSources
+          .searchSongLists(platform, keyword, page: page, limit: limit);
       if (builtInResult.isNotEmpty) return builtInResult;
     } else {
-      final builtInResult = await _builtInSources.search(platform, keyword, page: page, limit: limit);
+      final builtInResult = await _builtInSources.search(platform, keyword,
+          page: page, limit: limit);
       if (builtInResult.isNotEmpty) return builtInResult;
     }
 
     if (enabledCustomSources.isNotEmpty) {
-      return await _customSourceService.searchWithSource(
+      return await _customSourceService
+          .searchWithSource(
         enabledCustomSources.first.id,
         keyword,
         source: platform,
         page: page,
         limit: limit,
         type: type,
-      ).catchError((e) {
+      )
+          .catchError((e) {
         return <MusicItem>[];
       });
     }
@@ -77,16 +103,20 @@ class MusicSourceService {
     return [];
   }
 
-  Future<List<MusicItem>> _searchAllPlatforms(String keyword, {int page = 1, int limit = 20}) async {
+  Future<List<MusicItem>> _searchAllPlatforms(String keyword,
+      {int page = 1, int limit = 20}) async {
     final platforms = _builtInSources.allIds;
     final results = await Future.wait(
-      platforms.map((p) => _builtInSources.search(p, keyword, page: page, limit: limit)
+      platforms.map((p) => _builtInSources
+          .search(p, keyword, page: page, limit: limit)
           .timeout(const Duration(seconds: 10), onTimeout: () => <MusicItem>[])
           .catchError((_) => <MusicItem>[])),
     );
 
     final List<MusicItem> combined = [];
-    int maxLen = results.map((r) => r.length).fold(0, (max, len) => len > max ? len : max);
+    int maxLen = results
+        .map((r) => r.length)
+        .fold(0, (max, len) => len > max ? len : max);
     for (int i = 0; i < maxLen; i++) {
       for (var list in results) {
         if (i < list.length) {
@@ -103,11 +133,17 @@ class MusicSourceService {
         platform == 'custom' ||
         platform == 'test' ||
         platform.startsWith('default_') ||
-        (platform != 'kw' && platform != 'tx' && platform != 'wy' && platform != 'kg' && platform != 'mg')) {
+        (platform != 'kw' &&
+            platform != 'tx' &&
+            platform != 'wy' &&
+            platform != 'kg' &&
+            platform != 'mg')) {
       final metaSrc = music.meta?['source']?.toString();
       if (metaSrc == 'kw' || metaSrc == 'tx' || metaSrc == 'wy') {
         platform = metaSrc!;
-      } else if (music.source == 'kw' || music.source == 'tx' || music.source == 'wy') {
+      } else if (music.source == 'kw' ||
+          music.source == 'tx' ||
+          music.source == 'wy') {
         platform = music.source;
       } else {
         platform = 'tx';
@@ -121,22 +157,23 @@ class MusicSourceService {
     return result?.url;
   }
 
-  Future<PlayUrlResult?> getPlayUrlDetailed(MusicItem music, {String quality = '320k'}) async {
+  Future<PlayUrlResult?> getPlayUrlDetailed(MusicItem music,
+      {String quality = '320k'}) async {
     final resolvedQuality = quality.isEmpty ? '320k' : quality;
     final songId = (music.songmid?.isNotEmpty == true)
         ? music.songmid!
         : (music.hash?.isNotEmpty == true ? music.hash! : music.id);
     final platform = resolvePlatform(music);
-    debugPrint('[getPlayUrl] 开始解析: platform=$platform, songId=$songId, quality=$resolvedQuality, source=${music.source}');
+    debugPrint(
+        '[getPlayUrl] 开始解析: platform=$platform, songId=$songId, quality=$resolvedQuality, source=${music.source}');
 
     final qualities = qualityChain(resolvedQuality);
+    PlayUrlResult? bestBelow;
 
-    // 1. 自定义 JS 音源：脚本内自带 API_URL 等配置，由引擎执行脚本解析
-    //    必须把 platform 规范成 tx/kw/wy，脚本按 source 选接口
+    // 1. 自定义 JS 音源：只请求当前档；假成功低码率不直接认，留给外层降级
     final enabledSources = _customSourceService.enabledSources;
-    debugPrint('[getPlayUrl] 已启用自定义源: ${enabledSources.map((s) => '${s.id}/${s.name}').join(', ')} (共${enabledSources.length})');
-    // 只解析调用方指定的单一音质；音质降级由 urlResolver 外层循环负责，
-    // 避免内层提前 return 导致“假成功 URL”阻断 320k/128k。
+    debugPrint(
+        '[getPlayUrl] 已启用自定义源: ${enabledSources.map((s) => '${s.id}/${s.name}').join(', ')} (共${enabledSources.length})');
     final musicForScript = music.copyWith(platform: platform);
     for (final source in enabledSources) {
       try {
@@ -153,13 +190,22 @@ class MusicSourceService {
                 '[getPlayUrl] 自定义源 ${source.name} q=$resolvedQuality 无效地址 host=$host path=$path');
             continue;
           }
-          debugPrint('[getPlayUrl] 自定义源成功 ${source.name} q=$resolvedQuality');
-          return PlayUrlResult(
+          final actual = correctQualityFromUrl(url, resolvedQuality);
+          final result = PlayUrlResult(
             url: url,
             requestedQuality: resolvedQuality,
-            actualQuality: correctQualityFromUrl(url, resolvedQuality),
+            actualQuality: actual,
             platform: platform,
           );
+          if (isQualityBelow(actual, resolvedQuality)) {
+            debugPrint(
+                '[getPlayUrl] 自定义源 ${source.name} q=$resolvedQuality 实际=$actual 偏低，继续降级');
+            bestBelow ??= result;
+            continue;
+          }
+          debugPrint(
+              '[getPlayUrl] 自定义源成功 ${source.name} q=$resolvedQuality actual=$actual');
+          return result;
         }
         debugPrint('[getPlayUrl] 自定义源 ${source.name} q=$resolvedQuality 返回空');
       } catch (e) {
@@ -168,9 +214,9 @@ class MusicSourceService {
       }
     }
 
-    // 2. 内置平台源（QQ/酷我/网易官方接口，非 Huibq 等第三方音源 API）
+    // 2. 内置平台源：按降级链尝试
     if (platform == 'kw' || platform == 'tx' || platform == 'wy') {
-      for (final q in qualities.take(2)) {
+      for (final q in qualities) {
         try {
           final url = await _builtInSources
               .getMusicUrl(platform, music, quality: q)
@@ -180,31 +226,47 @@ class MusicSourceService {
               debugPrint('[getPlayUrl] 内置源 $platform q=$q 返回无效播放地址，跳过');
               continue;
             }
-            return PlayUrlResult(
+            final actual = correctQualityFromUrl(url, q);
+            final result = PlayUrlResult(
               url: url,
               requestedQuality: resolvedQuality,
-              actualQuality: correctQualityFromUrl(url, q),
+              actualQuality: actual,
               platform: platform,
             );
+            if (isQualityBelow(actual, resolvedQuality) &&
+                q == resolvedQuality) {
+              debugPrint('[getPlayUrl] 内置源 $platform q=$q 实际=$actual 偏低，继续降级');
+              bestBelow ??= result;
+              continue;
+            }
+            return result;
           }
         } catch (_) {}
       }
     }
 
+    if (bestBelow != null) {
+      debugPrint('[getPlayUrl] 使用偏低但可播结果 actual=${bestBelow.actualQuality}');
+      return bestBelow;
+    }
     debugPrint('[getPlayUrl] 所有源均失败');
     return null;
   }
 
   Future<String?> getLyric(MusicItem music) async {
-    debugPrint('[MusicSourceService] getLyric: platform=${music.platform}, source=${music.source}, songmid=${music.songmid}');
+    debugPrint(
+        '[MusicSourceService] getLyric: platform=${music.platform}, source=${music.source}, songmid=${music.songmid}');
 
     final enabledSources = _customSourceService.enabledSources;
     if (enabledSources.isNotEmpty) {
       debugPrint('[MusicSourceService] 尝试 ${enabledSources.length} 个自定义源');
     }
     for (final source in enabledSources) {
-      final lyric = await _customSourceService.getLyric(source.id, music)
-          .catchError((e) { debugPrint('[MusicSourceService] 自定义源 ${source.id} 歌词失败: $e'); return null; });
+      final lyric =
+          await _customSourceService.getLyric(source.id, music).catchError((e) {
+        debugPrint('[MusicSourceService] 自定义源 ${source.id} 歌词失败: $e');
+        return null;
+      });
       if (lyric != null && lyric.isNotEmpty) {
         debugPrint('[MusicSourceService] 自定义源 ${source.id} 返回歌词');
         return lyric;
@@ -235,7 +297,9 @@ class MusicSourceService {
     return null;
   }
 
-  Future<List<MusicItem>> getSongListDetail(String platformId, String songListId, {int page = 1, int limit = 50}) async {
+  Future<List<MusicItem>> getSongListDetail(
+      String platformId, String songListId,
+      {int page = 1, int limit = 50}) async {
     final enabledSources = _customSourceService.enabledSources;
     for (final source in enabledSources) {
       try {
@@ -247,7 +311,8 @@ class MusicSourceService {
         if (songs.isNotEmpty) return songs;
       } catch (_) {}
     }
-    return _builtInSources.getSongListDetail(platformId, songListId, page: page, limit: limit);
+    return _builtInSources.getSongListDetail(platformId, songListId,
+        page: page, limit: limit);
   }
 
   void dispose() {

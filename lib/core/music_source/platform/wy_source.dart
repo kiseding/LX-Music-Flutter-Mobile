@@ -228,15 +228,12 @@ class WySource extends MusicPlatform {
       final id = music.songmid ?? music.id;
       if (id.isEmpty) return null;
 
-      int br;
-      switch (quality) {
-        case 'flac':
-          br = 999000;
-        case '320k':
-          br = 320000;
-        default:
-          br = 128000;
-      }
+      final br = switch (quality) {
+        'hires' || 'flac24bit' || 'flac' => 999000,
+        '320k' => 320000,
+        '192k' => 192000,
+        _ => 128000,
+      };
 
       final urlDio =
           createDioForService(headers: {'Referer': 'https://music.163.com/'});
