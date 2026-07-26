@@ -888,6 +888,7 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
                   const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
               shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(24)),
+              clipBehavior: Clip.antiAlias,
               contentPadding: EdgeInsets.zero,
               content: ConstrainedBox(
                 constraints: BoxConstraints(
@@ -991,6 +992,8 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
                                     '例如：https://y.qq.com/n/ryqq/playlist/123\n或直接输入数字 ID',
                                 alignLabelWithHint: true,
                                 prefixIcon: Icon(Icons.link_rounded),
+                              ).applyDefaults(
+                                Theme.of(ctx).inputDecorationTheme,
                               ),
                             ),
                             if (error != null) ...[
