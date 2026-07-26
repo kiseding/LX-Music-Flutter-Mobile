@@ -30,21 +30,74 @@ AudioSource audioSourceFor(String url, {MediaItem? tag}) {
   return AudioSource.uri(playableUri(url), tag: tag);
 }
 
+/// 单曲 setAudioSource 架构下，just_audio 的 shuffle/seekToNext 无效。
+/// 在应用层从队列索引选下一首（尽量不立刻重复当前曲）。
+int nextQueueIndex({
+  required int currentIndex,
+  required int queueLength,
+  required bool shuffle,
+  required bool loop,
+  int Function(int max)? randomNext,
+}) {
+  if (queueLength <= 0) return -1;
+  if (queueLength == 1) return loop || shuffle ? 0 : -1;
+
+  if (shuffle) {
+    final rand =
+        randomNext ?? (max) => DateTime.now().microsecondsSinceEpoch % max;
+    // 在 [0, length) 中避开 currentIndex
+    var pick = rand(queueLength - 1);
+    if (pick >= currentIndex) pick += 1;
+    return pick.clamp(0, queueLength - 1);
+  }
+
+  final next = currentIndex + 1;
+  if (next < queueLength) return next;
+  return loop ? 0 : -1;
+}
+
+int previousQueueIndex({
+  required int currentIndex,
+  required int queueLength,
+  required bool shuffle,
+  required bool loop,
+  int Function(int max)? randomNext,
+}) {
+  if (queueLength <= 0) return -1;
+  if (queueLength == 1) return loop || shuffle ? 0 : -1;
+
+  if (shuffle) {
+    return nextQueueIndex(
+      currentIndex: currentIndex,
+      queueLength: queueLength,
+      shuffle: true,
+      loop: loop,
+      randomNext: randomNext,
+    );
+  }
+
+  final prev = currentIndex - 1;
+  if (prev >= 0) return prev;
+  return loop ? queueLength - 1 : -1;
+}
+
 class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   final AudioPlayer _player = AudioPlayer();
   final List<MediaItem> _queue = [];
   int _currentIndex = 0;
+
   /// 单调世代：setPlaylist/切歌时递增，取消过期的异步解析/播放
   int _playGeneration = 0;
   bool _userWantsPlay = true;
   bool _handlingCompleted = false;
+
   /// >0 时忽略 completed / currentIndex 自动推进（换源、点选切歌期间）
   int _suppressAutoAdvance = 0;
   String? _activeItemId;
 
   // 注入 URL 解析器
   UrlResolver? urlResolver;
-  
+
   // 注入错误回调
   void Function(String message)? onError;
 
@@ -81,7 +134,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
   void _init() {
     _player.playbackEventStream.listen(_broadcastState);
-    
+
     // 监听播放完成：防重入；换源/点选切歌时抑制，避免“点 A 却播 A+1”
     _player.processingStateStream.listen((state) {
       if (state != ProcessingState.completed) return;
@@ -208,23 +261,18 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     await _haltCurrentPlayback();
     _userWantsPlay = true;
 
-    if (_player.shuffleModeEnabled) {
-      await _player.seekToNext();
-      final idx = _player.currentIndex ?? _currentIndex;
-      await skipToQueueItem(idx);
-      return;
-    }
-
-    int nextIndex = _currentIndex + 1;
-    if (nextIndex >= _queue.length) {
-      if (playbackState.value.repeatMode == AudioServiceRepeatMode.all ||
-          playbackState.value.repeatMode == AudioServiceRepeatMode.one) {
-        nextIndex = 0;
-      } else {
-        return;
-      }
-    }
-
+    final shuffle = _player.shuffleModeEnabled ||
+        playbackState.value.shuffleMode == AudioServiceShuffleMode.all;
+    final loop = shuffle ||
+        playbackState.value.repeatMode == AudioServiceRepeatMode.all ||
+        playbackState.value.repeatMode == AudioServiceRepeatMode.one;
+    final nextIndex = nextQueueIndex(
+      currentIndex: _currentIndex,
+      queueLength: _queue.length,
+      shuffle: shuffle,
+      loop: loop,
+    );
+    if (nextIndex < 0) return;
     await skipToQueueItem(nextIndex);
   }
 
@@ -235,23 +283,18 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     await _haltCurrentPlayback();
     _userWantsPlay = true;
 
-    if (_player.shuffleModeEnabled) {
-      await _player.seekToPrevious();
-      final idx = _player.currentIndex ?? _currentIndex;
-      await skipToQueueItem(idx);
-      return;
-    }
-
-    int prevIndex = _currentIndex - 1;
-    if (prevIndex < 0) {
-      if (playbackState.value.repeatMode == AudioServiceRepeatMode.all ||
-          playbackState.value.repeatMode == AudioServiceRepeatMode.one) {
-        prevIndex = _queue.length - 1;
-      } else {
-        return;
-      }
-    }
-
+    final shuffle = _player.shuffleModeEnabled ||
+        playbackState.value.shuffleMode == AudioServiceShuffleMode.all;
+    final loop = shuffle ||
+        playbackState.value.repeatMode == AudioServiceRepeatMode.all ||
+        playbackState.value.repeatMode == AudioServiceRepeatMode.one;
+    final prevIndex = previousQueueIndex(
+      currentIndex: _currentIndex,
+      queueLength: _queue.length,
+      shuffle: shuffle,
+      loop: loop,
+    );
+    if (prevIndex < 0) return;
     await skipToQueueItem(prevIndex);
   }
 
@@ -379,10 +422,8 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
           if (_player.playing) {
             await _player.pause();
           }
-          debugPrint(
-              '[AudioHandler] 无法获取播放链接: ${item.title} id=${item.id}');
-          onError?.call(
-              '无法解析歌曲 "${item.title}" 的播放地址（源无效地址或本地缓存失败，已尝试降级音质）');
+          debugPrint('[AudioHandler] 无法获取播放链接: ${item.title} id=${item.id}');
+          onError?.call('无法解析歌曲 "${item.title}" 的播放地址（源无效地址或本地缓存失败，已尝试降级音质）');
           if (_queue.length > 1 && !_isStale(gen) && _currentIndex == index) {
             await Future.delayed(const Duration(seconds: 5));
             if (!_isStale(gen) && _currentIndex == index) {
@@ -428,7 +469,8 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   }
 
   // 设置播放列表并开始播放
-  Future<void> setPlaylist(List<MediaItem> items, {int initialIndex = 0}) async {
+  Future<void> setPlaylist(List<MediaItem> items,
+      {int initialIndex = 0}) async {
     _bumpGeneration();
     _userWantsPlay = true;
     _queue
@@ -501,7 +543,8 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     if (_player.audioSource is ConcatenatingAudioSource) {
       final source = _player.audioSource as ConcatenatingAudioSource;
       final url = mediaItem.extras?['url']?.toString() ?? '';
-      await source.add(audioSourceFor(url.startsWith('data:') ? '' : url, tag: mediaItem));
+      await source.add(
+          audioSourceFor(url.startsWith('data:') ? '' : url, tag: mediaItem));
     }
   }
 
@@ -511,7 +554,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     if (index != -1) {
       _queue.removeAt(index);
       queue.add(List.from(_queue));
-      
+
       if (_player.audioSource is ConcatenatingAudioSource) {
         final source = _player.audioSource as ConcatenatingAudioSource;
         if (index < source.length) {
