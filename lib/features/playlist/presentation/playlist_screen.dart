@@ -93,8 +93,8 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
       color: Theme.of(context).scaffoldBackgroundColor,
       child: Scaffold(
         backgroundColor: Colors.transparent,
-        // 让键盘用 viewInsets 顶起内容，搜索框不因重建/清零 insets 而失焦
-        resizeToAvoidBottomInset: true,
+        // 主壳已固定预留底部导航和迷你播放器；键盘直接覆盖它们，避免重复预留空白。
+        resizeToAvoidBottomInset: false,
         appBar: AppBar(
           backgroundColor: Theme.of(context).scaffoldBackgroundColor,
           surfaceTintColor: Colors.transparent,
