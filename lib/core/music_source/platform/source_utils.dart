@@ -29,14 +29,29 @@ int parseDuration(String? input) {
 
 String aes128EcbHex(String data, String keyStr) {
   final key = encrypt.Key.fromUtf8(keyStr);
-  final encrypter = encrypt.Encrypter(encrypt.AES(key, mode: encrypt.AESMode.ecb));
+  final encrypter =
+      encrypt.Encrypter(encrypt.AES(key, mode: encrypt.AESMode.ecb));
   final encrypted = encrypter.encrypt(data);
-  return encrypted.bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join('').toUpperCase();
+  return encrypted.bytes
+      .map((b) => b.toRadixString(16).padLeft(2, '0'))
+      .join('')
+      .toUpperCase();
 }
 
-String formatSingerName(List<dynamic> singers, {String nameKey = 'name', String join = '、'}) {
+String formatSingerName(List<dynamic> singers,
+    {String nameKey = 'name', String join = '、'}) {
   if (singers.isEmpty) return '';
-  return singers.map((s) => (s is Map ? s[nameKey] : s?.toString()) ?? '').join(join);
+  return singers
+      .map((s) => (s is Map ? s[nameKey] : s?.toString()) ?? '')
+      .join(join);
+}
+
+String normalizeNeteaseArtwork(dynamic value) {
+  final artwork = value?.toString().trim() ?? '';
+  if (artwork.startsWith('http://')) {
+    return 'https://${artwork.substring(7)}';
+  }
+  return artwork;
 }
 
 const _kwKeyBytes = [121, 101, 101, 108, 105, 111, 110];
@@ -66,8 +81,10 @@ String? kwDecodeResponse(List<int> data, bool isGetLyricx) {
   final separator = [13, 10, 13, 10];
   var sepIndex = -1;
   for (var i = 0; i < data.length - 3; i++) {
-    if (data[i] == separator[0] && data[i + 1] == separator[1] &&
-        data[i + 2] == separator[2] && data[i + 3] == separator[3]) {
+    if (data[i] == separator[0] &&
+        data[i + 1] == separator[1] &&
+        data[i + 2] == separator[2] &&
+        data[i + 3] == separator[3]) {
       sepIndex = i;
       break;
     }

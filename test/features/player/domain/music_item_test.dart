@@ -56,6 +56,19 @@ void main() {
       expect(copied.source, 'test');
     });
 
+    test('normalizes persisted netease artwork to HTTPS', () {
+      final music = MusicItem.fromJson({
+        'id': '1',
+        'name': 'Test Song',
+        'singer': 'Test Artist',
+        'source': 'wy',
+        'platform': 'wy',
+        'artwork': 'http://p1.music.126.net/artwork.jpg',
+      });
+
+      expect(music.artwork, 'https://p1.music.126.net/artwork.jpg');
+    });
+
     test('should be equal based on id', () {
       final music1 = MusicItem(
         id: '1',

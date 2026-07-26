@@ -94,21 +94,29 @@ class MusicItem {
   }
 
   factory MusicItem.fromJson(Map<String, dynamic> json) {
+    final source = json['source'] ?? '';
+    final platform = json['platform'] ?? 'kw';
+    final artwork = json['artwork']?.toString();
     return MusicItem(
       id: json['id'] ?? '',
       name: json['name'] ?? '',
       singer: json['singer'] ?? '',
       album: json['album'] ?? '',
       duration: Duration(seconds: json['duration'] ?? 0),
-      source: json['source'] ?? '',
-      platform: json['platform'] ?? 'kw',
-      artwork: json['artwork'],
+      source: source,
+      platform: platform,
+      artwork: (source == 'wy' || platform == 'wy') &&
+              artwork != null &&
+              artwork.startsWith('http://')
+          ? 'https://${artwork.substring(7)}'
+          : artwork,
       url: json['url'],
       lyricsUrl: json['lyricsUrl'],
       isPlayable: json['isPlayable'] ?? true,
       songmid: json['songmid'],
       hash: json['hash'],
-      meta: json['meta'] != null ? Map<String, dynamic>.from(json['meta']) : null,
+      meta:
+          json['meta'] != null ? Map<String, dynamic>.from(json['meta']) : null,
     );
   }
 }
