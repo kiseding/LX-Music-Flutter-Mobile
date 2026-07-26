@@ -1,0 +1,62 @@
+name: Build unsigned IPA
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-ios:
+    runs-on: macos-15
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.44.7'
+          channel: stable
+          cache: true
+
+      - name: Resolve Flutter dependencies
+        run: flutter pub get
+
+      - name: Install CocoaPods dependencies
+        working-directory: ios
+        run: pod install
+
+      - name: Build unsigned iOS app
+        run: flutter build ios --release --no-codesign
+
+      - name: Package and validate unsigned IPA
+        run: |
+          set -euo pipefail
+          test -d build/ios/iphoneos/Runner.app
+          rm -rf build/ios/ipa-unsigned
+          mkdir -p build/ios/ipa-unsigned/Payload
+          ditto build/ios/iphoneos/Runner.app build/ios/ipa-unsigned/Payload/Runner.app
+          (
+            cd build/ios/ipa-unsigned
+            ditto -c -k --sequesterRsrc --keepParent Payload ../LX-Music-unsigned.ipa
+          )
+          unzip -t build/ios/LX-Music-unsigned.ipa
+          unzip -Z1 build/ios/LX-Music-unsigned.ipa | grep -qx 'Payload/Runner.app/Info.plist'
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: LX-Music-unsigned-IPA
+          path: build/ios/LX-Music-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 7
