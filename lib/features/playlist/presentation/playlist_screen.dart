@@ -892,9 +892,10 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
               content: ConstrainedBox(
                 constraints: BoxConstraints(
                   maxWidth: 440,
-                  maxHeight: MediaQuery.sizeOf(ctx).height * .72,
+                  maxHeight: MediaQuery.sizeOf(ctx).height * .82,
                 ),
                 child: Column(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
                     Padding(
                       padding: const EdgeInsets.fromLTRB(20, 20, 12, 16),
@@ -935,7 +936,10 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
                       ),
                     ),
                     const SizedBox(height: 20),
-                    Flexible(
+                    ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxHeight: MediaQuery.sizeOf(ctx).height * .48,
+                      ),
                       child: SingleChildScrollView(
                         padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
                         child: Column(

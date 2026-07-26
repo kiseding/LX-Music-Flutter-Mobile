@@ -63,20 +63,13 @@ abstract final class AppTheme {
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: AppColors.surface2,
+        fillColor: AppColors.surface,
         hintStyle: const TextStyle(color: AppColors.textMuted),
         labelStyle: const TextStyle(color: AppColors.textSecondary),
-        floatingLabelStyle: const TextStyle(color: AppColors.amber),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(color: AppColors.border),
+          borderSide: BorderSide.none,
         ),
-        enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-            borderSide: const BorderSide(color: AppColors.border)),
-        focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-            borderSide: const BorderSide(color: AppColors.amber, width: 1.5)),
       ),
       popupMenuTheme: const PopupMenuThemeData(
         color: AppColors.surfaceDark,
@@ -177,21 +170,13 @@ abstract final class AppTheme {
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: AppColors.lightBg,
+        fillColor: AppColors.lightSurface,
         hintStyle: const TextStyle(color: AppColors.lightTextMuted),
         labelStyle: const TextStyle(color: AppColors.lightTextSecondary),
-        floatingLabelStyle: const TextStyle(color: AppColors.lightAccent),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(color: AppColors.lightBorderActive),
+          borderSide: BorderSide.none,
         ),
-        enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-            borderSide: const BorderSide(color: AppColors.lightBorderActive)),
-        focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-            borderSide:
-                const BorderSide(color: AppColors.lightAccent, width: 1.5)),
       ),
       popupMenuTheme: const PopupMenuThemeData(
         color: AppColors.lightSurface,
