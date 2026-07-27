@@ -1152,64 +1152,159 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
     WidgetRef ref,
     Playlist playlist,
   ) {
-    showModalBottomSheet(
+    final media = MediaQuery.of(context);
+    final maxH = media.size.height * 0.56;
+    final maxW = media.size.width.clamp(280.0, 420.0);
+
+    showDialog<void>(
       context: context,
-      backgroundColor: AppColors.dialogBg(context),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (context) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 32,
-              height: 4,
-              margin: EdgeInsets.symmetric(vertical: 12),
-              decoration: BoxDecoration(
-                color: AppColors.mutedText(context),
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-            Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: Text(
-                playlist.name,
-                style: TextStyle(
-                  color: AppColors.onScaffold(context),
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
+      barrierDismissible: true,
+      builder: (dialogCtx) {
+        final on = AppColors.onScaffold(context);
+        final muted = AppColors.mutedText(context);
+        Widget action({
+          required IconData icon,
+          required String label,
+          required VoidCallback onTap,
+          Color? color,
+          bool destructive = false,
+        }) {
+          final c = color ?? (destructive ? AppColors.error : on);
+          return Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: onTap,
+              borderRadius: BorderRadius.circular(12),
+              child: Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                child: Row(
+                  children: [
+                    Icon(icon, color: c, size: 22),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        label,
+                        style: TextStyle(
+                          color: c,
+                          fontSize: 15,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
-            Divider(color: AppColors.cardBorder(context), height: 1),
-            if (playlist.id != 'recent')
-              ListTile(
-                leading: Icon(Icons.edit, color: AppColors.onScaffold(context)),
-                title: Text(
-                  '编辑歌单',
-                  style: TextStyle(color: AppColors.onScaffold(context)),
-                ),
-                onTap: () {
-                  Navigator.pop(context);
-                  _showEditDialog(context, ref, playlist);
-                },
+          );
+        }
+
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding:
+              const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxWidth: maxW, maxHeight: maxH),
+            child: Material(
+              color: AppColors.dialogBg(context),
+              elevation: 8,
+              shadowColor: Colors.black38,
+              borderRadius: BorderRadius.circular(20),
+              clipBehavior: Clip.antiAlias,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(18, 18, 10, 10),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            playlist.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: on,
+                              fontSize: 17,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          visualDensity: VisualDensity.compact,
+                          onPressed: () => Navigator.pop(dialogCtx),
+                          icon: Icon(Icons.close_rounded, color: muted),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Divider(height: 1, color: AppColors.cardBorder(context)),
+                  Flexible(
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (playlist.id != 'recent')
+                            action(
+                              icon: Icons.edit_outlined,
+                              label: '编辑歌单',
+                              onTap: () {
+                                Navigator.pop(dialogCtx);
+                                _showEditDialog(context, ref, playlist);
+                              },
+                            ),
+                          if (playlist.id != 'favorites' &&
+                              playlist.songs.isNotEmpty)
+                            action(
+                              icon: Icons.favorite_border_rounded,
+                              label: '全部添加到我喜欢的音乐',
+                              onTap: () {
+                                final added = ref
+                                    .read(playlistServiceProvider)
+                                    .addAllSongsToFavorites(playlist.id);
+                                ref
+                                    .read(playlistVersionProvider.notifier)
+                                    .state++;
+                                Navigator.pop(dialogCtx);
+                                if (!context.mounted) return;
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(
+                                      added == 0
+                                          ? '所有歌曲已在我喜欢的音乐中'
+                                          : '已添加 $added 首到我喜欢的音乐',
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                          if (playlist.id != 'favorites' &&
+                              playlist.id != 'recent')
+                            action(
+                              icon: Icons.delete_outline_rounded,
+                              label: '删除歌单',
+                              destructive: true,
+                              onTap: () {
+                                ref
+                                    .read(playlistServiceProvider)
+                                    .deletePlaylist(playlist.id);
+                                ref
+                                    .read(playlistVersionProvider.notifier)
+                                    .state++;
+                                Navigator.pop(dialogCtx);
+                              },
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
               ),
-            if (playlist.id != 'favorites' && playlist.id != 'recent')
-              ListTile(
-                leading: Icon(Icons.delete, color: AppColors.error),
-                title: const Text(
-                  '删除歌单',
-                  style: TextStyle(color: AppColors.error),
-                ),
-                onTap: () {
-                  ref.read(playlistServiceProvider).deletePlaylist(playlist.id);
-                  Navigator.pop(context);
-                },
-              ),
-          ],
-        ),
-      ),
+            ),
+          ),
+        );
+      },
     );
   }
 }
