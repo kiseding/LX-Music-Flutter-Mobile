@@ -28,6 +28,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   int _currentPage = 0;
   bool _seeking = false;
   double _seekValue = 0; // 0..1 only while finger is down
+  bool _wasPlayingBeforeSeek = false;
   double _dragOffset = 0;
   bool _draggingDown = false;
 
@@ -506,11 +507,18 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                 final width = constraints.maxWidth;
                 return GestureDetector(
                   behavior: HitTestBehavior.opaque,
-                  onHorizontalDragStart: (d) {
+                  onHorizontalDragStart: (d) async {
+                    final playing =
+                        ref.read(playbackStateProvider).value?.playing ?? false;
                     setState(() {
                       _seeking = true;
+                      _wasPlayingBeforeSeek = playing;
                       _seekValue = (d.localPosition.dx / width).clamp(0.0, 1.0);
                     });
+                    if (playing && audioHandler is LxAudioHandler) {
+                      await (audioHandler as LxAudioHandler)
+                          .pauseInternal(clearIntent: false);
+                    }
                   },
                   onHorizontalDragUpdate: (d) {
                     setState(() {
@@ -521,17 +529,26 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                     final target =
                         Duration(milliseconds: (_seekValue * totalMs).round());
                     setState(() => _seeking = false);
-                    await ref.read(seekProvider)(target);
+                    await ref.read(scrubSeekProvider)(
+                      target,
+                      resumeAfter: _wasPlayingBeforeSeek,
+                    );
                   },
                   onTapDown: (d) async {
+                    final playing =
+                        ref.read(playbackStateProvider).value?.playing ?? false;
                     final v = (d.localPosition.dx / width).clamp(0.0, 1.0);
                     final target =
                         Duration(milliseconds: (v * totalMs).round());
                     setState(() {
                       _seekValue = v;
                       _seeking = false;
+                      _wasPlayingBeforeSeek = playing;
                     });
-                    await ref.read(seekProvider)(target);
+                    await ref.read(scrubSeekProvider)(
+                      target,
+                      resumeAfter: playing,
+                    );
                   },
                   child: SizedBox(
                     height: 28,

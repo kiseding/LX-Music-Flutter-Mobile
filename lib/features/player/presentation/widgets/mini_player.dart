@@ -27,6 +27,7 @@ class MiniPlayer extends ConsumerStatefulWidget {
 class _MiniPlayerState extends ConsumerState<MiniPlayer> {
   bool _seeking = false;
   double _seekValue = 0;
+  bool _wasPlayingBeforeSeek = false;
 
   String _fmt(Duration d) {
     final m = d.inMinutes.remainder(60).toString().padLeft(1, '0');
@@ -129,12 +130,18 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer> {
                             behavior: HitTestBehavior.opaque,
                             onHorizontalDragStart: !canSeek
                                 ? null
-                                : (d) {
+                                : (d) async {
                                     setState(() {
                                       _seeking = true;
+                                      _wasPlayingBeforeSeek = isPlayingValue;
                                       _seekValue = (d.localPosition.dx / w)
                                           .clamp(0.0, 1.0);
                                     });
+                                    if (isPlayingValue &&
+                                        audioHandler is LxAudioHandler) {
+                                      await (audioHandler as LxAudioHandler)
+                                          .pauseInternal(clearIntent: false);
+                                    }
                                   },
                             onHorizontalDragUpdate: !canSeek
                                 ? null
@@ -151,7 +158,10 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer> {
                                         milliseconds:
                                             (_seekValue * totalMs).round());
                                     setState(() => _seeking = false);
-                                    await ref.read(seekProvider)(target);
+                                    await ref.read(scrubSeekProvider)(
+                                      target,
+                                      resumeAfter: _wasPlayingBeforeSeek,
+                                    );
                                   },
                             onTapDown: !canSeek
                                 ? null
@@ -163,8 +173,12 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer> {
                                     setState(() {
                                       _seekValue = v;
                                       _seeking = false;
+                                      _wasPlayingBeforeSeek = isPlayingValue;
                                     });
-                                    await ref.read(seekProvider)(target);
+                                    await ref.read(scrubSeekProvider)(
+                                      target,
+                                      resumeAfter: isPlayingValue,
+                                    );
                                   },
                             child: SizedBox(
                               height: 16,

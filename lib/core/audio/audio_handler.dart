@@ -171,23 +171,20 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     _player.playbackEventStream.listen(_broadcastState);
 
     // 播放完成 → 无缝连播下一首。
-    // 锁屏/后台时绝不能先 pause + playing:false：iOS 会结束后台音频会话，
-    // 导致下一曲网络解析/起播失败。伪 completed 靠 _suppressAutoAdvance 挡。
+    // 锁屏/后台时绝不能先 pause + playing:false：iOS 会结束后台音频会话。
     _player.processingStateStream.listen((state) {
       if (state != ProcessingState.completed) return;
-      _onTrackCompleted();
+      _onTrackCompleted('processingState');
     });
 
-    // 锁屏兜底：部分机型 completed 事件在挂起时丢失，用接近结尾的 position 触发
+    // 锁屏兜底：仅在「已到/超过时长」时触发，避免提前 400ms 切歌造成竞态
     _player.positionStream.listen((pos) {
       if (_handlingCompleted || _suppressAutoAdvance > 0) return;
-      if (!_userWantsPlay || !_player.playing) return;
+      if (!_userWantsPlay) return;
       final dur = _player.duration;
-      if (dur == null || dur < const Duration(seconds: 3)) return;
-      final remain = dur - pos;
-      if (remain > Duration.zero &&
-          remain <= const Duration(milliseconds: 400)) {
-        _onTrackCompleted();
+      if (dur == null || dur < const Duration(seconds: 2)) return;
+      if (pos >= dur - const Duration(milliseconds: 80)) {
+        _onTrackCompleted('position-end');
       }
     });
 
@@ -207,28 +204,36 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     });
   }
 
-  void _onTrackCompleted() {
+  void _onTrackCompleted([String reason = '']) {
     if (_handlingCompleted || _suppressAutoAdvance > 0) return;
-    if (!_userWantsPlay) return;
+    // 自动连播视为用户仍要听：拖进度 pause 不 clearIntent 时仍可连播
+    if (!_userWantsPlay && reason != 'force') return;
+    if (_queue.isEmpty) return;
     if (_queue.length <= 1 &&
         playbackState.value.repeatMode == AudioServiceRepeatMode.none &&
+        playbackState.value.repeatMode != AudioServiceRepeatMode.one &&
         !_player.shuffleModeEnabled &&
         playbackState.value.shuffleMode != AudioServiceShuffleMode.all) {
-      // 单曲且不循环：保持 completed，不连播
       return;
     }
     _handlingCompleted = true;
     final gen = _playGeneration;
     final expectedId = _activeItemId;
     final expectedIndex = _currentIndex;
+    debugPrint('[AudioHandler] track completed ($reason) idx=$expectedIndex');
     Future(() async {
       try {
         if (_isStale(gen) || _suppressAutoAdvance > 0) return;
-        if (!_userWantsPlay) return;
-        if (expectedId != null && _activeItemId != expectedId) return;
-        if (_currentIndex != expectedIndex) return;
-        // seamless：不 pause，保持 iOS 后台音频会话
+        if (expectedId != null &&
+            _activeItemId != null &&
+            _activeItemId != expectedId &&
+            _currentIndex != expectedIndex) {
+          return;
+        }
+        _userWantsPlay = true; // 自动下一首：恢复意图
         await skipToNext(seamless: true);
+      } catch (e) {
+        debugPrint('[AudioHandler] auto-next failed: $e');
       } finally {
         _handlingCompleted = false;
       }
@@ -240,8 +245,8 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     try {
       return await op();
     } finally {
-      // 延后解除，吞掉 setAudioSource 尾随的 completed/index 事件
-      Future<void>.delayed(const Duration(milliseconds: 120), () {
+      // 延后解除：setAudioSource 后 completed 尾随更长，锁屏下更明显
+      Future<void>.delayed(const Duration(milliseconds: 450), () {
         if (_suppressAutoAdvance > 0) _suppressAutoAdvance--;
       });
     }
@@ -293,7 +298,12 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
   @override
   Future<void> pause() async {
-    _userWantsPlay = false;
+    await pauseInternal(clearIntent: true);
+  }
+
+  /// [clearIntent]=false：拖进度条暂停，不取消「还要继续听」意图（自动下一首仍有效）
+  Future<void> pauseInternal({bool clearIntent = true}) async {
+    if (clearIntent) _userWantsPlay = false;
     try {
       await _player.pause();
     } catch (e) {
@@ -308,27 +318,38 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     var target = position;
     if (target.isNegative) target = Duration.zero;
     if (dur != null && dur > Duration.zero && target > dur) {
-      // 留 80ms 余量，避免 seek 到末尾立刻 completed
       target = dur - const Duration(milliseconds: 80);
       if (target.isNegative) target = Duration.zero;
     }
 
-    // just_audio：loading 状态下 seek 会直接 return 且不生效。
-    // 等 ready/buffering/completed 再 seek，否则 UI 已跳、音频还在原地。
-    for (var i = 0; i < 40; i++) {
+    // just_audio：loading 时 seek 会被直接忽略
+    for (var i = 0; i < 50; i++) {
       final ps = _player.processingState;
-      if (ps != ProcessingState.loading && ps != ProcessingState.idle) break;
-      await Future<void>.delayed(const Duration(milliseconds: 50));
+      if (ps == ProcessingState.ready ||
+          ps == ProcessingState.buffering ||
+          ps == ProcessingState.completed) {
+        break;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 40));
     }
-    if (_player.processingState == ProcessingState.loading ||
-        _player.processingState == ProcessingState.idle) {
-      debugPrint(
-          '[AudioHandler] seek skipped: still ${_player.processingState}');
+    final ps = _player.processingState;
+    if (ps == ProcessingState.loading || ps == ProcessingState.idle) {
+      debugPrint('[AudioHandler] seek skipped: still $ps');
       return;
     }
 
+    // completed 后需先回到可播状态再 seek
+    if (ps == ProcessingState.completed) {
+      try {
+        await _player.seek(target);
+        _broadcastState(_player.playbackEvent);
+        return;
+      } catch (e) {
+        debugPrint('[AudioHandler] seek from completed: $e');
+      }
+    }
+
     await _player.seek(target);
-    // 强制同步系统/UI 进度到引擎乐观位置
     _broadcastState(_player.playbackEvent);
   }
 
@@ -571,8 +592,17 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
           initialPosition: Duration.zero,
         );
         if (_isStale(gen)) return;
-        if (_userWantsPlay) {
-          await _player.play();
+        // seamless 自动下一首必须 play，即使 completed 后 playing 已是 false
+        if (_userWantsPlay || seamless) {
+          _userWantsPlay = true;
+          try {
+            await _player.play();
+          } catch (e) {
+            debugPrint('[AudioHandler] play after setSource failed: $e');
+            // 再试一次：部分机型 setAudioSource 后需短暂等待
+            await Future<void>.delayed(const Duration(milliseconds: 80));
+            if (!_isStale(gen)) await _player.play();
+          }
         }
         if (!_isStale(gen)) _schedulePreload();
       } catch (e) {
@@ -580,9 +610,9 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         if (!_isStale(gen) && _currentIndex == index) {
           onError?.call('播放歌曲 "${item.title}" 失败: $e');
           if (_queue.length > 1) {
-            await Future.delayed(const Duration(seconds: 5));
+            await Future.delayed(const Duration(seconds: 2));
             if (!_isStale(gen) && _currentIndex == index) {
-              await skipToNext();
+              await skipToNext(seamless: seamless);
             }
           }
         }

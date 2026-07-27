@@ -201,17 +201,60 @@ final sleepTimerEndProvider = Provider<DateTime?>((ref) {
 // 全局播放消息通知（用于展示 SnackBar）
 final playerMessageProvider = StateProvider<String?>((ref) => null);
 
-/// 统一 seek：先乐观更新 UI/歌词位置，再等引擎 seek 完成，最后以引擎真实 position 为准。
+/// 拖动进度松手：seek → 等 500ms → 若 resumeAfter 则 play。
+/// 进度条/歌词在 pause 后 position 冻结，与音频一致。
+final scrubSeekProvider =
+    Provider<Future<void> Function(Duration, {required bool resumeAfter})>(
+        (ref) {
+  return (Duration position, {required bool resumeAfter}) async {
+    final posNotifier = ref.read(playerPositionProvider.notifier);
+    posNotifier.jumpTo(position);
+
+    if (audioHandler is LxAudioHandler) {
+      final h = audioHandler as LxAudioHandler;
+      if (h.player.playing) {
+        await h.pauseInternal(clearIntent: false);
+      }
+    }
+
+    await ref.read(playerServiceProvider).seek(position);
+
+    if (audioHandler is LxAudioHandler) {
+      posNotifier.jumpTo((audioHandler as LxAudioHandler).player.position);
+    }
+
+    if (resumeAfter) {
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      if (audioHandler is LxAudioHandler) {
+        final h = audioHandler as LxAudioHandler;
+        posNotifier.jumpTo(h.player.position);
+        await h.play();
+      }
+    }
+  };
+});
+
+/// 点击歌词行等：不强制 pause 流程时的轻量 seek（仍统一时钟）
 final seekProvider = Provider<Future<void> Function(Duration)>((ref) {
   return (Duration position) async {
     final posNotifier = ref.read(playerPositionProvider.notifier);
-    // 1) 乐观：进度条+歌词立刻对齐用户手指
     posNotifier.jumpTo(position);
-    // 2) 引擎 seek（loading 时会等待，避免空操作）
+    final wasPlaying = audioHandler is LxAudioHandler
+        ? (audioHandler as LxAudioHandler).player.playing
+        : false;
+    if (wasPlaying && audioHandler is LxAudioHandler) {
+      await (audioHandler as LxAudioHandler).pauseInternal(clearIntent: false);
+    }
     await ref.read(playerServiceProvider).seek(position);
-    // 3) 以引擎为准校正（成功时 ≈ position；失败/忽略时回到真实播放点）
     if (audioHandler is LxAudioHandler) {
       posNotifier.jumpTo((audioHandler as LxAudioHandler).player.position);
+    }
+    if (wasPlaying) {
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      if (audioHandler is LxAudioHandler) {
+        posNotifier.jumpTo((audioHandler as LxAudioHandler).player.position);
+        await (audioHandler as LxAudioHandler).play();
+      }
     }
   };
 });
