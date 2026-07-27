@@ -27,9 +27,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   late PageController _pageController;
   int _currentPage = 0;
   bool _seeking = false;
-  double _seekValue = 0; // 0..1 while dragging / until position catches up
-  bool _wasPlayingBeforeSeek = false;
-  Duration? _pendingSeek;
+  double _seekValue = 0; // 0..1 only while finger is down
   double _dragOffset = 0;
   bool _draggingDown = false;
 
@@ -478,20 +476,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       PlayerService playerService, Duration position, Duration duration) {
     final totalMs =
         duration.inMilliseconds > 0 ? duration.inMilliseconds.toDouble() : 1.0;
-    // 松手后 position 流可能仍滞后：用 _pendingSeek 顶住显示，避免回弹再跳
-    if (_pendingSeek != null && !_seeking) {
-      final delta =
-          (position.inMilliseconds - _pendingSeek!.inMilliseconds).abs();
-      if (delta < 800) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted && _pendingSeek != null)
-            setState(() => _pendingSeek = null);
-        });
-      }
-    }
+    // 仅拖动时用本地值；松手后立刻跟 playerPositionProvider（唯一时钟）
     final effectivePos = _seeking
         ? Duration(milliseconds: (_seekValue * totalMs).round())
-        : (_pendingSeek ?? position);
+        : position;
     final ratio = (effectivePos.inMilliseconds / totalMs).clamp(0.0, 1.0);
     final displayPos = effectivePos;
 
@@ -521,7 +509,6 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                   onHorizontalDragStart: (d) {
                     setState(() {
                       _seeking = true;
-                      _pendingSeek = null;
                       _seekValue = (d.localPosition.dx / width).clamp(0.0, 1.0);
                     });
                   },
@@ -533,13 +520,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                   onHorizontalDragEnd: (_) async {
                     final target =
                         Duration(milliseconds: (_seekValue * totalMs).round());
-                    setState(() {
-                      _pendingSeek = target;
-                      _seeking = false;
-                    });
-                    // 拖动中不 pause：避免 seek 后 play 竞态导致真实进度落后
+                    setState(() => _seeking = false);
                     await ref.read(seekProvider)(target);
-                    if (mounted) setState(() => _pendingSeek = null);
                   },
                   onTapDown: (d) async {
                     final v = (d.localPosition.dx / width).clamp(0.0, 1.0);
@@ -547,10 +529,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                         Duration(milliseconds: (v * totalMs).round());
                     setState(() {
                       _seekValue = v;
-                      _pendingSeek = target;
+                      _seeking = false;
                     });
                     await ref.read(seekProvider)(target);
-                    if (mounted) setState(() => _pendingSeek = null);
                   },
                   child: SizedBox(
                     height: 28,

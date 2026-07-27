@@ -99,82 +99,46 @@ final playModeProvider = StateProvider<PlayMode>((ref) {
   return PlayMode.sequential;
 });
 
-/// 播放位置：positionStream 即时更新 + 短周期轮询兜底。
-/// seek 期间锁定目标，忽略滞后的旧 position，避免面板跑在真实音频前面。
+/// 播放位置唯一真相：just_audio position + seek 不连续事件。
+/// 进度条 / 时间 / 歌词全部只读这里，禁止各自维护另一套时钟。
 class PositionNotifier extends StateNotifier<Duration> {
   final AudioPlayer? _player;
   Timer? _timer;
   StreamSubscription<Duration>? _posSub;
-  Duration? _seekLockTarget;
-  DateTime? _seekLockUntil;
+  StreamSubscription<PositionDiscontinuity>? _discSub;
 
   PositionNotifier(this._player) : super(Duration.zero) {
     final player = _player;
     if (player == null) return;
     state = player.position;
-    _posSub = player
-        .createPositionStream(
-          steps: 1,
-          minPeriod: const Duration(milliseconds: 50),
-          maxPeriod: const Duration(milliseconds: 200),
-        )
-        .listen(_onPlayerPosition);
-    // 兜底：部分平台 seek 后 stream 瞬时不推
-    _timer = Timer.periodic(const Duration(milliseconds: 100), (_) {
-      _onPlayerPosition(player.position);
+
+    // 官方 positionStream（内部 createPositionStream），seek 后会跟 updatePosition
+    _posSub = player.positionStream.listen((p) {
+      if ((p - state).inMilliseconds.abs() >= 16) state = p;
     });
-  }
 
-  bool get _seekLocked {
-    final until = _seekLockUntil;
-    if (until == null || _seekLockTarget == null) return false;
-    if (DateTime.now().isAfter(until)) {
-      _seekLockTarget = null;
-      _seekLockUntil = null;
-      return false;
-    }
-    return true;
-  }
-
-  void _onPlayerPosition(Duration p) {
-    if (_seekLocked) {
-      final target = _seekLockTarget!;
-      final delta = (p - target).inMilliseconds.abs();
-      if (delta <= 400) {
-        // 已收敛到真实 seek 位置
-        _seekLockTarget = null;
-        _seekLockUntil = null;
-        state = p;
-      }
-      // 未收敛：保持显示 lock 目标，不吃旧 position
-      return;
-    }
-    if ((p - state).inMilliseconds.abs() >= 20) {
+    // seek 不连续：立刻跳到目标，歌词/进度同步
+    _discSub = player.positionDiscontinuityStream.listen((d) {
+      final p = player.position;
       state = p;
-    }
+    });
+
+    // 兜底轮询（部分 iOS 场景 stream 间隙）
+    _timer = Timer.periodic(const Duration(milliseconds: 100), (_) {
+      final p = player.position;
+      if ((p - state).inMilliseconds.abs() >= 30) state = p;
+    });
   }
 
   void jumpTo(Duration position) {
     state = position;
   }
 
-  /// seek 开始：面板钉在 target，直到播放器 position 跟上或超时。
-  void beginSeek(Duration target) {
-    _seekLockTarget = target;
-    _seekLockUntil = DateTime.now().add(const Duration(seconds: 2));
-    state = target;
-  }
-
-  void endSeek(Duration confirmed) {
-    _seekLockTarget = null;
-    _seekLockUntil = null;
-    state = confirmed;
-  }
-
   @override
   void dispose() {
     _timer?.cancel();
     _posSub?.cancel();
+    _discSub?.cancel();
     super.dispose();
   }
 }
@@ -237,25 +201,17 @@ final sleepTimerEndProvider = Provider<DateTime?>((ref) {
 // 全局播放消息通知（用于展示 SnackBar）
 final playerMessageProvider = StateProvider<String?>((ref) => null);
 
-/// 统一 seek：锁定 UI 到目标 → 播放器 seek → 用真实 position 解锁。
+/// 统一 seek：先乐观更新 UI/歌词位置，再等引擎 seek 完成，最后以引擎真实 position 为准。
 final seekProvider = Provider<Future<void> Function(Duration)>((ref) {
   return (Duration position) async {
     final posNotifier = ref.read(playerPositionProvider.notifier);
-    posNotifier.beginSeek(position);
-    try {
-      await ref.read(playerServiceProvider).seek(position);
-    } finally {
-      if (audioHandler is LxAudioHandler) {
-        final real = (audioHandler as LxAudioHandler).player.position;
-        // 若引擎仍严重滞后，保持 lock 目标，由 PositionNotifier 继续等收敛
-        if ((real - position).inMilliseconds.abs() <= 500) {
-          posNotifier.endSeek(real);
-        } else {
-          posNotifier.beginSeek(position);
-        }
-      } else {
-        posNotifier.endSeek(position);
-      }
+    // 1) 乐观：进度条+歌词立刻对齐用户手指
+    posNotifier.jumpTo(position);
+    // 2) 引擎 seek（loading 时会等待，避免空操作）
+    await ref.read(playerServiceProvider).seek(position);
+    // 3) 以引擎为准校正（成功时 ≈ position；失败/忽略时回到真实播放点）
+    if (audioHandler is LxAudioHandler) {
+      posNotifier.jumpTo((audioHandler as LxAudioHandler).player.position);
     }
   };
 });

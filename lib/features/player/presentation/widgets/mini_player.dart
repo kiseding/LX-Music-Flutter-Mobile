@@ -27,8 +27,6 @@ class MiniPlayer extends ConsumerStatefulWidget {
 class _MiniPlayerState extends ConsumerState<MiniPlayer> {
   bool _seeking = false;
   double _seekValue = 0;
-  bool _wasPlaying = false;
-  Duration? _pendingSeek;
 
   String _fmt(Duration d) {
     final m = d.inMinutes.remainder(60).toString().padLeft(1, '0');
@@ -54,20 +52,10 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer> {
     final durationValue = duration.value ?? Duration.zero;
     final isPlayingValue = isPlaying.value ?? false;
     final totalMs = durationValue.inMilliseconds.toDouble();
-    if (_pendingSeek != null && !_seeking && totalMs > 0) {
-      final delta =
-          (position.inMilliseconds - _pendingSeek!.inMilliseconds).abs();
-      if (delta < 800) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted && _pendingSeek != null)
-            setState(() => _pendingSeek = null);
-        });
-      }
-    }
     final effectivePos = _seeking
         ? Duration(
             milliseconds: (_seekValue * (totalMs > 0 ? totalMs : 0)).round())
-        : (_pendingSeek ?? position);
+        : position;
     final progress = totalMs > 0
         ? (effectivePos.inMilliseconds / totalMs).clamp(0.0, 1.0)
         : 0.0;
@@ -144,7 +132,6 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer> {
                                 : (d) {
                                     setState(() {
                                       _seeking = true;
-                                      _pendingSeek = null;
                                       _seekValue = (d.localPosition.dx / w)
                                           .clamp(0.0, 1.0);
                                     });
@@ -163,14 +150,8 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer> {
                                     final target = Duration(
                                         milliseconds:
                                             (_seekValue * totalMs).round());
-                                    setState(() {
-                                      _pendingSeek = target;
-                                      _seeking = false;
-                                    });
+                                    setState(() => _seeking = false);
                                     await ref.read(seekProvider)(target);
-                                    if (mounted) {
-                                      setState(() => _pendingSeek = null);
-                                    }
                                   },
                             onTapDown: !canSeek
                                 ? null
@@ -181,12 +162,9 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer> {
                                         milliseconds: (v * totalMs).round());
                                     setState(() {
                                       _seekValue = v;
-                                      _pendingSeek = target;
+                                      _seeking = false;
                                     });
                                     await ref.read(seekProvider)(target);
-                                    if (mounted) {
-                                      setState(() => _pendingSeek = null);
-                                    }
                                   },
                             child: SizedBox(
                               height: 16,
