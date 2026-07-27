@@ -518,16 +518,12 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                 final width = constraints.maxWidth;
                 return GestureDetector(
                   behavior: HitTestBehavior.opaque,
-                  onHorizontalDragStart: (d) async {
-                    final playing =
-                        ref.read(playbackStateProvider).value?.playing ?? false;
+                  onHorizontalDragStart: (d) {
                     setState(() {
                       _seeking = true;
                       _pendingSeek = null;
-                      _wasPlayingBeforeSeek = playing;
                       _seekValue = (d.localPosition.dx / width).clamp(0.0, 1.0);
                     });
-                    if (playing) await audioHandler.pause();
                   },
                   onHorizontalDragUpdate: (d) {
                     setState(() {
@@ -541,10 +537,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                       _pendingSeek = target;
                       _seeking = false;
                     });
+                    // 拖动中不 pause：避免 seek 后 play 竞态导致真实进度落后
                     await ref.read(seekProvider)(target);
-                    if (_wasPlayingBeforeSeek) {
-                      await audioHandler.play();
-                    }
+                    if (mounted) setState(() => _pendingSeek = null);
                   },
                   onTapDown: (d) async {
                     final v = (d.localPosition.dx / width).clamp(0.0, 1.0);
@@ -555,6 +550,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                       _pendingSeek = target;
                     });
                     await ref.read(seekProvider)(target);
+                    if (mounted) setState(() => _pendingSeek = null);
                   },
                   child: SizedBox(
                     height: 28,

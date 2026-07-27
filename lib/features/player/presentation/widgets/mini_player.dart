@@ -141,16 +141,13 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer> {
                             behavior: HitTestBehavior.opaque,
                             onHorizontalDragStart: !canSeek
                                 ? null
-                                : (d) async {
-                                    final playing = isPlayingValue;
+                                : (d) {
                                     setState(() {
                                       _seeking = true;
                                       _pendingSeek = null;
-                                      _wasPlaying = playing;
                                       _seekValue = (d.localPosition.dx / w)
                                           .clamp(0.0, 1.0);
                                     });
-                                    if (playing) await audioHandler.pause();
                                   },
                             onHorizontalDragUpdate: !canSeek
                                 ? null
@@ -171,8 +168,8 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer> {
                                       _seeking = false;
                                     });
                                     await ref.read(seekProvider)(target);
-                                    if (_wasPlaying) {
-                                      await audioHandler.play();
+                                    if (mounted) {
+                                      setState(() => _pendingSeek = null);
                                     }
                                   },
                             onTapDown: !canSeek
@@ -187,6 +184,9 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer> {
                                       _pendingSeek = target;
                                     });
                                     await ref.read(seekProvider)(target);
+                                    if (mounted) {
+                                      setState(() => _pendingSeek = null);
+                                    }
                                   },
                             child: SizedBox(
                               height: 16,

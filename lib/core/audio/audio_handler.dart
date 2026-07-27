@@ -303,7 +303,24 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   }
 
   @override
-  Future<void> seek(Duration position) => _player.seek(position);
+  Future<void> seek(Duration position) async {
+    final dur = _player.duration;
+    var target = position;
+    if (target.isNegative) target = Duration.zero;
+    if (dur != null && dur > Duration.zero && target > dur) {
+      // 留 50ms 余量，避免 seek 到末尾立刻 completed
+      target = dur - const Duration(milliseconds: 50);
+      if (target.isNegative) target = Duration.zero;
+    }
+    await _player.seek(target);
+    // 部分平台 seek 返回后 position 仍短暂滞后；短等并再读
+    for (var i = 0; i < 8; i++) {
+      final p = _player.position;
+      if ((p - target).inMilliseconds.abs() <= 350) break;
+      await Future<void>.delayed(const Duration(milliseconds: 40));
+    }
+    _broadcastState(_player.playbackEvent);
+  }
 
   @override
   Future<void> stop() async {
