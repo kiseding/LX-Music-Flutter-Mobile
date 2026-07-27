@@ -261,6 +261,32 @@ class PlaylistService {
     _saveToStorage();
   }
 
+  /// 将指定歌单的全部歌曲一次性加入「我喜欢的音乐」，已存在的自动去重。
+  /// 返回本次实际新增的歌曲数量。
+  int addAllSongsToFavorites(String playlistId) {
+    final source = getPlaylist(playlistId);
+    if (source == null) throw Exception('歌单不存在');
+
+    final favorites = getPlaylist('favorites');
+    if (favorites == null) return 0;
+
+    final existingIds = favorites.songs.map((s) => s.id).toSet();
+    final toAdd = <MusicItem>[];
+    for (final song in source.songs) {
+      if (existingIds.add(song.id)) toAdd.add(song);
+    }
+
+    if (toAdd.isEmpty) return 0;
+
+    final index = _playlists.indexWhere((p) => p.id == 'favorites');
+    _playlists[index] = favorites.copyWith(
+      songs: [...favorites.songs, ...toAdd],
+      updatedAt: DateTime.now(),
+    );
+    _saveToStorage();
+    return toAdd.length;
+  }
+
   // 获取"我喜欢"歌单
   Playlist? get favorites => getPlaylist('favorites');
 

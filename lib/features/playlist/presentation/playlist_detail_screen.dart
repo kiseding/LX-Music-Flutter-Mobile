@@ -150,6 +150,20 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                       }
                     case 'edit':
                       _showEditDialog(context, ref, playlist);
+                    case 'add_all_to_favorites':
+                      final added = ref
+                          .read(playlistServiceProvider)
+                          .addAllSongsToFavorites(playlist.id);
+                      ref.read(playlistVersionProvider.notifier).state++;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            added == 0
+                                ? '所有歌曲已在我喜欢的音乐中'
+                                : '已添加 $added 首到我喜欢的音乐',
+                          ),
+                        ),
+                      );
                     case 'sort_name':
                       ref
                           .read(playlistServiceProvider)
@@ -213,6 +227,14 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                       PopupMenuItem(
                           value: 'edit',
                           child: Text('编辑信息', style: TextStyle(color: on))),
+                    if (playlist.id != 'favorites' && playlist.songs.isNotEmpty)
+                      PopupMenuItem(
+                        value: 'add_all_to_favorites',
+                        child: Text(
+                          '全部添加到我喜欢的音乐',
+                          style: TextStyle(color: on),
+                        ),
+                      ),
                     PopupMenuItem(
                         value: 'reorder',
                         child: Text('手动排序', style: TextStyle(color: on))),
