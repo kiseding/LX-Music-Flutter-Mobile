@@ -163,7 +163,7 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer> {
                                       resumeAfter: _wasPlayingBeforeSeek,
                                     );
                                   },
-                            onTapDown: !canSeek
+                            onTapUp: !canSeek
                                 ? null
                                 : (d) async {
                                     final v = (d.localPosition.dx / w)

@@ -534,7 +534,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                       resumeAfter: _wasPlayingBeforeSeek,
                     );
                   },
-                  onTapDown: (d) async {
+                  onTapUp: (d) async {
                     final playing =
                         ref.read(playbackStateProvider).value?.playing ?? false;
                     final v = (d.localPosition.dx / width).clamp(0.0, 1.0);

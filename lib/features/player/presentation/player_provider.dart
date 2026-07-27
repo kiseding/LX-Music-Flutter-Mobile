@@ -208,7 +208,6 @@ final scrubSeekProvider =
         (ref) {
   return (Duration position, {required bool resumeAfter}) async {
     final posNotifier = ref.read(playerPositionProvider.notifier);
-    posNotifier.jumpTo(position);
 
     if (audioHandler is LxAudioHandler) {
       final h = audioHandler as LxAudioHandler;
