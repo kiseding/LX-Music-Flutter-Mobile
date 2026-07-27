@@ -20,8 +20,7 @@ class SettingsScreen extends ConsumerWidget {
     final themeMode = ref.watch(themeModeProvider);
     final audioQuality = ref.watch(audioQualityProvider);
 
-    final isDark =
-        themeMode == ThemeMode.dark ||
+    final isDark = themeMode == ThemeMode.dark ||
         (themeMode == ThemeMode.system &&
             MediaQuery.platformBrightnessOf(context) == Brightness.dark);
 
@@ -72,12 +71,9 @@ class SettingsScreen extends ConsumerWidget {
                         .setThemeMode(ThemeMode.system);
                   } else {
                     // 退出跟随时，保持当前实际明暗
-                    final darkNow =
-                        MediaQuery.platformBrightnessOf(context) ==
+                    final darkNow = MediaQuery.platformBrightnessOf(context) ==
                         Brightness.dark;
-                    ref
-                        .read(themeModeProvider.notifier)
-                        .setThemeMode(
+                    ref.read(themeModeProvider.notifier).setThemeMode(
                           darkNow ? ThemeMode.dark : ThemeMode.light,
                         );
                   }
@@ -149,7 +145,7 @@ class SettingsScreen extends ConsumerWidget {
                 context,
                 ref,
                 '云端账号 / 歌单',
-                'Workers 登录、导入歌单',
+                'Workers 登录、同步云端歌单',
                 () => context.push('/sync'),
               ),
             ]),

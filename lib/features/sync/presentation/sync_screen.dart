@@ -17,17 +17,14 @@ class SyncScreen extends ConsumerStatefulWidget {
 class _SyncScreenState extends ConsumerState<SyncScreen> {
   final _userCtrl = TextEditingController();
   final _passCtrl = TextEditingController();
-  final _importCtrl = TextEditingController();
   bool _isLoginMode = true;
   bool _busy = false;
   String? _message;
-  String _importPlatform = 'tx';
 
   @override
   void dispose() {
     _userCtrl.dispose();
     _passCtrl.dispose();
-    _importCtrl.dispose();
     super.dispose();
   }
 
@@ -90,7 +87,7 @@ class _SyncScreenState extends ConsumerState<SyncScreen> {
               subtitle: Text(
                 session.loggedIn
                     ? '角色：${session.role ?? 'user'}'
-                    : '登录后可同步歌单、导入歌单',
+                    : '登录后可同步云端歌单',
                 style: TextStyle(
                   color: AppColors.mutedText(context),
                   fontSize: 12,
@@ -217,73 +214,6 @@ class _SyncScreenState extends ConsumerState<SyncScreen> {
           onPressed: _busy ? null : _pullPlaylists,
           icon: Icon(Icons.cloud_download),
           label: Text(_busy ? '同步中…' : '从云端拉取歌单'),
-        ),
-        const SizedBox(height: 12),
-        _card(
-          child: Padding(
-            padding: EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  '导入歌单（网易/QQ/酷我链接或 ID）',
-                  style: TextStyle(
-                    color: AppColors.onScaffold(context),
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                DropdownButtonFormField<String>(
-                  value: _importPlatform,
-                  dropdownColor: AppColors.dialogBg(context),
-                  decoration: InputDecoration(
-                    labelText: '平台（纯数字 ID 时需要）',
-                    labelStyle: TextStyle(color: AppColors.mutedText(context)),
-                  ),
-                  items: [
-                    DropdownMenuItem(
-                      value: 'tx',
-                      child: Text(
-                        'QQ 音乐',
-                        style: TextStyle(color: AppColors.onScaffold(context)),
-                      ),
-                    ),
-                    DropdownMenuItem(
-                      value: 'kw',
-                      child: Text(
-                        '酷我',
-                        style: TextStyle(color: AppColors.onScaffold(context)),
-                      ),
-                    ),
-                    DropdownMenuItem(
-                      value: 'wy',
-                      child: Text(
-                        '网易云',
-                        style: TextStyle(color: AppColors.onScaffold(context)),
-                      ),
-                    ),
-                  ],
-                  onChanged: (v) => setState(() => _importPlatform = v ?? 'tx'),
-                ),
-                TextField(
-                  controller: _importCtrl,
-                  style: TextStyle(color: AppColors.onScaffold(context)),
-                  decoration: InputDecoration(
-                    hintText: '粘贴歌单链接或 ID',
-                    hintStyle: TextStyle(color: AppColors.mutedText(context)),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                OutlinedButton(
-                  onPressed: _busy ? null : _importPlaylist,
-                  child: Text(
-                    '预览并导入',
-                    style: TextStyle(color: AppColors.accentOf(context)),
-                  ),
-                ),
-              ],
-            ),
-          ),
         ),
         const SizedBox(height: 12),
         TextButton(
@@ -449,78 +379,6 @@ class _SyncScreenState extends ConsumerState<SyncScreen> {
       hash: m['hash']?.toString() ?? mid,
       meta: m,
     );
-  }
-
-  Future<void> _importPlaylist() async {
-    final input = _importCtrl.text.trim();
-    if (input.isEmpty) {
-      setState(() => _message = '请输入链接或 ID');
-      return;
-    }
-    setState(() {
-      _busy = true;
-      _message = '正在预览…';
-    });
-    try {
-      final preview = await _api.importPlaylistPreview(
-        urlOrId: input,
-        platform: _importPlatform,
-      );
-      if (preview['error'] != null) {
-        setState(() => _message = preview['error'].toString());
-        return;
-      }
-      final songs = preview['songs'] as List? ?? [];
-      final name = preview['name']?.toString() ?? '导入歌单';
-      final source = preview['source']?.toString() ?? _importPlatform;
-      final listId = preview['listId']?.toString() ?? '';
-      if (!mounted) return;
-      final confirm = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          backgroundColor: AppColors.dialogBg(context),
-          title: Text(
-            name,
-            style: TextStyle(color: AppColors.onScaffold(context)),
-          ),
-          content: Text(
-            '共 ${songs.length} 首，确认导入到云端？',
-            style: TextStyle(color: AppColors.mutedText(context)),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('取消'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('导入', style: TextStyle(color: AppColors.amber)),
-            ),
-          ],
-        ),
-      );
-      if (confirm != true) {
-        setState(() => _message = '已取消');
-        return;
-      }
-      setState(() => _message = '正在保存…');
-      final saved = await _api.importPlaylistSave(
-        name: name,
-        source: source,
-        sourceId: listId,
-        songs: songs,
-      );
-      if (saved['error'] != null) {
-        setState(() => _message = saved['error'].toString());
-        return;
-      }
-      await _pullPlaylists();
-      setState(() => _message = '导入成功：$name（${songs.length} 首）');
-    } catch (e) {
-      setState(() => _message = '导入失败: $e');
-    } finally {
-      setState(() => _busy = false);
-    }
   }
 
   Future<void> _openAdminUsers() async {

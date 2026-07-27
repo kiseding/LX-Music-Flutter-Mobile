@@ -483,6 +483,24 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         baseExtras['url'] = url;
         baseExtras['requestedQuality'] =
             baseExtras['requestedQuality']?.toString() ?? preferredQuality;
+        // urlResolver 可能已把 actualQuality/remoteUrl 写到 mediaItem，合并回来
+        // 避免被队列 extras 覆盖后播放器只能显示请求音质。
+        final live = mediaItem.value;
+        if (live != null && live.id == itemId && live.extras != null) {
+          final le = live.extras!;
+          final aq = le['actualQuality']?.toString();
+          final remote = le['remoteUrl']?.toString();
+          final rq = le['requestedQuality']?.toString();
+          final plat = le['platform']?.toString();
+          if (aq != null && aq.isNotEmpty) baseExtras['actualQuality'] = aq;
+          if (remote != null && remote.isNotEmpty) {
+            baseExtras['remoteUrl'] = remote;
+          }
+          if (rq != null && rq.isNotEmpty) {
+            baseExtras['requestedQuality'] = rq;
+          }
+          if (plat != null && plat.isNotEmpty) baseExtras['platform'] = plat;
+        }
         final updatedItem = _queue[index].copyWith(extras: baseExtras);
         _queue[index] = updatedItem;
         queue.add(List.from(_queue));
@@ -633,6 +651,22 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     final enabled = shuffleMode == AudioServiceShuffleMode.all;
     playbackState.add(playbackState.value.copyWith(shuffleMode: shuffleMode));
     await _player.setShuffleModeEnabled(enabled);
+  }
+
+  /// 合并 extras 到队列中指定 id 的项（不切换当前曲）。
+  void patchQueueItemExtras(String mediaId, Map<String, dynamic> patch) {
+    final idx = _queue.indexWhere((m) => m.id == mediaId);
+    if (idx < 0) return;
+    final extras = Map<String, dynamic>.from(_queue[idx].extras ?? {});
+    extras.addAll(patch);
+    _queue[idx] = _queue[idx].copyWith(extras: extras);
+    queue.add(List.from(_queue));
+    final current = mediaItem.value;
+    if (current != null && current.id == mediaId) {
+      final curExtras = Map<String, dynamic>.from(current.extras ?? {});
+      curExtras.addAll(patch);
+      mediaItem.add(current.copyWith(extras: curExtras));
+    }
   }
 
   /// 设置页改音质后调用：清掉队列里过期的 url，并让当前曲按新音质重解析。

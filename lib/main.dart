@@ -148,18 +148,21 @@ void main() async {
             debugPrint('[urlResolver] $lastFail，尝试下一级音质');
             continue;
           }
-          // 仅当解析的是当前播放曲时写回 mediaItem，避免预加载污染当前曲 extras
+          // 写回 mediaItem + 队列同 id 项，保证 UI 读到 actualQuality
+          final qualityExtras = <String, dynamic>{
+            'url': playUrl,
+            'remoteUrl': result.url,
+            'actualQuality': result.actualQuality,
+            'requestedQuality': requested,
+            'platform': result.platform,
+          };
           final current = lxHandler.mediaItem.value;
           if (current != null && current.id == mediaId) {
             final extras = Map<String, dynamic>.from(current.extras ?? {});
-            extras['url'] = playUrl;
-            extras['remoteUrl'] = result.url;
-            extras['actualQuality'] = result.actualQuality;
-            // 记录用户偏好音质（非降级后的实际音质），供下次判断是否可复用缓存
-            extras['requestedQuality'] = requested;
-            extras['platform'] = result.platform;
+            extras.addAll(qualityExtras);
             lxHandler.mediaItem.add(current.copyWith(extras: extras));
           }
+          lxHandler.patchQueueItemExtras(mediaId, qualityExtras);
           debugPrint(
               '[urlResolver] 成功 q=${result.actualQuality} local=true ${playUrl.length > 80 ? playUrl.substring(0, 80) : playUrl}');
           return playUrl;
@@ -182,16 +185,20 @@ void main() async {
           );
           final playUrl = PlaybackCacheService.cachedPlayableUri(localPath);
           if (playUrl != null) {
+            final qualityExtras = <String, dynamic>{
+              'url': playUrl,
+              'remoteUrl': bestBelow.url,
+              'actualQuality': bestBelow.actualQuality,
+              'requestedQuality': requested,
+              'platform': bestBelow.platform,
+            };
             final current = lxHandler.mediaItem.value;
             if (current != null && current.id == mediaId) {
               final extras = Map<String, dynamic>.from(current.extras ?? {});
-              extras['url'] = playUrl;
-              extras['remoteUrl'] = bestBelow.url;
-              extras['actualQuality'] = bestBelow.actualQuality;
-              extras['requestedQuality'] = requested;
-              extras['platform'] = bestBelow.platform;
+              extras.addAll(qualityExtras);
               lxHandler.mediaItem.add(current.copyWith(extras: extras));
             }
+            lxHandler.patchQueueItemExtras(mediaId, qualityExtras);
             debugPrint('[urlResolver] 使用偏低结果 q=${bestBelow.actualQuality}');
             return playUrl;
           }

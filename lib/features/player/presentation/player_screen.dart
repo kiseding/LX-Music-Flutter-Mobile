@@ -193,14 +193,23 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     final media = ref.watch(currentMediaItemProvider).value;
     final extras = media?.extras ?? music.toJson();
     final platform = (extras['platform'] ?? music.platform).toString();
-    final actual =
-        (extras['actualQuality'] ?? extras['requestedQuality'] ?? '320k')
-            .toString();
+    // 只展示实际播放音质，不用 requestedQuality 冒充
+    final actualRaw = extras['actualQuality']?.toString();
+    final remote = extras['remoteUrl']?.toString();
+    final actual = (actualRaw != null && actualRaw.isNotEmpty)
+        ? actualRaw
+        : (remote != null && remote.isNotEmpty
+            ? correctQualityFromUrl(
+                remote,
+                extras['requestedQuality']?.toString() ?? '320k',
+              )
+            : null);
+    final qualityText = actual != null ? qualityLabel(actual) : '解析中…';
     // 纯透明底，整体下移 10px
     return Padding(
       padding: EdgeInsets.only(top: 14, bottom: 4),
       child: Text(
-        '${platformLabel(platform)} · ${qualityLabel(actual)}',
+        '${platformLabel(platform)} · $qualityText',
         textAlign: TextAlign.center,
         style: TextStyle(
           color: AppColors.mutedText(context),
