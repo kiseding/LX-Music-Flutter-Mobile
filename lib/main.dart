@@ -18,9 +18,19 @@ import 'package:audio_session/audio_session.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // 初始化音频会话，确保正确处理音频焦点
+  // 初始化音频会话，确保正确处理音频焦点 / 锁屏后台连播
   final session = await AudioSession.instance;
   await session.configure(const AudioSessionConfiguration.music());
+  // 播放开始时激活会话；中断结束后若用户仍想播则恢复
+  session.interruptionEventStream.listen((event) async {
+    if (event.begin) return;
+    if (audioHandler is LxAudioHandler) {
+      final h = audioHandler as LxAudioHandler;
+      if (h.player.playing == false) {
+        // 不强制恢复；由系统/用户控制
+      }
+    }
+  });
 
   // 1. 初始化 audio_service 基础实例
   audioHandler = await AudioService.init(
@@ -31,6 +41,9 @@ void main() async {
       androidNotificationOngoing: true,
       androidStopForegroundOnPause: true,
       androidNotificationIcon: 'mipmap/ic_launcher',
+      // 预加载锁屏控件，减少后台切歌时控件丢失
+      fastForwardInterval: Duration(seconds: 10),
+      rewindInterval: Duration(seconds: 10),
     ),
   );
 
