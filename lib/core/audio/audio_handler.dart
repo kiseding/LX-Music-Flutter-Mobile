@@ -358,6 +358,34 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     _broadcastState(_player.playbackEvent);
   }
 
+  /// 以屏幕显示时间为准，在 [budget] 内把引擎 position 拉到目标附近。
+  /// 返回引擎最终确认的位置（可能仍略有偏差）。
+  Future<Duration> seekToDisplay(
+    Duration displayPosition, {
+    Duration budget = const Duration(milliseconds: 500),
+    Duration tolerance = const Duration(milliseconds: 120),
+  }) async {
+    final deadline = DateTime.now().add(budget);
+    var target = displayPosition;
+    if (target.isNegative) target = Duration.zero;
+
+    await seek(target);
+
+    while (DateTime.now().isBefore(deadline)) {
+      final p = _player.position;
+      if ((p - target).inMilliseconds.abs() <= tolerance.inMilliseconds) {
+        _broadcastState(_player.playbackEvent);
+        return p;
+      }
+      // 引擎还没跟上屏幕：再 seek 一次拉回显示时间
+      await seek(target);
+      await Future<void>.delayed(const Duration(milliseconds: 25));
+    }
+
+    _broadcastState(_player.playbackEvent);
+    return _player.position;
+  }
+
   @override
   Future<void> stop() async {
     _userWantsPlay = false;

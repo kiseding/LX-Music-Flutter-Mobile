@@ -18,15 +18,37 @@ void main() {
     expect(handler, isNot(contains('await _player.play()')));
   });
 
-  test('scrub freezes display and resumes without artificial delay', () {
+  test('handler can pull engine position to display time within 500ms', () {
+    final handler = File(
+      'lib/core/audio/audio_handler.dart',
+    ).readAsStringSync();
+    expect(handler, contains('Future<Duration> seekToDisplay('));
+    expect(handler, contains('milliseconds: 500'));
+    expect(handler, contains('inMilliseconds.abs()'));
+  });
+
+  test('scrub treats screen time as authority and aligns engine within budget',
+      () {
     final provider = File(
       'lib/features/player/presentation/player_provider.dart',
     ).readAsStringSync();
-    expect(provider, contains('void freeze()'));
-    expect(provider, contains('void unfreeze('));
-    expect(provider, contains('beginScrubProvider'));
-    expect(provider, contains('finishScrubProvider'));
-    expect(provider, isNot(contains('milliseconds: 500')));
+    final scrub = provider.substring(
+      provider.indexOf('Future<void> finish('),
+      provider.indexOf('final scrubCoordinatorProvider'),
+    );
+
+    expect(scrub, contains('seekToDisplay(position'));
+    expect(scrub, contains('unfreeze(position)'));
+    // 屏幕时间先钉住，再把引擎往屏幕拉；最终仍 unfreeze 到屏幕目标
+    expect(
+      scrub.indexOf('unfreeze(position)'),
+      lessThan(scrub.indexOf('seekToDisplay(position')),
+    );
+    expect(
+      scrub.lastIndexOf('unfreeze(position)'),
+      greaterThan(scrub.indexOf('seekToDisplay(position')),
+    );
+    expect(scrub, contains('await h.play()'));
   });
 
   test('full and mini player use the shared scrub transaction', () {
@@ -40,12 +62,8 @@ void main() {
     expect(mini, contains('beginScrubProvider'));
     expect(full, contains('finishScrubProvider'));
     expect(mini, contains('finishScrubProvider'));
-    expect(full, isNot(contains('scrubSeekProvider')));
-    expect(mini, isNot(contains('scrubSeekProvider')));
     expect(full, contains('Future<int> _scrubFuture'));
     expect(mini, contains('Future<int> _scrubFuture'));
-    expect(full, contains('await _scrubFuture'));
-    expect(mini, contains('await _scrubFuture'));
   });
 
   test('progress drags do not seek or resume before touch release', () {
@@ -58,22 +76,6 @@ void main() {
 
     expect(full, isNot(contains('onTapDown: (d) async')));
     expect(mini, isNot(contains('onTapDown: !canSeek')));
-  });
-
-  test('scrub unfreezes only after seek and play command', () {
-    final provider = File(
-      'lib/features/player/presentation/player_provider.dart',
-    ).readAsStringSync();
-    final scrub = provider.substring(
-      provider.indexOf('Future<void> finish('),
-      provider.indexOf('final scrubCoordinatorProvider'),
-    );
-
-    expect(
-      scrub.indexOf('await _ref.read(playerServiceProvider).seek(position)'),
-      lessThan(scrub.indexOf('.unfreeze(')),
-    );
-    expect(scrub, contains('await h.play()'));
   });
 
   test('auto-next uses seamless and end-of-track position guard', () {
