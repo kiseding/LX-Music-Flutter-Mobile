@@ -106,6 +106,7 @@ class PositionNotifier extends StateNotifier<Duration> {
   Timer? _timer;
   StreamSubscription<Duration>? _posSub;
   StreamSubscription<PositionDiscontinuity>? _discSub;
+  bool _frozen = false;
 
   PositionNotifier(this._player) : super(Duration.zero) {
     final player = _player;
@@ -114,23 +115,36 @@ class PositionNotifier extends StateNotifier<Duration> {
 
     // 官方 positionStream（内部 createPositionStream），seek 后会跟 updatePosition
     _posSub = player.positionStream.listen((p) {
+      if (_frozen) return;
       if ((p - state).inMilliseconds.abs() >= 16) state = p;
     });
 
     // seek 不连续：立刻跳到目标，歌词/进度同步
     _discSub = player.positionDiscontinuityStream.listen((d) {
+      if (_frozen) return;
       final p = player.position;
       state = p;
     });
 
     // 兜底轮询（部分 iOS 场景 stream 间隙）
     _timer = Timer.periodic(const Duration(milliseconds: 100), (_) {
+      if (_frozen) return;
       final p = player.position;
       if ((p - state).inMilliseconds.abs() >= 30) state = p;
     });
   }
 
+  void freeze() {
+    _frozen = true;
+  }
+
+  void unfreeze(Duration position) {
+    state = position;
+    _frozen = false;
+  }
+
   void jumpTo(Duration position) {
+    if (_frozen) return;
     state = position;
   }
 
@@ -201,59 +215,76 @@ final sleepTimerEndProvider = Provider<DateTime?>((ref) {
 // 全局播放消息通知（用于展示 SnackBar）
 final playerMessageProvider = StateProvider<String?>((ref) => null);
 
-/// 拖动进度松手：seek → 等 500ms → 若 resumeAfter 则 play。
-/// 进度条/歌词在 pause 后 position 冻结，与音频一致。
-final scrubSeekProvider =
-    Provider<Future<void> Function(Duration, {required bool resumeAfter})>(
-        (ref) {
-  return (Duration position, {required bool resumeAfter}) async {
-    final posNotifier = ref.read(playerPositionProvider.notifier);
+class ScrubCoordinator {
+  final Ref _ref;
+  int _generation = 0;
+  Future<void> _pauseFuture = Future<void>.value();
 
-    if (audioHandler is LxAudioHandler) {
-      final h = audioHandler as LxAudioHandler;
-      if (h.player.playing) {
-        await h.pauseInternal(clearIntent: false);
-      }
+  ScrubCoordinator(this._ref);
+
+  Future<int> begin() async {
+    final generation = ++_generation;
+    _ref.read(playerPositionProvider.notifier).freeze();
+
+    final h =
+        audioHandler is LxAudioHandler ? audioHandler as LxAudioHandler : null;
+    _pauseFuture = h != null && h.player.playing
+        ? h.pauseInternal(clearIntent: false)
+        : Future<void>.value();
+    await _pauseFuture;
+    return generation;
+  }
+
+  Future<void> finish(
+    int generation,
+    Duration position, {
+    required bool resumeAfter,
+  }) async {
+    if (generation != _generation) return;
+    await _pauseFuture;
+    if (generation != _generation) return;
+
+    await _ref.read(playerServiceProvider).seek(position);
+    if (generation != _generation) return;
+
+    final h =
+        audioHandler is LxAudioHandler ? audioHandler as LxAudioHandler : null;
+    if (resumeAfter && h != null) {
+      await h.play();
     }
 
-    await ref.read(playerServiceProvider).seek(position);
+    if (generation != _generation) return;
+    _ref
+        .read(playerPositionProvider.notifier)
+        .unfreeze(h?.player.position ?? position);
+  }
+}
 
-    if (audioHandler is LxAudioHandler) {
-      posNotifier.jumpTo((audioHandler as LxAudioHandler).player.position);
-    }
-
-    if (resumeAfter) {
-      await Future<void>.delayed(const Duration(milliseconds: 500));
-      if (audioHandler is LxAudioHandler) {
-        final h = audioHandler as LxAudioHandler;
-        posNotifier.jumpTo(h.player.position);
-        await h.play();
-      }
-    }
-  };
+final scrubCoordinatorProvider = Provider<ScrubCoordinator>((ref) {
+  return ScrubCoordinator(ref);
 });
 
-/// 点击歌词行等：不强制 pause 流程时的轻量 seek（仍统一时钟）
+final beginScrubProvider = Provider<Future<int> Function()>((ref) {
+  return ref.read(scrubCoordinatorProvider).begin;
+});
+
+final finishScrubProvider =
+    Provider<Future<void> Function(int, Duration, {required bool resumeAfter})>(
+        (ref) {
+  return ref.read(scrubCoordinatorProvider).finish;
+});
+
+/// 点击歌词行：使用同一 seek 事务，避免另一套时钟。
 final seekProvider = Provider<Future<void> Function(Duration)>((ref) {
   return (Duration position) async {
-    final posNotifier = ref.read(playerPositionProvider.notifier);
-    posNotifier.jumpTo(position);
-    final wasPlaying = audioHandler is LxAudioHandler
-        ? (audioHandler as LxAudioHandler).player.playing
-        : false;
-    if (wasPlaying && audioHandler is LxAudioHandler) {
-      await (audioHandler as LxAudioHandler).pauseInternal(clearIntent: false);
-    }
-    await ref.read(playerServiceProvider).seek(position);
-    if (audioHandler is LxAudioHandler) {
-      posNotifier.jumpTo((audioHandler as LxAudioHandler).player.position);
-    }
-    if (wasPlaying) {
-      await Future<void>.delayed(const Duration(milliseconds: 500));
-      if (audioHandler is LxAudioHandler) {
-        posNotifier.jumpTo((audioHandler as LxAudioHandler).player.position);
-        await (audioHandler as LxAudioHandler).play();
-      }
-    }
+    final h =
+        audioHandler is LxAudioHandler ? audioHandler as LxAudioHandler : null;
+    final wasPlaying = h?.player.playing ?? false;
+    final generation = await ref.read(beginScrubProvider)();
+    await ref.read(finishScrubProvider)(
+      generation,
+      position,
+      resumeAfter: wasPlaying,
+    );
   };
 });

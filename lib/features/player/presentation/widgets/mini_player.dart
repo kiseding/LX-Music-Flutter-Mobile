@@ -5,7 +5,6 @@ import '../../../../core/theme/app_colors.dart';
 import '../../../../core/widgets/artwork_image.dart';
 import '../../../../core/widgets/pressable.dart';
 import '../../../../core/widgets/play_pulse_button.dart';
-import '../../../../core/audio/audio_handler.dart';
 import '../player_provider.dart';
 import '../../../lyric/presentation/lyric_provider.dart';
 
@@ -28,6 +27,7 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer> {
   bool _seeking = false;
   double _seekValue = 0;
   bool _wasPlayingBeforeSeek = false;
+  Future<int> _scrubFuture = Future<int>.value(0);
 
   String _fmt(Duration d) {
     final m = d.inMinutes.remainder(60).toString().padLeft(1, '0');
@@ -137,11 +137,8 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer> {
                                       _seekValue = (d.localPosition.dx / w)
                                           .clamp(0.0, 1.0);
                                     });
-                                    if (isPlayingValue &&
-                                        audioHandler is LxAudioHandler) {
-                                      await (audioHandler as LxAudioHandler)
-                                          .pauseInternal(clearIntent: false);
-                                    }
+                                    _scrubFuture =
+                                        ref.read(beginScrubProvider)();
                                   },
                             onHorizontalDragUpdate: !canSeek
                                 ? null
@@ -158,7 +155,9 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer> {
                                         milliseconds:
                                             (_seekValue * totalMs).round());
                                     setState(() => _seeking = false);
-                                    await ref.read(scrubSeekProvider)(
+                                    final generation = await _scrubFuture;
+                                    await ref.read(finishScrubProvider)(
+                                      generation,
                                       target,
                                       resumeAfter: _wasPlayingBeforeSeek,
                                     );
@@ -175,7 +174,10 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer> {
                                       _seeking = false;
                                       _wasPlayingBeforeSeek = isPlayingValue;
                                     });
-                                    await ref.read(scrubSeekProvider)(
+                                    final generation =
+                                        await ref.read(beginScrubProvider)();
+                                    await ref.read(finishScrubProvider)(
+                                      generation,
                                       target,
                                       resumeAfter: isPlayingValue,
                                     );

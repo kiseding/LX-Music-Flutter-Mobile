@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:audio_service/audio_service.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
@@ -167,6 +169,12 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
   bool _isStale(int gen) => gen != _playGeneration;
 
+  void _startPlayer() {
+    unawaited(_player.play().catchError((Object e, StackTrace stack) {
+      debugPrint('[AudioHandler] play() 失败: $e');
+    }));
+  }
+
   void _init() {
     _player.playbackEventStream.listen(_broadcastState);
 
@@ -284,11 +292,8 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         await _player.seek(Duration.zero, index: _player.currentIndex);
       }
     }
-    try {
-      await _player.play();
-    } catch (e) {
-      debugPrint('[AudioHandler] play() 失败: $e');
-    }
+    // just_audio 的 Future 要到暂停/停止/播完才完成，不能在这里等待。
+    _startPlayer();
     await super.play();
   }
 
@@ -595,14 +600,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         // seamless 自动下一首必须 play，即使 completed 后 playing 已是 false
         if (_userWantsPlay || seamless) {
           _userWantsPlay = true;
-          try {
-            await _player.play();
-          } catch (e) {
-            debugPrint('[AudioHandler] play after setSource failed: $e');
-            // 再试一次：部分机型 setAudioSource 后需短暂等待
-            await Future<void>.delayed(const Duration(milliseconds: 80));
-            if (!_isStale(gen)) await _player.play();
-          }
+          _startPlayer();
         }
         if (!_isStale(gen)) _schedulePreload();
       } catch (e) {
@@ -681,9 +679,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     );
     if (_isStale(gen)) return;
     if (_userWantsPlay) {
-      try {
-        await _player.play();
-      } catch (_) {}
+      _startPlayer();
     }
   }
 

@@ -1,7 +1,6 @@
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../../core/audio/audio_handler.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/widgets/artwork_image.dart';
 import '../../../core/widgets/pressable.dart';
@@ -29,6 +28,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   bool _seeking = false;
   double _seekValue = 0; // 0..1 only while finger is down
   bool _wasPlayingBeforeSeek = false;
+  Future<int> _scrubFuture = Future<int>.value(0);
   double _dragOffset = 0;
   bool _draggingDown = false;
 
@@ -515,10 +515,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                       _wasPlayingBeforeSeek = playing;
                       _seekValue = (d.localPosition.dx / width).clamp(0.0, 1.0);
                     });
-                    if (playing && audioHandler is LxAudioHandler) {
-                      await (audioHandler as LxAudioHandler)
-                          .pauseInternal(clearIntent: false);
-                    }
+                    _scrubFuture = ref.read(beginScrubProvider)();
                   },
                   onHorizontalDragUpdate: (d) {
                     setState(() {
@@ -529,7 +526,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                     final target =
                         Duration(milliseconds: (_seekValue * totalMs).round());
                     setState(() => _seeking = false);
-                    await ref.read(scrubSeekProvider)(
+                    final generation = await _scrubFuture;
+                    await ref.read(finishScrubProvider)(
+                      generation,
                       target,
                       resumeAfter: _wasPlayingBeforeSeek,
                     );
@@ -545,7 +544,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                       _seeking = false;
                       _wasPlayingBeforeSeek = playing;
                     });
-                    await ref.read(scrubSeekProvider)(
+                    final generation = await ref.read(beginScrubProvider)();
+                    await ref.read(finishScrubProvider)(
+                      generation,
                       target,
                       resumeAfter: playing,
                     );
