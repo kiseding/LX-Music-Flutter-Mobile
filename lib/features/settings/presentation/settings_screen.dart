@@ -227,7 +227,19 @@ class SettingsScreen extends ConsumerWidget {
             borderRadius: BorderRadius.circular(16),
             border: Border.all(color: AppColors.cardBorder(context)),
           ),
-          child: Column(children: children),
+          child: Column(
+            children: [
+              for (var i = 0; i < children.length; i++) ...[
+                children[i],
+                if (i < children.length - 1)
+                  Divider(
+                    height: 1,
+                    thickness: 0.5,
+                    color: AppColors.cardBorder(context),
+                  ),
+              ],
+            ],
+          ),
         ),
       ],
     );
@@ -243,11 +255,6 @@ class SettingsScreen extends ConsumerWidget {
   ) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      decoration: BoxDecoration(
-        border: Border(
-          bottom: BorderSide(color: AppColors.cardBorder(context)),
-        ),
-      ),
       child: Row(
         children: [
           Expanded(
@@ -290,11 +297,6 @@ class SettingsScreen extends ConsumerWidget {
       onTap: onTap,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        decoration: BoxDecoration(
-          border: Border(
-            bottom: BorderSide(color: AppColors.cardBorder(context)),
-          ),
-        ),
         child: Row(
           children: [
             Expanded(
@@ -697,11 +699,6 @@ class _SettingRow extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(
-        border: Border(
-          bottom: BorderSide(color: AppColors.cardBorder(context)),
-        ),
-      ),
       child: Row(
         children: [
           Icon(icon, size: 18, color: AppColors.mutedText(context)),
