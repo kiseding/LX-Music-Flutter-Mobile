@@ -179,9 +179,11 @@ class MusicSourceService {
       try {
         debugPrint(
             '[getPlayUrl] 调自定义源 ${source.name} q=$resolvedQuality platform=$platform songId=$songId');
-        final url = await _customSourceService
-            .getMusicUrl(source.id, musicForScript, quality: resolvedQuality)
+        final detailed = await _customSourceService
+            .getMusicUrlDetailed(source.id, musicForScript,
+                quality: resolvedQuality)
             .timeout(const Duration(seconds: 20));
+        final url = detailed?.url;
         if (url != null && url.isNotEmpty) {
           if (!isPlayableMediaUrl(url)) {
             final host = Uri.tryParse(url)?.host ?? '?';
@@ -190,7 +192,9 @@ class MusicSourceService {
                 '[getPlayUrl] 自定义源 ${source.name} q=$resolvedQuality 无效地址 host=$host path=$path');
             continue;
           }
-          final actual = correctQualityFromUrl(url, resolvedQuality);
+          // 优先脚本返回的 type；否则再按 URL 推断（勿把任意 mp3 当成请求档）
+          final actual = normalizeScriptQuality(detailed?.type) ??
+              correctQualityFromUrl(url, resolvedQuality);
           final result = PlayUrlResult(
             url: url,
             requestedQuality: resolvedQuality,
@@ -214,8 +218,9 @@ class MusicSourceService {
       }
     }
 
-    // 2. 内置平台源：按降级链尝试
-    if (platform == 'kw' || platform == 'tx' || platform == 'wy') {
+    // 2. 内置平台源：仅作无自定义源时的最后兜底（内置源多数环境不可播）
+    if (enabledSources.isEmpty &&
+        (platform == 'kw' || platform == 'tx' || platform == 'wy')) {
       for (final q in qualities) {
         try {
           final url = await _builtInSources

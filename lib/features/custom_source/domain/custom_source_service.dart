@@ -8,6 +8,7 @@ import '../../player/domain/music_item.dart';
 
 class CustomSourceService {
   static const String _storageKey = 'custom_sources';
+
   /// 历史内置 Huibq 的 id；启动时若仍存在则移除，不再自动种源。
   static const String defaultSourceId = 'default_huibq';
   static const String _legacySeededKey = 'default_source_seeded';
@@ -22,7 +23,8 @@ class CustomSourceService {
   Future<void>? _initFuture;
 
   List<CustomSource> get sources => List.unmodifiable(_sources);
-  List<CustomSource> get enabledSources => _sources.where((s) => s.isEnabled).toList();
+  List<CustomSource> get enabledSources =>
+      _sources.where((s) => s.isEnabled).toList();
 
   Future<void> init() {
     if (_initialized) return Future.value();
@@ -64,7 +66,8 @@ class CustomSourceService {
     if (s.id == defaultSourceId) return true;
     if (nameL.contains('huibq') || authorL.contains('huibq')) return true;
     if (nameL.contains('lxmusic源') || nameL.contains('lxmusic')) return true;
-    if (homeL.contains('huibq') || homeL.contains('lx-music-source')) return true;
+    if (homeL.contains('huibq') || homeL.contains('lx-music-source'))
+      return true;
     return false;
   }
 
@@ -73,7 +76,8 @@ class CustomSourceService {
     if (jsonStr != null) {
       final List<dynamic> jsonList = json.decode(jsonStr);
       _sources.clear();
-      _sources.addAll(jsonList.map((j) => CustomSource.fromJson(j as Map<String, dynamic>)));
+      _sources.addAll(jsonList
+          .map((j) => CustomSource.fromJson(j as Map<String, dynamic>)));
       await _dedupeSources();
     }
   }
@@ -94,7 +98,9 @@ class CustomSourceService {
     for (final s in ordered) {
       final key = '${s.name}|${s.author}'.toLowerCase();
       final huibq = isHuibqFamily(s);
-      if (seenIds.contains(s.id) || seenNameAuthor.contains(key) || (huibq && seenHuibq)) {
+      if (seenIds.contains(s.id) ||
+          seenNameAuthor.contains(key) ||
+          (huibq && seenHuibq)) {
         changed = true;
         continue;
       }
@@ -186,13 +192,25 @@ class CustomSourceService {
     try {
       final engine = _getEngine(sourceId);
       await engine.loadSource(customSource);
-      return await engine.search(keyword, source: source, page: page, limit: limit, type: type);
+      return await engine.search(keyword,
+          source: source, page: page, limit: limit, type: type);
     } catch (e) {
       return [];
     }
   }
 
-  Future<String?> getMusicUrl(String sourceId, MusicItem music, {String quality = '320k'}) async {
+  Future<String?> getMusicUrl(String sourceId, MusicItem music,
+      {String quality = '320k'}) async {
+    final detailed =
+        await getMusicUrlDetailed(sourceId, music, quality: quality);
+    return detailed?.url;
+  }
+
+  Future<({String url, String? type})?> getMusicUrlDetailed(
+    String sourceId,
+    MusicItem music, {
+    String quality = '320k',
+  }) async {
     try {
       final customSource = _sources.firstWhere(
         (s) => s.id == sourceId,
@@ -207,7 +225,7 @@ class CustomSourceService {
       if (!loaded) {
         throw Exception('源脚本加载失败: ${customSource.name}');
       }
-      return await engine.getMusicUrl(music, quality: quality);
+      return await engine.getMusicUrlDetailed(music, quality: quality);
     } catch (e) {
       // 向上抛出由调用方记录；勿静默吞掉导致“源没生效”难排查
       rethrow;
@@ -229,7 +247,8 @@ class CustomSourceService {
     }
   }
 
-  Future<List<MusicItem>> getSongListDetail(String sourceId, String id, {int page = 1}) async {
+  Future<List<MusicItem>> getSongListDetail(String sourceId, String id,
+      {int page = 1}) async {
     try {
       final customSource = _sources.firstWhere(
         (s) => s.id == sourceId,
@@ -251,7 +270,8 @@ class CustomSourceService {
       final source = CustomSource.fromJson(json as Map<String, dynamic>);
       // 禁止再以内置 id 写入
       final normalized = source.id == defaultSourceId
-          ? source.copyWith(id: DateTime.now().millisecondsSinceEpoch.toString())
+          ? source.copyWith(
+              id: DateTime.now().millisecondsSinceEpoch.toString())
           : source;
       if (_sources.any((s) => s.id == normalized.id)) {
         await updateSource(normalized);
@@ -291,7 +311,8 @@ class CustomSourceService {
       );
 
       late final String targetId;
-      final existingIndex = _sources.indexWhere((s) => s.name == name && s.author == author);
+      final existingIndex =
+          _sources.indexWhere((s) => s.name == name && s.author == author);
       if (existingIndex >= 0) {
         final old = _sources[existingIndex];
         _sources[existingIndex] = old.copyWith(
@@ -349,7 +370,8 @@ class CustomSourceService {
 
   Future<bool> importSourceFromUrl(String url) async {
     try {
-      final response = await _dio.get(url, options: Options(responseType: ResponseType.plain));
+      final response = await _dio.get(url,
+          options: Options(responseType: ResponseType.plain));
       final script = response.data.toString();
       if (validateScript(script)) {
         return await importLxMusicScript(script);
@@ -374,7 +396,9 @@ class CustomSourceService {
     if (script.contains('globalThis.lx') || script.contains('EVENT_NAMES')) {
       return true;
     }
-    return script.contains('search') || script.contains('getMusicUrl') || script.contains('musicUrl');
+    return script.contains('search') ||
+        script.contains('getMusicUrl') ||
+        script.contains('musicUrl');
   }
 
   bool isLxMusicScript(String script) {

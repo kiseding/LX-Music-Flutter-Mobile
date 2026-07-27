@@ -1,7 +1,9 @@
 class PlayUrlResult {
   final String url;
+
   /// 请求的音质
   final String requestedQuality;
+
   /// 实际得到的音质（根据 URL 容器或上游返回推断）
   final String actualQuality;
   final String platform;
@@ -67,15 +69,54 @@ bool isPlayableMediaUrl(String? url) {
   return segments.isNotEmpty;
 }
 
-/// 根据真实 URL 纠正音质标签（对齐公开解析链策略）
+/// 规范化脚本返回的音质字段。
+String? normalizeScriptQuality(String? raw) {
+  if (raw == null) return null;
+  final q = raw.trim().toLowerCase();
+  if (q.isEmpty) return null;
+  const known = {
+    'hires',
+    'flac24bit',
+    'flac',
+    '320k',
+    '192k',
+    '128k',
+    '96k',
+    '48k',
+  };
+  if (known.contains(q)) return q;
+  if (q.contains('hires') || q.contains('hi-res') || q.contains('24bit')) {
+    return 'flac24bit';
+  }
+  if (q.contains('flac') || q == 'sq' || q == '999') return 'flac';
+  if (q.contains('320')) return '320k';
+  if (q.contains('192')) return '192k';
+  if (q.contains('128') || q == 'hq' || q == 'mp3') return '128k';
+  return null;
+}
+
+/// 根据真实 URL 纠正音质标签。
+/// 注意：仅扩展名无法区分 128k/320k 的 mp3/m4a，此时返回 requested 仅作弱推断。
 String correctQualityFromUrl(String url, String requested) {
   final u = url.toLowerCase();
   if (u.contains('.flac') && !u.contains('.mflac')) {
-    return requested == 'flac24bit' ? 'flac24bit' : 'flac';
+    return requested == 'flac24bit' || requested == 'hires'
+        ? (requested == 'hires' ? 'hires' : 'flac24bit')
+        : 'flac';
   }
   if (u.contains('.mflac')) return '128k';
+  // C400 前缀是 QQ 低码率 m4a
+  if (u.contains('/c400') || u.contains('c400')) return '128k';
+  if (u.contains('/m800') || u.contains('m800')) return '320k';
+  if (u.contains('/m500') || u.contains('m500')) return '128k';
+  if (u.contains('/f000') || u.contains('f000')) return 'flac';
   if (u.contains('.m4a') || u.contains('.mp3')) {
-    if (requested == 'flac' || requested == 'flac24bit') return '320k';
+    // 无法从容器区分 128/320：保留 requested，由脚本 type 优先覆盖
+    if (requested == 'flac' ||
+        requested == 'flac24bit' ||
+        requested == 'hires') {
+      return '320k';
+    }
     return requested;
   }
   return requested;

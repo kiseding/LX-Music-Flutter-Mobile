@@ -18,11 +18,45 @@ Map<String, dynamic> _decodeMap(String s) =>
     json.decode(s) as Map<String, dynamic>;
 dynamic _decodeDynamic(String s) => json.decode(s);
 
+/// 保证脚本可见的 types 列表含本次请求音质，避免空 types 触发低码率回退。
+List<String> ensureMusicInfoTypes(Map<String, dynamic> meta, String type) {
+  const official = ['hires', 'flac24bit', 'flac', '320k', '192k', '128k'];
+  final raw = meta['types'] ?? meta['qualitys'] ?? meta['quality'];
+  final out = <String>[];
+  if (raw is List) {
+    for (final e in raw) {
+      final s = e.toString().trim().toLowerCase();
+      if (s.isNotEmpty && !out.contains(s)) out.add(s);
+    }
+  } else if (raw is Map) {
+    for (final k in raw.keys) {
+      final s = k.toString().trim().toLowerCase();
+      if (s.isNotEmpty && !out.contains(s)) out.add(s);
+    }
+  }
+  final req = type.trim().toLowerCase();
+  if (req.isNotEmpty && !out.contains(req)) {
+    out.insert(0, req);
+  }
+  if (out.isEmpty) {
+    out.addAll([
+      if (req.isNotEmpty) req,
+      ...official.where((q) => q != req),
+    ]);
+  } else {
+    for (final q in official) {
+      if (!out.contains(q)) out.add(q);
+    }
+  }
+  return out;
+}
+
 class CustomSourceEngine {
   JavascriptRuntime? _runtime;
   late final Dio _dio;
   CustomSource? _currentSource;
   bool _initialized = false;
+
   /// 仅在 inited + 能力校验成功后为 true（避免失败 init 被当成成功缓存）
   bool _sourceReady = false;
   Future<bool>? _loadInFlight;
@@ -349,19 +383,22 @@ class CustomSourceEngine {
         final String? reqId = data['reqId'];
         final dynamic result = data['data'];
         final String? error = data['error'];
-        debugPrint('[LX] lx_response arrived reqId=$reqId hasError=${error != null} hasData=${result != null} pending=${_pendingRequests.keys.toList()}');
+        debugPrint(
+            '[LX] lx_response arrived reqId=$reqId hasError=${error != null} hasData=${result != null} pending=${_pendingRequests.keys.toList()}');
 
         if (reqId != null && _pendingRequests.containsKey(reqId)) {
           final completer = _pendingRequests.remove(reqId);
           if (error != null) {
-            debugPrint('[LX] lx_response completing reqId=$reqId with ERROR: $error');
+            debugPrint(
+                '[LX] lx_response completing reqId=$reqId with ERROR: $error');
             completer?.completeError(error);
           } else {
             debugPrint('[LX] lx_response completing reqId=$reqId with data');
             completer?.complete(result);
           }
         } else {
-          debugPrint('[LX] lx_response reqId=$reqId NOT in pending (stale or unknown)');
+          debugPrint(
+              '[LX] lx_response reqId=$reqId NOT in pending (stale or unknown)');
         }
       } catch (e) {
         debugPrint('[LX] lx_response parse failed: $e');
@@ -1055,7 +1092,8 @@ class CustomSourceEngine {
 
     final String reqId =
         'req_${DateTime.now().millisecondsSinceEpoch}_${_uuid.v4().substring(0, 4)}';
-    debugPrint('[LX] _callRequestEvent start reqId=$reqId action=${params['action']} source=${params['source']}');
+    debugPrint(
+        '[LX] _callRequestEvent start reqId=$reqId action=${params['action']} source=${params['source']}');
     final paramsJson = json.encode(params);
     final varName =
         'temp_params_${reqId.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '')}';
@@ -1112,7 +1150,8 @@ class CustomSourceEngine {
 
     final evalResult = _runtime!.evaluate(script);
     if (evalResult.isError) {
-      debugPrint('[LX] _callRequestEvent JS eval FAILED reqId=$reqId: ${evalResult.stringResult}');
+      debugPrint(
+          '[LX] _callRequestEvent JS eval FAILED reqId=$reqId: ${evalResult.stringResult}');
       final errMsg = 'JS调用异常: ${evalResult.stringResult}';
       _eventController.add({'type': 'error', 'message': errMsg});
       _pendingRequests.remove(reqId);
@@ -1128,7 +1167,8 @@ class CustomSourceEngine {
     _flushMicrotasks();
 
     final deadline = DateTime.now().add(const Duration(seconds: 15));
-    debugPrint('[LX] _callRequestEvent polling reqId=$reqId pending=${_pendingRequests.length} handlers set');
+    debugPrint(
+        '[LX] _callRequestEvent polling reqId=$reqId pending=${_pendingRequests.length} handlers set');
     while (!completer.isCompleted && DateTime.now().isBefore(deadline)) {
       _flushMicrotasks(maxIterations: 4);
       try {
@@ -1151,7 +1191,8 @@ class CustomSourceEngine {
 
     // 超时
     _pendingRequests.remove(reqId);
-    debugPrint('[LX] _callRequestEvent TIMEOUT reqId=$reqId action=${params['action']} — lx_response never arrived');
+    debugPrint(
+        '[LX] _callRequestEvent TIMEOUT reqId=$reqId action=${params['action']} — lx_response never arrived');
     final errMsg = '请求超时(15s): ${params['action']}';
     _eventController.add({'type': 'error', 'message': errMsg});
     return null;
@@ -1379,7 +1420,10 @@ class CustomSourceEngine {
     info['interval'] = interval;
     info['_interval'] = music.duration.inSeconds;
     info['type'] = type;
-    info['qualitys'] = meta['qualitys'] ?? meta['types'] ?? [];
+    // 搜刮曲目常无 types：脚本 if (!types.includes(quality)) 会落到默认低码率。
+    // 保证 types/qualitys 至少覆盖本次请求音质与官方降级链。
+    info['types'] = ensureMusicInfoTypes(meta, type);
+    info['qualitys'] = info['types'];
     info['privilege'] = meta['privilege'];
 
     // 兼容新旧两种字段名
@@ -1401,6 +1445,13 @@ class CustomSourceEngine {
 
   Future<String?> getMusicUrl(MusicItem music,
       {String quality = '320k'}) async {
+    final detailed = await getMusicUrlDetailed(music, quality: quality);
+    return detailed?.url;
+  }
+
+  /// 返回 URL + 脚本声明的实际音质（若有），避免仅靠扩展名误判。
+  Future<({String url, String? type})?> getMusicUrlDetailed(MusicItem music,
+      {String quality = '320k'}) async {
     try {
       // 使用仿桌面版 toOldMusicInfo 的转换，补齐脚本期望的 albumName / picUrl
       // 等字段名，并保留 meta 中的 qualitys / privilege 等扩展数据。
@@ -1417,6 +1468,8 @@ class CustomSourceEngine {
         'source': platform,
         'info': {
           'type': resolvedQuality,
+          // 部分脚本只读 info.quality
+          'quality': resolvedQuality,
           'musicInfo': musicInfo,
         }
       });
@@ -1424,32 +1477,35 @@ class CustomSourceEngine {
         return null;
       }
 
-      // 兼容多种返回结构
       if (result is String) {
         final s = result.trim();
-        return s.startsWith('http') ? s : null;
+        return s.startsWith('http') ? (url: s, type: null) : null;
       }
       if (result is! Map) return null;
 
-      // 桌面版常见结构: { url: "...", type: "..." } 或 { data: { url: "..." } }
+      String? type = result['type']?.toString() ??
+          result['quality']?.toString() ??
+          result['br']?.toString();
+
       final direct = result['url'] ?? result['music_url'] ?? result['musicUrl'];
       if (direct != null) {
         final url = direct.toString().trim();
-        if (url.startsWith('http')) return url;
+        if (url.startsWith('http')) return (url: url, type: type);
       }
       final data = result['data'];
       if (data is Map) {
+        type ??= data['type']?.toString() ?? data['quality']?.toString();
         final nested = data['url'] ?? data['music_url'] ?? data['musicUrl'];
         if (nested != null) {
           final url = nested.toString().trim();
-          if (url.startsWith('http')) return url;
+          if (url.startsWith('http')) return (url: url, type: type);
         }
       }
-      // 部分源直接 body 为 { code, url }
       final body = result['body'];
       if (body is Map) {
+        type ??= body['type']?.toString() ?? body['quality']?.toString();
         final u = body['url']?.toString().trim();
-        if (u != null && u.startsWith('http')) return u;
+        if (u != null && u.startsWith('http')) return (url: u, type: type);
       }
 
       return null;
