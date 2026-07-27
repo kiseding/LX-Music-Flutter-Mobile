@@ -168,14 +168,32 @@ abstract final class AppTheme {
         labelMedium: TextStyle(color: AppColors.lightTextSecondary),
         labelSmall: TextStyle(color: AppColors.lightTextMuted),
       ),
+      // 浅色：白底对话框上若无边框+纯白填充会看不见输入框边缘
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: AppColors.lightSurface,
+        fillColor: AppColors.lightSurface2,
         hintStyle: const TextStyle(color: AppColors.lightTextMuted),
         labelStyle: const TextStyle(color: AppColors.lightTextSecondary),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide.none,
+          borderSide: const BorderSide(color: AppColors.lightBorder),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: AppColors.lightBorder),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide:
+              const BorderSide(color: AppColors.lightAccent, width: 1.5),
+        ),
+        errorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: AppColors.error),
+        ),
+        focusedErrorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: AppColors.error, width: 1.5),
         ),
       ),
       popupMenuTheme: const PopupMenuThemeData(
