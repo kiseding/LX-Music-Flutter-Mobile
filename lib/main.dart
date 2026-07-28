@@ -4,7 +4,6 @@ import 'package:audio_service/audio_service.dart';
 import 'package:lx_music_flutter/app.dart';
 import 'package:lx_music_flutter/core/audio/audio_handler.dart';
 import 'package:lx_music_flutter/core/audio/playback_cache_service.dart';
-import 'package:lx_music_flutter/core/network/music_source_service.dart';
 import 'package:lx_music_flutter/core/network/play_url_result.dart';
 import 'package:lx_music_flutter/features/custom_source/presentation/custom_source_provider.dart';
 import 'package:lx_music_flutter/features/search/presentation/search_provider.dart';
@@ -113,117 +112,47 @@ void main() async {
         if (audioHandler is LxAudioHandler) {
           (audioHandler as LxAudioHandler).preferredQuality = requested;
         }
-        // 完整降级链：hires→flac24bit→flac→320k→…→128k
-        final qualitiesToTry = MusicSourceService.qualityChain(requested);
-        String? lastFail;
-        PlayUrlResult? bestBelow;
-        for (final cacheQuality in qualitiesToTry) {
-          debugPrint('[urlResolver] 尝试音质 q=$cacheQuality');
-          final result = await sourceService.getPlayUrlDetailed(
-            musicItem,
-            quality: cacheQuality,
-          );
-          if (result == null) {
-            lastFail = '源未返回地址(q=$cacheQuality)';
-            debugPrint('[urlResolver] $lastFail');
-            continue;
-          }
-          if (!isPlayableMediaUrl(result.url)) {
-            lastFail =
-                '无效地址(q=$cacheQuality host=${Uri.tryParse(result.url)?.host} path=${Uri.tryParse(result.url)?.path})';
-            debugPrint('[urlResolver] $lastFail');
-            continue;
-          }
-          // 源用低码率冒充高音质：继续降级尝试，最后再接受偏低结果
-          if (MusicSourceService.isQualityBelow(
-                  result.actualQuality, requested) &&
-              cacheQuality == requested) {
-            debugPrint(
-                '[urlResolver] q=$cacheQuality 实际=${result.actualQuality} 偏低，继续');
-            bestBelow ??= result;
-            continue;
-          }
-          bestBelow = null;
-          final songId = (musicItem.songmid?.isNotEmpty == true)
-              ? musicItem.songmid!
-              : (musicItem.hash?.isNotEmpty == true
-                  ? musicItem.hash!
-                  : musicItem.id);
-          final qualityKey = result.actualQuality.isNotEmpty
-              ? result.actualQuality
-              : cacheQuality;
-          debugPrint(
-              '[urlResolver] 开始缓存 q=$qualityKey songId=$songId host=${Uri.tryParse(result.url)?.host}');
-          final localPath = await playbackCache.getOrDownload(
-            remoteUrl: result.url,
-            platform: result.platform,
-            songId: songId,
-            quality: qualityKey,
-          );
-          // 方案 A：只播放本地缓存。缓存失败时不回退网络直播。
-          final playUrl = PlaybackCacheService.cachedPlayableUri(localPath);
-          if (playUrl == null) {
-            lastFail = '本地缓存失败(q=$cacheQuality)';
-            debugPrint('[urlResolver] $lastFail，尝试下一级音质');
-            continue;
-          }
-          // 写回 mediaItem + 队列同 id 项，保证 UI 读到 actualQuality
-          final qualityExtras = <String, dynamic>{
-            'url': playUrl,
-            'remoteUrl': result.url,
-            'actualQuality': result.actualQuality,
-            'requestedQuality': requested,
-            'platform': result.platform,
-          };
-          final current = lxHandler.mediaItem.value;
-          if (current != null && current.id == mediaId) {
-            final extras = Map<String, dynamic>.from(current.extras ?? {});
-            extras.addAll(qualityExtras);
-            lxHandler.mediaItem.add(current.copyWith(extras: extras));
-          }
-          lxHandler.patchQueueItemExtras(mediaId, qualityExtras);
-          debugPrint(
-              '[urlResolver] 成功 q=${result.actualQuality} local=true ${playUrl.length > 80 ? playUrl.substring(0, 80) : playUrl}');
-          return playUrl;
+        final result = await sourceService.resolvePlayableUrl(
+          musicItem,
+          preferredQuality: requested,
+        );
+        if (result == null || !isPlayableMediaUrl(result.url)) {
+          debugPrint('[urlResolver] 源未返回可播地址(q=$requested)');
+          return null;
         }
-        // 请求档全部失败时，接受之前保留的偏低可播结果
-        if (bestBelow != null) {
-          final songId = (musicItem.songmid?.isNotEmpty == true)
-              ? musicItem.songmid!
-              : (musicItem.hash?.isNotEmpty == true
-                  ? musicItem.hash!
-                  : musicItem.id);
-          final qualityKey = bestBelow.actualQuality.isNotEmpty
-              ? bestBelow.actualQuality
-              : requested;
-          final localPath = await playbackCache.getOrDownload(
-            remoteUrl: bestBelow.url,
-            platform: bestBelow.platform,
-            songId: songId,
-            quality: qualityKey,
-          );
-          final playUrl = PlaybackCacheService.cachedPlayableUri(localPath);
-          if (playUrl != null) {
-            final qualityExtras = <String, dynamic>{
-              'url': playUrl,
-              'remoteUrl': bestBelow.url,
-              'actualQuality': bestBelow.actualQuality,
-              'requestedQuality': requested,
-              'platform': bestBelow.platform,
-            };
-            final current = lxHandler.mediaItem.value;
-            if (current != null && current.id == mediaId) {
-              final extras = Map<String, dynamic>.from(current.extras ?? {});
-              extras.addAll(qualityExtras);
-              lxHandler.mediaItem.add(current.copyWith(extras: extras));
-            }
-            lxHandler.patchQueueItemExtras(mediaId, qualityExtras);
-            debugPrint('[urlResolver] 使用偏低结果 q=${bestBelow.actualQuality}');
-            return playUrl;
-          }
+        final songId = (musicItem.songmid?.isNotEmpty == true)
+            ? musicItem.songmid!
+            : (musicItem.hash?.isNotEmpty == true
+                ? musicItem.hash!
+                : musicItem.id);
+        final qualityKey =
+            result.actualQuality.isNotEmpty ? result.actualQuality : requested;
+        final localPath = await playbackCache.getOrDownload(
+          remoteUrl: result.url,
+          platform: result.platform,
+          songId: songId,
+          quality: qualityKey,
+        );
+        final playUrl = PlaybackCacheService.cachedPlayableUri(localPath);
+        if (playUrl == null) {
+          debugPrint('[urlResolver] 本地缓存失败(q=$qualityKey)');
+          return null;
         }
-        debugPrint('[urlResolver] 全部失败 last=$lastFail');
-        return null;
+        final qualityExtras = <String, dynamic>{
+          'url': playUrl,
+          'remoteUrl': result.url,
+          'actualQuality': result.actualQuality,
+          'requestedQuality': result.requestedQuality,
+          'platform': result.platform,
+        };
+        final current = lxHandler.mediaItem.value;
+        if (current != null && current.id == mediaId) {
+          final extras = Map<String, dynamic>.from(current.extras ?? {});
+          extras.addAll(qualityExtras);
+          lxHandler.mediaItem.add(current.copyWith(extras: extras));
+        }
+        lxHandler.patchQueueItemExtras(mediaId, qualityExtras);
+        return playUrl;
       }
       debugPrint(
           '[urlResolver] 无法获取歌曲信息: mediaId=$mediaId hasExtras=${rawExtras != null}');

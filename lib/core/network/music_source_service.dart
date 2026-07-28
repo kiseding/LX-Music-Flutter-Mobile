@@ -1,15 +1,32 @@
 import 'package:flutter/foundation.dart';
+import 'package:dio/dio.dart';
 import '../../features/player/domain/music_item.dart';
 import '../../features/custom_source/domain/custom_source_service.dart';
 import '../music_source/platform/built_in_source_manager.dart';
 import 'play_url_result.dart';
 import 'outbound_url.dart';
 
+typedef QualityResolver = Future<PlayUrlResult?> Function(
+  MusicItem music,
+  String quality,
+  CancelToken? cancelToken,
+);
+
 class MusicSourceService {
   final CustomSourceService _customSourceService;
   final BuiltInSourceManager _builtInSources = BuiltInSourceManager();
+  final bool Function()? _hasEnabledCustomSources;
+  final QualityResolver? _customQualityResolver;
+  final QualityResolver? _builtInQualityResolver;
 
-  MusicSourceService(this._customSourceService);
+  MusicSourceService(
+    this._customSourceService, {
+    bool Function()? hasEnabledCustomSources,
+    QualityResolver? customQualityResolver,
+    QualityResolver? builtInQualityResolver,
+  })  : _hasEnabledCustomSources = hasEnabledCustomSources,
+        _customQualityResolver = customQualityResolver,
+        _builtInQualityResolver = builtInQualityResolver;
 
   BuiltInSourceManager get builtInSources => _builtInSources;
 
@@ -154,13 +171,25 @@ class MusicSourceService {
   }
 
   Future<String?> getPlayUrl(MusicItem music, {String quality = '320k'}) async {
-    final result = await getPlayUrlDetailed(music, quality: quality);
+    final result = await resolvePlayableUrl(
+      music,
+      preferredQuality: quality,
+    );
     return result?.url;
   }
 
   Future<PlayUrlResult?> getPlayUrlDetailed(MusicItem music,
-      {String quality = '320k'}) async {
-    final resolvedQuality = quality.isEmpty ? '320k' : quality;
+      {String quality = '320k'}) {
+    return resolvePlayableUrl(music, preferredQuality: quality);
+  }
+
+  Future<PlayUrlResult?> resolvePlayableUrl(
+    MusicItem music, {
+    required String preferredQuality,
+    CancelToken? cancelToken,
+  }) async {
+    final resolvedQuality =
+        preferredQuality.isEmpty ? '320k' : preferredQuality;
     final songId = (music.songmid?.isNotEmpty == true)
         ? music.songmid!
         : (music.hash?.isNotEmpty == true ? music.hash! : music.id);
@@ -171,86 +200,27 @@ class MusicSourceService {
     final qualities = qualityChain(resolvedQuality);
     PlayUrlResult? bestBelow;
 
-    // 1. 自定义 JS 音源：只请求当前档；假成功低码率不直接认，留给外层降级
-    final enabledSources = _customSourceService.enabledSources;
-    debugPrint(
-        '[getPlayUrl] 已启用自定义源: ${enabledSources.map((s) => '${s.id}/${s.name}').join(', ')} (共${enabledSources.length})');
-    final musicForScript = music.copyWith(platform: platform);
-    for (final source in enabledSources) {
-      try {
-        debugPrint(
-            '[getPlayUrl] 调自定义源 ${source.name} q=$resolvedQuality platform=$platform songId=$songId');
-        final detailed = await _customSourceService
-            .getMusicUrlDetailed(source.id, musicForScript,
-                quality: resolvedQuality)
-            .timeout(const Duration(seconds: 20));
-        final rawUrl = detailed?.url;
-        final url = rawUrl == null ? null : normalizeOutboundUrl(rawUrl);
-        if (url != null && url.isNotEmpty) {
-          if (!isPlayableMediaUrl(url)) {
-            final host = Uri.tryParse(url)?.host ?? '?';
-            final path = Uri.tryParse(url)?.path ?? '?';
-            debugPrint(
-                '[getPlayUrl] 自定义源 ${source.name} q=$resolvedQuality 无效地址 host=$host path=$path');
-            continue;
-          }
-          // 优先脚本返回的 type；否则再按 URL 推断（勿把任意 mp3 当成请求档）
-          final actual = normalizeScriptQuality(detailed?.type) ??
-              correctQualityFromUrl(url, resolvedQuality);
-          final result = PlayUrlResult(
-            url: url,
-            requestedQuality: resolvedQuality,
-            actualQuality: actual,
-            platform: platform,
-          );
-          if (isQualityBelow(actual, resolvedQuality)) {
-            debugPrint(
-                '[getPlayUrl] 自定义源 ${source.name} q=$resolvedQuality 实际=$actual 偏低，继续降级');
-            bestBelow ??= result;
-            continue;
-          }
-          debugPrint(
-              '[getPlayUrl] 自定义源成功 ${source.name} q=$resolvedQuality actual=$actual');
-          return result;
-        }
-        debugPrint('[getPlayUrl] 自定义源 ${source.name} q=$resolvedQuality 返回空');
-      } catch (e) {
-        debugPrint(
-            '[getPlayUrl] 自定义源 ${source.id}/${source.name} q=$resolvedQuality 失败: $e');
-      }
-    }
+    final hasCustom = _hasEnabledCustomSources?.call() ??
+        _customSourceService.enabledSources.isNotEmpty;
+    final resolver = hasCustom ? _resolveCustomQuality : _resolveBuiltInQuality;
 
-    // 2. 内置平台源：仅作无自定义源时的最后兜底（内置源多数环境不可播）
-    if (enabledSources.isEmpty &&
-        (platform == 'kw' || platform == 'tx' || platform == 'wy')) {
-      for (final q in qualities) {
-        try {
-          final rawUrl = await _builtInSources
-              .getMusicUrl(platform, music, quality: q)
-              .timeout(const Duration(seconds: 8));
-          final url = rawUrl == null ? null : normalizeOutboundUrl(rawUrl);
-          if (url != null && url.isNotEmpty) {
-            if (!isPlayableMediaUrl(url)) {
-              debugPrint('[getPlayUrl] 内置源 $platform q=$q 返回无效播放地址，跳过');
-              continue;
-            }
-            final actual = correctQualityFromUrl(url, q);
-            final result = PlayUrlResult(
-              url: url,
-              requestedQuality: resolvedQuality,
-              actualQuality: actual,
-              platform: platform,
-            );
-            if (isQualityBelow(actual, resolvedQuality) &&
-                q == resolvedQuality) {
-              debugPrint('[getPlayUrl] 内置源 $platform q=$q 实际=$actual 偏低，继续降级');
-              bestBelow ??= result;
-              continue;
-            }
-            return result;
-          }
-        } catch (_) {}
+    for (final quality in qualities) {
+      _throwIfCancelled(cancelToken);
+      final result = await resolver(music, quality, cancelToken);
+      _throwIfCancelled(cancelToken);
+      if (result == null || !isPlayableMediaUrl(result.url)) continue;
+
+      final normalized = PlayUrlResult(
+        url: result.url,
+        requestedQuality: resolvedQuality,
+        actualQuality: result.actualQuality,
+        platform: result.platform,
+      );
+      if (isQualityBelow(normalized.actualQuality, quality)) {
+        bestBelow ??= normalized;
+        continue;
       }
+      return normalized;
     }
 
     if (bestBelow != null) {
@@ -259,6 +229,76 @@ class MusicSourceService {
     }
     debugPrint('[getPlayUrl] 所有源均失败');
     return null;
+  }
+
+  Future<PlayUrlResult?> _resolveCustomQuality(
+    MusicItem music,
+    String quality,
+    CancelToken? cancelToken,
+  ) async {
+    if (_customQualityResolver != null) {
+      return _customQualityResolver(music, quality, cancelToken);
+    }
+    final platform = resolvePlatform(music);
+    final musicForScript = music.copyWith(platform: platform);
+    for (final source in _customSourceService.enabledSources) {
+      _throwIfCancelled(cancelToken);
+      try {
+        final detailed = await _customSourceService
+            .getMusicUrlDetailed(source.id, musicForScript, quality: quality)
+            .timeout(const Duration(seconds: 20));
+        _throwIfCancelled(cancelToken);
+        final rawUrl = detailed?.url;
+        final url = rawUrl == null ? null : normalizeOutboundUrl(rawUrl);
+        if (!isPlayableMediaUrl(url)) continue;
+        return PlayUrlResult(
+          url: url!,
+          requestedQuality: quality,
+          actualQuality: normalizeScriptQuality(detailed?.type) ??
+              correctQualityFromUrl(url, quality),
+          platform: platform,
+        );
+      } catch (error) {
+        if (error is DioException && CancelToken.isCancel(error)) rethrow;
+        debugPrint(
+            '[getPlayUrl] 自定义源 ${source.id}/${source.name} q=$quality 失败: $error');
+      }
+    }
+    return null;
+  }
+
+  Future<PlayUrlResult?> _resolveBuiltInQuality(
+    MusicItem music,
+    String quality,
+    CancelToken? cancelToken,
+  ) async {
+    if (_builtInQualityResolver != null) {
+      return _builtInQualityResolver(music, quality, cancelToken);
+    }
+    final platform = resolvePlatform(music);
+    if (platform != 'kw' && platform != 'tx' && platform != 'wy') return null;
+    try {
+      final rawUrl = await _builtInSources
+          .getMusicUrl(platform, music, quality: quality)
+          .timeout(const Duration(seconds: 8));
+      _throwIfCancelled(cancelToken);
+      final url = rawUrl == null ? null : normalizeOutboundUrl(rawUrl);
+      if (!isPlayableMediaUrl(url)) return null;
+      return PlayUrlResult(
+        url: url!,
+        requestedQuality: quality,
+        actualQuality: correctQualityFromUrl(url, quality),
+        platform: platform,
+      );
+    } catch (error) {
+      if (error is DioException && CancelToken.isCancel(error)) rethrow;
+      return null;
+    }
+  }
+
+  void _throwIfCancelled(CancelToken? cancelToken) {
+    final error = cancelToken?.cancelError;
+    if (error != null) throw error;
   }
 
   Future<String?> getLyric(MusicItem music) async {

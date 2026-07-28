@@ -24,4 +24,9 @@ void main() {
     expect(MusicSourceService.isQualityBelow('flac', 'flac'), isFalse);
     expect(MusicSourceService.isQualityBelow('flac', '320k'), isFalse);
   });
+
+  test('quality chain contains no duplicate attempts', () {
+    final chain = MusicSourceService.qualityChain('flac');
+    expect(chain.toSet().length, chain.length);
+  });
 }

@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:dio/dio.dart';
 import 'package:lx_music_flutter/core/audio/playback_cache_service.dart';
 import 'package:lx_music_flutter/core/network/music_source_service.dart';
 import 'package:lx_music_flutter/core/network/play_url_result.dart';
@@ -13,7 +14,8 @@ void main() {
     expect(DownloadService.safeDownloadBaseName(''), 'track');
   });
 
-  test('promote part must not delete .part before rename (filesystem)', () async {
+  test('promote part must not delete .part before rename (filesystem)',
+      () async {
     final dir = await Directory.systemTemp.createTemp('dl_part_');
     addTearDown(() {
       if (dir.existsSync()) dir.deleteSync(recursive: true);
@@ -22,7 +24,8 @@ void main() {
     final part = File('${dir.path}/$base.part');
     final finalPath = '${dir.path}/$base.mp3';
     // 模拟旧 bug：cleanup 删掉 .part
-    await part.writeAsBytes(List<int>.filled(4096, 1)..setAll(0, [0x49, 0x44, 0x33]));
+    await part
+        .writeAsBytes(List<int>.filled(4096, 1)..setAll(0, [0x49, 0x44, 0x33]));
     expect(await part.exists(), isTrue);
 
     // 正确顺序：rename 先于清理其它扩展名
@@ -36,7 +39,9 @@ void main() {
     await for (final e in dir.list()) {
       if (e is! File) continue;
       final name = e.uri.pathSegments.last;
-      if (name == '$base.part') fail('must not keep deleting part after promote');
+      if (name == '$base.part') {
+        fail('must not keep deleting part after promote');
+      }
       if (name.startsWith('$base.') && e.path != finalPath) {
         await e.delete();
       }
@@ -116,5 +121,91 @@ void main() {
       ),
       '.mp3',
     );
+  });
+
+  test('fresh-link download resolves once when the first link succeeds',
+      () async {
+    var resolveCalls = 0;
+    final result = PlayUrlResult(
+      url: 'https://media.example/one.mp3',
+      requestedQuality: 'flac',
+      actualQuality: '320k',
+      platform: 'tx',
+    );
+
+    final downloaded = await downloadWithFreshLinkRetry(
+      resolve: () async {
+        resolveCalls++;
+        return result;
+      },
+      download: (_) async {},
+    );
+
+    expect(resolveCalls, 1);
+    expect(downloaded, same(result));
+  });
+
+  test('fresh-link download re-resolves only after an expired HTTP response',
+      () async {
+    var resolveCalls = 0;
+    var downloadCalls = 0;
+
+    final downloaded = await downloadWithFreshLinkRetry(
+      resolve: () async {
+        resolveCalls++;
+        return PlayUrlResult(
+          url: 'https://media.example/$resolveCalls.mp3',
+          requestedQuality: 'flac',
+          actualQuality: '320k',
+          platform: 'tx',
+        );
+      },
+      download: (_) async {
+        downloadCalls++;
+        if (downloadCalls == 1) {
+          throw DioException(
+            requestOptions: RequestOptions(path: '/expired'),
+            response: Response(
+              requestOptions: RequestOptions(path: '/expired'),
+              statusCode: 403,
+            ),
+          );
+        }
+      },
+    );
+
+    expect(resolveCalls, 2);
+    expect(downloadCalls, 2);
+    expect(downloaded?.url, 'https://media.example/2.mp3');
+  });
+
+  test('fresh-link download does not re-resolve after another HTTP failure',
+      () async {
+    var resolveCalls = 0;
+
+    await expectLater(
+      downloadWithFreshLinkRetry(
+        resolve: () async {
+          resolveCalls++;
+          return PlayUrlResult(
+            url: 'https://media.example/one.mp3',
+            requestedQuality: 'flac',
+            actualQuality: '320k',
+            platform: 'tx',
+          );
+        },
+        download: (_) async {
+          throw DioException(
+            requestOptions: RequestOptions(path: '/failed'),
+            response: Response(
+              requestOptions: RequestOptions(path: '/failed'),
+              statusCode: 500,
+            ),
+          );
+        },
+      ),
+      throwsA(isA<DioException>()),
+    );
+    expect(resolveCalls, 1);
   });
 }

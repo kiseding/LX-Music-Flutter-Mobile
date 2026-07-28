@@ -14,6 +14,29 @@ import '../../../core/storage/storage_service.dart';
 import '../../player/domain/music_item.dart';
 import 'download_task.dart';
 
+Future<PlayUrlResult?> downloadWithFreshLinkRetry({
+  required Future<PlayUrlResult?> Function() resolve,
+  required Future<void> Function(PlayUrlResult result) download,
+}) async {
+  for (var attempt = 0; attempt < 2; attempt++) {
+    final result = await resolve();
+    if (result == null) return null;
+    try {
+      await download(result);
+      return result;
+    } on DioException catch (error) {
+      final status = error.response?.statusCode;
+      final expired = status == 401 ||
+          status == 403 ||
+          status == 404 ||
+          status == 410 ||
+          status == 416;
+      if (!expired || attempt == 1) rethrow;
+    }
+  }
+  return null;
+}
+
 class DownloadService {
   final Dio _dio;
   final List<DownloadTask> _tasks = [];
@@ -162,72 +185,59 @@ class DownloadService {
       final preferred = (latest.quality == null || latest.quality!.isEmpty)
           ? '320k'
           : latest.quality!;
-      final qualities = MusicSourceService.qualityChain(preferred);
-      // 每个音质最多「解析 + 下载」；403/401/410 时换下一音质并重新解析
-      DioException? lastHttpError;
       var completedOk = false;
-
-      for (final q in qualities) {
-        if (cancelToken.isCancelled) break;
-        final resolved = await _resolveFreshUrl(
+      final resolved = await downloadWithFreshLinkRetry(
+        resolve: () => _resolveFreshUrl(
           music,
-          q,
+          preferred,
           cancelToken: cancelToken,
-        );
-        if (resolved == null) continue;
-
-        final downloadUrl = normalizeOutboundUrl(resolved.url);
-        _updateTask(
-          task.id,
-          url: resolved.url,
-          quality: resolved.actualQuality,
-          progress: 0.0,
-        );
-        debugPrint(
-          '[DownloadService] fetch q=${resolved.actualQuality} '
-          'host=${Uri.tryParse(downloadUrl)?.host}',
-        );
-
-        try {
-          await _dio.download(
-            downloadUrl,
-            partPath,
-            cancelToken: cancelToken,
-            onReceiveProgress: (received, total) {
-              if (total > 0) {
-                _updateTask(task.id, progress: received / total);
-              }
-            },
-            options: Options(
-              headers: _downloadHeaders(downloadUrl, resolved.platform),
-              responseType: ResponseType.bytes,
-              receiveTimeout: const Duration(minutes: 5),
-              sendTimeout: const Duration(seconds: 30),
-              followRedirects: true,
-              validateStatus: (s) => s != null && s >= 200 && s < 400,
-            ),
+        ),
+        download: (resolved) async {
+          final downloadUrl = normalizeOutboundUrl(resolved.url);
+          _updateTask(
+            task.id,
+            url: resolved.url,
+            quality: resolved.actualQuality,
+            progress: 0.0,
           );
-        } on DioException catch (e) {
-          await _safeDelete(partPath);
-          if (CancelToken.isCancel(e)) rethrow;
-          lastHttpError = e;
-          final code = e.response?.statusCode;
           debugPrint(
-            '[DownloadService] HTTP fail q=$q code=$code → 重新解析下一音质',
+            '[DownloadService] fetch q=${resolved.actualQuality} '
+            'host=${Uri.tryParse(downloadUrl)?.host}',
           );
-          // 403/401/410/404：链过期或无权，换音质重新要链
-          if (code == 403 ||
-              code == 401 ||
-              code == 410 ||
-              code == 404 ||
-              code == 416) {
-            continue;
-          }
-          // 其它 HTTP 错误也试下一音质
-          if (code != null) continue;
-          rethrow;
-        }
 
+          try {
+            await _dio.download(
+              downloadUrl,
+              partPath,
+              cancelToken: cancelToken,
+              onReceiveProgress: (received, total) {
+                if (total > 0) {
+                  _updateTask(task.id, progress: received / total);
+                }
+              },
+              options: Options(
+                headers: _downloadHeaders(downloadUrl, resolved.platform),
+                responseType: ResponseType.bytes,
+                receiveTimeout: const Duration(minutes: 5),
+                sendTimeout: const Duration(seconds: 30),
+                followRedirects: true,
+                validateStatus: (s) => s != null && s >= 200 && s < 400,
+              ),
+            );
+          } on DioException catch (e) {
+            await _safeDelete(partPath);
+            if (CancelToken.isCancel(e)) rethrow;
+            debugPrint(
+              '[DownloadService] HTTP fail q=${resolved.actualQuality} '
+              'code=${e.response?.statusCode}',
+            );
+            rethrow;
+          }
+        },
+      );
+
+      if (resolved != null) {
+        final downloadUrl = normalizeOutboundUrl(resolved.url);
         final after = _taskById(task.id);
         if (after == null ||
             after.status == DownloadStatus.paused ||
@@ -239,67 +249,53 @@ class DownloadService {
         final part = File(partPath);
         if (!await part.exists() || await part.length() == 0) {
           await _safeDelete(partPath);
-          continue;
-        }
-        if (await part.length() < 2048) {
+        } else if (await part.length() < 2048) {
           await _safeDelete(partPath);
-          continue;
+        } else {
+          final header = await part.openRead(0, 64).fold<List<int>>(
+            <int>[],
+            (all, chunk) => all..addAll(chunk),
+          );
+          if (_looksLikeNonAudio(header)) {
+            await _safeDelete(partPath);
+          } else {
+            final urlExt = _guessExt(downloadUrl);
+            final qualityExt = _qualityExt(resolved.actualQuality);
+            final detectedExt = PlaybackCacheService.extensionFromBytes(
+              header,
+              fallback: urlExt == '.audio' ? qualityExt : urlExt,
+            );
+            if (detectedExt == '.audio') {
+              await _safeDelete(partPath);
+            } else {
+              final savePath = '$_downloadDir/$baseName$detectedExt';
+              final out = File(savePath);
+              if (await out.exists()) await out.delete();
+              await _promotePartFile(part, savePath);
+              await _cleanupSiblingFiles(baseName, keep: savePath);
+
+              final size = await File(savePath).length();
+              _updateTask(
+                task.id,
+                status: DownloadStatus.completed,
+                progress: 1.0,
+                savePath: savePath,
+                completedAt: DateTime.now(),
+                fileSize: size,
+                errorMsg: '',
+              );
+              completedOk = true;
+            }
+          }
         }
-
-        final header = await part.openRead(0, 64).fold<List<int>>(
-          <int>[],
-          (all, chunk) => all..addAll(chunk),
-        );
-        if (_looksLikeNonAudio(header)) {
-          await _safeDelete(partPath);
-          continue;
-        }
-
-        final urlExt = _guessExt(downloadUrl);
-        final qualityExt = _qualityExt(resolved.actualQuality);
-        final detectedExt = PlaybackCacheService.extensionFromBytes(
-          header,
-          fallback: urlExt == '.audio' ? qualityExt : urlExt,
-        );
-        if (detectedExt == '.audio') {
-          await _safeDelete(partPath);
-          continue;
-        }
-
-        final savePath = '$_downloadDir/$baseName$detectedExt';
-        final out = File(savePath);
-        if (await out.exists()) await out.delete();
-        await _promotePartFile(part, savePath);
-        await _cleanupSiblingFiles(baseName, keep: savePath);
-
-        final size = await File(savePath).length();
-        _updateTask(
-          task.id,
-          status: DownloadStatus.completed,
-          progress: 1.0,
-          savePath: savePath,
-          completedAt: DateTime.now(),
-          fileSize: size,
-          errorMsg: '',
-        );
-        completedOk = true;
-        break;
       }
 
       if (!completedOk) {
-        if (lastHttpError != null) {
-          _updateTask(
-            task.id,
-            status: DownloadStatus.failed,
-            errorMsg: _dioErrorMessage(lastHttpError),
-          );
-        } else {
-          _updateTask(
-            task.id,
-            status: DownloadStatus.failed,
-            errorMsg: '无法获取下载链接',
-          );
-        }
+        _updateTask(
+          task.id,
+          status: DownloadStatus.failed,
+          errorMsg: '无法获取下载链接',
+        );
       }
     } on DioException catch (e) {
       await _safeDelete(partPath);
@@ -364,11 +360,18 @@ class DownloadService {
         meta: music.meta,
       );
       final result = await _musicSourceService!
-          .getPlayUrlDetailed(clean, quality: quality)
+          .resolvePlayableUrl(
+            clean,
+            preferredQuality: quality,
+            cancelToken: cancelToken,
+          )
           .timeout(const Duration(seconds: 25));
       if (result != null && isPlayableMediaUrl(result.url)) {
         return result;
       }
+    } on DioException catch (e) {
+      if (CancelToken.isCancel(e)) rethrow;
+      debugPrint('[DownloadService] resolve q=$quality failed: $e');
     } catch (e) {
       debugPrint('[DownloadService] resolve q=$quality failed: $e');
     }
