@@ -397,6 +397,122 @@ void main() {
     expect(player.playing, isFalse);
     expect(player.sourceLoadCalls, loadsAfterRemoval);
   });
+
+  test('older stale install cannot stop a newer authoritative install',
+      () async {
+    MediaItem item(String id) => MediaItem(
+          id: id,
+          title: id,
+          extras: {
+            'url': 'file:///tmp/$id.mp3',
+            'requestedQuality': '320k',
+          },
+        );
+    await handler.updateQueue([item('A'), item('B')]);
+    final olderGate = player.queueSourceLoadGate();
+    final olderLoad = handler.skipToQueueItem(0);
+    await olderGate.started.future;
+    final newerGate = player.queueSourceLoadGate();
+    final newerLoad = handler.skipToQueueItem(1);
+    await newerGate.started.future;
+    newerGate.release.complete();
+    await newerLoad;
+    final stopsAfterNewer = player.stopCalls;
+
+    olderGate.release.complete();
+    await olderLoad;
+
+    expect(player.stopCalls, stopsAfterNewer);
+    expect(player.playing, isTrue);
+    expect((player.loadedSource as ProgressiveAudioSource).tag.id, 'B');
+    expect(handler.mediaItem.value?.id, 'B');
+  });
+
+  test('stale non-recovering install cannot stop a newer source', () async {
+    MediaItem item(String id) => MediaItem(
+          id: id,
+          title: id,
+          extras: {
+            'url': 'file:///tmp/$id.mp3',
+            'requestedQuality': '320k',
+          },
+        );
+    await handler.updateQueue([item('A'), item('B'), item('C')]);
+    final staleGate = player.queueSourceLoadGate();
+    final staleLoad = handler.skipToQueueItem(1);
+    await staleGate.started.future;
+    final recoveryGate = player.queueSourceLoadGate();
+    await handler.updateQueue([item('A'), item('C')]);
+    staleGate.release.complete();
+    await recoveryGate.started.future;
+    final newerGate = player.queueSourceLoadGate();
+    final newerLoad = handler.skipToQueueItem(1);
+    await newerGate.started.future;
+    newerGate.release.complete();
+    await newerLoad;
+    final stopsAfterNewer = player.stopCalls;
+
+    recoveryGate.release.complete();
+    await staleLoad;
+
+    expect(player.stopCalls, stopsAfterNewer);
+    expect(player.playing, isTrue);
+    expect((player.loadedSource as ProgressiveAudioSource).tag.id, 'C');
+    expect(handler.mediaItem.value?.id, 'C');
+  });
+
+  test('explicit same-item selection wins during paused removal load',
+      () async {
+    MediaItem item(String id) => MediaItem(
+          id: id,
+          title: id,
+          extras: {
+            'url': 'file:///tmp/$id.mp3',
+            'requestedQuality': '320k',
+          },
+        );
+    final current = item('B');
+    await handler.updateQueue([item('A'), current, item('C')]);
+    await handler.skipToQueueItem(1);
+    await handler.pause();
+    final removalGate = player.queueSourceLoadGate();
+    final removal = handler.removeQueueItem(current);
+    await removalGate.started.future;
+
+    await handler.skipToQueueItem(1);
+    removalGate.release.complete();
+    await removal;
+
+    expect(player.playing, isTrue);
+    expect((player.loadedSource as ProgressiveAudioSource).tag.id, 'C');
+    expect(handler.mediaItem.value?.id, 'C');
+  });
+
+  test('explicit terminal next wins during paused removal load', () async {
+    MediaItem item(String id) => MediaItem(
+          id: id,
+          title: id,
+          extras: {
+            'url': 'file:///tmp/$id.mp3',
+            'requestedQuality': '320k',
+          },
+        );
+    final current = item('B');
+    await handler.updateQueue([item('A'), current]);
+    await handler.skipToQueueItem(1);
+    await handler.pause();
+    final removalGate = player.queueSourceLoadGate();
+    final removal = handler.removeQueueItem(current);
+    await removalGate.started.future;
+
+    await handler.skipToNext();
+    removalGate.release.complete();
+    await removal;
+
+    expect(player.playing, isTrue);
+    expect((player.loadedSource as ProgressiveAudioSource).tag.id, 'A');
+    expect(handler.mediaItem.value?.id, 'A');
+  });
 }
 
 class _RecordingAudioPlayer extends AudioPlayer {
@@ -406,8 +522,10 @@ class _RecordingAudioPlayer extends AudioPlayer {
   Completer<void>? _releasePause;
   Completer<void>? _sourceLoadStarted;
   Completer<void>? _releaseSourceLoad;
+  final _sourceLoadGates = <_SourceLoadGate>[];
   int playCalls = 0;
   int sourceLoadCalls = 0;
+  int stopCalls = 0;
   final playedSourceIds = <String>[];
 
   Completer<void> get pauseStarted => _pauseStarted!;
@@ -425,6 +543,12 @@ class _RecordingAudioPlayer extends AudioPlayer {
     _releaseSourceLoad = Completer<void>();
   }
 
+  _SourceLoadGate queueSourceLoadGate() {
+    final gate = _SourceLoadGate();
+    _sourceLoadGates.add(gate);
+    return gate;
+  }
+
   @override
   AudioSource? get audioSource => loadedSource;
 
@@ -440,6 +564,12 @@ class _RecordingAudioPlayer extends AudioPlayer {
   }) async {
     sourceLoadCalls++;
     loadedSource = source;
+    final queuedGate =
+        _sourceLoadGates.isEmpty ? null : _sourceLoadGates.removeAt(0);
+    if (queuedGate != null) {
+      queuedGate.started.complete();
+      await queuedGate.release.future;
+    }
     final started = _sourceLoadStarted;
     final release = _releaseSourceLoad;
     if (started != null && release != null) {
@@ -476,6 +606,12 @@ class _RecordingAudioPlayer extends AudioPlayer {
 
   @override
   Future<void> stop() async {
+    stopCalls++;
     _playing = false;
   }
+}
+
+class _SourceLoadGate {
+  final started = Completer<void>();
+  final release = Completer<void>();
 }
