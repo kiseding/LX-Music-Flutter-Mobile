@@ -1,16 +1,16 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' show ZLibCodec;
-import 'dart:math';
+import 'dart:io' show HttpClient, Socket, ZLibCodec;
 import 'package:flutter/foundation.dart';
 import 'package:flutter_js/flutter_js.dart';
 import 'package:dio/dio.dart';
+import 'package:dio/io.dart';
 import 'package:crypto/crypto.dart';
 import 'package:uuid/uuid.dart';
 import 'package:encrypt/encrypt.dart' as encrypt_lib;
 import 'package:pointycastle/export.dart' as pc;
 import 'lx_source_capabilities.dart';
-import '../../../core/network/app_http_client.dart';
+import '../../../core/network/source_request_policy.dart';
 import '../domain/custom_source.dart';
 import '../../player/domain/music_item.dart';
 
@@ -53,7 +53,7 @@ List<String> ensureMusicInfoTypes(Map<String, dynamic> meta, String type) {
 
 class CustomSourceEngine {
   JavascriptRuntime? _runtime;
-  late final Dio _dio;
+  late final SourceRequestSandbox _requestSandbox;
   CustomSource? _currentSource;
   bool _initialized = false;
 
@@ -65,18 +65,19 @@ class CustomSourceEngine {
       StreamController<Map<String, dynamic>>.broadcast();
 
   final Map<String, Completer<dynamic>> _pendingRequests = {};
-  final Map<String, CancelToken> _httpCancellations = {};
+  final Map<String, SourceRequestCancellation> _httpCancellations = {};
   Completer<void>? _initCompleter;
   LxSourceCapabilities _capabilities = LxSourceCapabilities.fromInitData(null);
   final List<Map<String, dynamic>> _deferredMessages = [];
   Future<void> Function(dynamic)? _handleLxRequest;
 
-  CustomSourceEngine() {
-    _dio = AppHttpClient.create(
-      options: BaseOptions(
-        connectTimeout: const Duration(seconds: 10),
-        receiveTimeout: const Duration(seconds: 15),
-      ),
+  CustomSourceEngine({
+    SourceRequestPolicy? requestPolicy,
+    SourceTransport? requestTransport,
+  }) {
+    _requestSandbox = SourceRequestSandbox(
+      policy: requestPolicy ?? SourceRequestPolicy(),
+      transport: requestTransport ?? _sendPinnedRequest,
     );
   }
 
@@ -253,25 +254,24 @@ class CustomSourceEngine {
           queryParams = Map<String, dynamic>.from(options['params']);
         }
 
-        final cancelToken = CancelToken();
-        _httpCancellations[callbackId] = cancelToken;
+        final cancellation = SourceRequestCancellation();
+        _httpCancellations[callbackId] = cancellation;
         final response = await _makeHttpRequest(
           url,
           options,
           isBinary: isBinary,
           queryParams: queryParams,
-          cancelToken: cancelToken,
+          cancellation: cancellation,
         );
         _httpCancellations.remove(callbackId);
 
-        final rawBytes = response.data is List<int>
-            ? List<int>.from(response.data as List<int>)
-            : utf8.encode(response.data?.toString() ?? '');
+        final rawBytes = response.bytes;
         dynamic body = utf8.decode(rawBytes, allowMalformed: true);
         if (!isBinary) {
           // 优化 JSON 自动解析逻辑
           final contentType =
-              response.headers.value('content-type')?.toLowerCase() ?? '';
+              _headerValue(response.headers, 'content-type')?.toLowerCase() ??
+                  '';
           if (options['json'] == true ||
               contentType.contains('application/json') ||
               (body is String && body.trim().startsWith('{'))) {
@@ -305,12 +305,11 @@ class CustomSourceEngine {
               null,
               {
                 'statusCode': response.statusCode,
-                'statusMessage': response.statusMessage ?? '',
+                'statusMessage': response.statusMessage,
                 'body': body,
                 'headers': flatHeaders,
                 'bytes': rawBytes.length,
                 'responseRaw': base64Encode(rawBytes),
-                'rawData': base64Encode(rawBytes),
               },
               body,
             ],
@@ -647,9 +646,7 @@ class CustomSourceEngine {
                 if (res && res.responseRaw) {
                   res.responseRaw = globalThis.lx.utils.buffer.from(res.responseRaw, 'base64');
                 }
-                if (res && res.rawData) {
-                  res.rawData = globalThis.lx.utils.buffer.from(res.rawData, 'base64');
-                }
+                if (res) res.rawData = res.responseRaw;
                 if (res && options.binary) {
                   res.body = res.responseRaw;
                   body = res.responseRaw;
@@ -1555,12 +1552,12 @@ class CustomSourceEngine {
     }
   }
 
-  Future<Response> _makeHttpRequest(
+  Future<SourceRequestResponse> _makeHttpRequest(
     String url,
     Map<String, dynamic> options, {
     bool isBinary = false,
     Map<String, dynamic>? queryParams,
-    CancelToken? cancelToken,
+    SourceRequestCancellation? cancellation,
   }) async {
     final method = (options['method'] as String?)?.toUpperCase() ?? 'GET';
     final headers = <String, dynamic>{};
@@ -1603,28 +1600,99 @@ class CustomSourceEngine {
       }
     }
 
-    final requestedTimeout = options['timeout'];
-    final timeoutMilliseconds =
-        requestedTimeout is num ? requestedTimeout.toInt() : 15000;
-    final timeout =
-        Duration(milliseconds: min(max(timeoutMilliseconds, 1), 60000));
-
-    final dioOptions = Options(
-      method: method,
-      headers: headers,
-      responseType: ResponseType.bytes,
-      validateStatus: (status) => true,
-      sendTimeout: timeout,
-      receiveTimeout: timeout,
+    final uri = Uri.parse(url).replace(
+      queryParameters: queryParams == null
+          ? null
+          : {...Uri.parse(url).queryParameters, ...queryParams},
     );
-
-    return _dio.request(
-      url,
-      data: body,
-      queryParameters: queryParams,
-      options: dioOptions,
-      cancelToken: cancelToken,
+    return _requestSandbox.request(
+      uri,
+      {
+        ...options,
+        'method': method,
+        'headers': headers,
+        'body': body,
+      },
+      cancellation: cancellation,
     );
+  }
+
+  static Future<SourceTransportResponse> _sendPinnedRequest(
+    ValidatedSourceRequest request,
+    SourceRequestCancellation cancellation,
+  ) async {
+    final cancelToken = CancelToken();
+    cancellation.future.then((reason) => cancelToken.cancel(reason));
+    var nextAddress = 0;
+    final dio = Dio();
+    dio.httpClientAdapter = IOHttpClientAdapter(
+      createHttpClient: () {
+        final client = HttpClient();
+        client.connectionFactory = (uri, proxyHost, proxyPort) {
+          if (proxyHost != null) {
+            throw const SourceRequestPolicyException(
+              'proxy_blocked',
+              'Proxy connections are not allowed',
+            );
+          }
+          final address =
+              request.addresses[nextAddress % request.addresses.length];
+          nextAddress++;
+          return Socket.startConnect(address, uri.port);
+        };
+        return client;
+      },
+    );
+    try {
+      final response = await dio.request<dynamic>(
+        request.uri.toString(),
+        data: request.body,
+        options: Options(
+          method: request.method,
+          headers: request.headers,
+          responseType: ResponseType.stream,
+          followRedirects: false,
+          maxRedirects: 0,
+          validateStatus: (_) => true,
+          sendTimeout: request.timeout,
+          receiveTimeout: request.timeout,
+        ),
+        cancelToken: cancelToken,
+      );
+      final responseBody = response.data as ResponseBody;
+      final body = (() async* {
+        try {
+          await for (final chunk in responseBody.stream) {
+            yield chunk;
+          }
+        } finally {
+          dio.close(force: true);
+        }
+      })();
+      final responseHeaders = <String, List<String>>{};
+      response.headers.forEach((name, values) {
+        responseHeaders[name] = List.unmodifiable(values);
+      });
+      return SourceTransportResponse(
+        statusCode: response.statusCode,
+        statusMessage: response.statusMessage ?? '',
+        headers: responseHeaders,
+        body: body,
+        close: () => dio.close(force: true),
+      );
+    } catch (_) {
+      dio.close(force: true);
+      rethrow;
+    }
+  }
+
+  String? _headerValue(Map<String, List<String>> headers, String name) {
+    for (final entry in headers.entries) {
+      if (entry.key.toLowerCase() == name.toLowerCase()) {
+        return entry.value.join(', ');
+      }
+    }
+    return null;
   }
 
   String _redactUrl(String? url) {
@@ -1640,6 +1708,5 @@ class CustomSourceEngine {
     _runtime?.dispose();
     _runtime = null;
     _initialized = false;
-    _dio.close();
   }
 }

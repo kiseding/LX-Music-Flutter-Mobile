@@ -13,7 +13,10 @@ void main() {
     expect(bridge, contains('groupEnd: function() {}'));
 
     // lx.on('request') 支持多 handler 数组，便于旧脚本注册多个 request 处理器。
-    expect(bridge, contains("globalThis._requestHandlers = globalThis._requestHandlers || [];"));
+    expect(
+        bridge,
+        contains(
+            "globalThis._requestHandlers = globalThis._requestHandlers || [];"));
     expect(bridge, contains('globalThis._requestHandlers.push(handler);'));
 
     // lx.request 按 callback.length 做 arity 嗅探。
@@ -30,13 +33,16 @@ void main() {
     expect(bridge, contains('The event is not supported:'));
     expect(bridge, contains("'statusMessage':"));
     expect(bridge, contains("'responseRaw':"));
-    expect(bridge, contains("'rawData':"));
+    expect(bridge, contains('res.rawData = res.responseRaw;'));
+    expect(bridge, isNot(contains("'rawData': base64Encode")));
     expect(bridge, contains("'bytes':"));
     expect(bridge, contains('lx_request_cancel'));
+    expect(bridge, contains('SourceRequestSandbox'));
     expect(bridge, contains('_supportsAction'));
     expect(bridge, contains('_validateCapabilities'));
     // _callRequestEvent 现在迭代 handler 数组，第一个非空返回即胜出。
-    expect(bridge, contains('var handlers = globalThis._requestHandlers || [];'));
+    expect(
+        bridge, contains('var handlers = globalThis._requestHandlers || [];'));
     expect(bridge, contains("handlers.length === 0"));
     expect(bridge, contains('for (var i = 0; i < handlers.length; i++)'));
 
