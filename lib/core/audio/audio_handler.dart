@@ -76,6 +76,25 @@ int nextQueueIndex({
   return loop ? 0 : -1;
 }
 
+int completionQueueIndex({
+  required int currentIndex,
+  required int queueLength,
+  required AudioServiceRepeatMode repeatMode,
+  required bool shuffle,
+  int Function(int max)? randomNext,
+}) {
+  if (queueLength <= 0) return -1;
+  if (repeatMode == AudioServiceRepeatMode.one) return currentIndex;
+  return nextQueueIndex(
+    currentIndex: currentIndex,
+    queueLength: queueLength,
+    shuffle: shuffle,
+    loop: repeatMode == AudioServiceRepeatMode.all ||
+        repeatMode == AudioServiceRepeatMode.group,
+    randomNext: randomNext,
+  );
+}
+
 int previousQueueIndex({
   required int currentIndex,
   required int queueLength,
@@ -145,10 +164,8 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   int _sourceInstallToken = 0;
   int _installedSourceOwnerToken = 0;
   Future<void> _sourceMutationTail = Future<void>.value();
-  bool _handlingCompleted = false;
-
-  /// >0 时忽略 completed / currentIndex 自动推进（换源、点选切歌期间）
-  int _suppressAutoAdvance = 0;
+  int _installedPlaybackGeneration = -1;
+  int _lastHandledCompletionGeneration = -1;
   String? _activeItemId;
 
   // 注入 URL 解析器
@@ -227,84 +244,54 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     // 锁屏/后台时绝不能先 pause + playing:false：iOS 会结束后台音频会话。
     _player.processingStateStream.listen((state) {
       if (state != ProcessingState.completed) return;
-      _onTrackCompleted('processingState');
-    });
-
-    // 锁屏兜底：仅在「已到/超过时长」时触发，避免提前 400ms 切歌造成竞态
-    _player.positionStream.listen((pos) {
-      if (_handlingCompleted || _suppressAutoAdvance > 0) return;
-      if (!_userWantsPlay) return;
-      final dur = _player.duration;
-      if (dur == null || dur < const Duration(seconds: 2)) return;
-      if (pos >= dur - const Duration(milliseconds: 80)) {
-        _onTrackCompleted('position-end');
-      }
-    });
-
-    // 自然切到下一索引时同步 UI；点选/setSource 期间不跟
-    _player.currentIndexStream.listen((index) async {
-      if (_suppressAutoAdvance > 0) return;
-      if (index == null || index == _currentIndex) return;
-      if (index < 0 || index >= _queue.length) return;
-      final gen = _playGeneration;
-      _currentIndex = index;
-      final item = _queue[index];
-      mediaItem.add(item);
-      final url = item.extras?['url']?.toString() ?? '';
-      if (url.isEmpty || url.startsWith('data:')) {
-        if (!_isStale(gen)) {
-          await _loadQueueItem(index, preserveUserIntent: true);
-        }
-      }
+      _onTrackCompleted();
     });
   }
 
-  void _onTrackCompleted([String reason = '']) {
-    if (_handlingCompleted || _suppressAutoAdvance > 0) return;
+  void _onTrackCompleted() {
     // 自动连播视为用户仍要听：拖进度 pause 不 clearIntent 时仍可连播
-    if (!_userWantsPlay && reason != 'force') return;
+    if (!_userWantsPlay) return;
     if (_queue.isEmpty) return;
-    if (_queue.length <= 1 &&
-        playbackState.value.repeatMode == AudioServiceRepeatMode.none &&
-        playbackState.value.repeatMode != AudioServiceRepeatMode.one &&
-        !_player.shuffleModeEnabled &&
-        playbackState.value.shuffleMode != AudioServiceShuffleMode.all) {
-      return;
-    }
-    _handlingCompleted = true;
-    final gen = _playGeneration;
+    if (_installedPlaybackGeneration != _playGeneration) return;
+    final gen = _installedPlaybackGeneration;
+    if (_lastHandledCompletionGeneration == gen) return;
     final expectedId = _activeItemId;
     final expectedIndex = _currentIndex;
-    debugPrint('[AudioHandler] track completed ($reason) idx=$expectedIndex');
+    if (expectedId == null ||
+        expectedIndex < 0 ||
+        expectedIndex >= _queue.length ||
+        _queue[expectedIndex].id != expectedId ||
+        mediaItem.value?.id != expectedId) {
+      return;
+    }
+    _lastHandledCompletionGeneration = gen;
+    final shuffle = _player.shuffleModeEnabled ||
+        playbackState.value.shuffleMode == AudioServiceShuffleMode.all;
+    final target = completionQueueIndex(
+      currentIndex: expectedIndex,
+      queueLength: _queue.length,
+      repeatMode: playbackState.value.repeatMode,
+      shuffle: shuffle,
+    );
+    if (target < 0) return;
+    debugPrint(
+        '[AudioHandler] track completed idx=$expectedIndex target=$target');
     Future(() async {
       try {
-        if (_isStale(gen) || _suppressAutoAdvance > 0) return;
-        if (expectedId != null &&
-            _activeItemId != null &&
-            _activeItemId != expectedId &&
-            _currentIndex != expectedIndex) {
+        if (_isStale(gen) ||
+            _activeItemId != expectedId ||
+            _currentIndex != expectedIndex ||
+            expectedIndex >= _queue.length ||
+            _queue[expectedIndex].id != expectedId ||
+            mediaItem.value?.id != expectedId) {
           return;
         }
         _userWantsPlay = true; // 自动下一首：恢复意图
-        await _skipToNextInternal(seamless: true);
+        await skipToQueueItem(target, seamless: true);
       } catch (e) {
         debugPrint('[AudioHandler] auto-next failed: $e');
-      } finally {
-        _handlingCompleted = false;
       }
     });
-  }
-
-  Future<T> _withAutoAdvanceSuppressed<T>(Future<T> Function() op) async {
-    _suppressAutoAdvance++;
-    try {
-      return await op();
-    } finally {
-      // 延后解除：setAudioSource 后 completed 尾随更长，锁屏下更明显
-      Future<void>.delayed(const Duration(milliseconds: 450), () {
-        if (_suppressAutoAdvance > 0) _suppressAutoAdvance--;
-      });
-    }
   }
 
   // 将播放状态广播给系统控制中心
@@ -609,130 +596,128 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     _currentIndex = index;
     mediaItem.add(item);
 
-    await _withAutoAdvanceSuppressed(() async {
-      try {
-        String? url = currentUrl;
+    try {
+      String? url = currentUrl;
 
-        if (url == null || url.isEmpty) {
-          if (urlResolver != null) {
-            // seamless 连播时保持 playing=true，只标 buffering，避免锁屏杀会话
-            playbackState.add(playbackState.value.copyWith(
-              processingState: AudioProcessingState.buffering,
-              playing: seamless ? true : playbackState.value.playing,
-            ));
-            // 强制按当前 preferredQuality 重新解析，忽略过期的 extras.url
-            final resolveExtras = item.extras == null
-                ? <String, dynamic>{}
-                : Map<String, dynamic>.from(item.extras!);
-            resolveExtras.remove('url');
-            resolveExtras.remove('remoteUrl');
-            resolveExtras['requestedQuality'] = preferredQuality;
-            url = await urlResolver!(item.id, resolveExtras);
-          }
+      if (url == null || url.isEmpty) {
+        if (urlResolver != null) {
+          // seamless 连播时保持 playing=true，只标 buffering，避免锁屏杀会话
+          playbackState.add(playbackState.value.copyWith(
+            processingState: AudioProcessingState.buffering,
+            playing: seamless ? true : playbackState.value.playing,
+          ));
+          // 强制按当前 preferredQuality 重新解析，忽略过期的 extras.url
+          final resolveExtras = item.extras == null
+              ? <String, dynamic>{}
+              : Map<String, dynamic>.from(item.extras!);
+          resolveExtras.remove('url');
+          resolveExtras.remove('remoteUrl');
+          resolveExtras['requestedQuality'] = preferredQuality;
+          url = await urlResolver!(item.id, resolveExtras);
         }
+      }
 
-        var transactionIndex = activeItemIndex();
+      var transactionIndex = activeItemIndex();
+      if (transactionIndex < 0) return;
+      final refreshed = _queue[transactionIndex].extras?['url']?.toString();
+      if ((url == null || url.isEmpty) &&
+          refreshed != null &&
+          refreshed.isNotEmpty &&
+          !refreshed.startsWith('data:')) {
+        url = refreshed;
+      }
+
+      if (url == null || url.isEmpty) {
+        if (_player.playing) {
+          await _player.pause();
+        }
+        transactionIndex = activeItemIndex();
         if (transactionIndex < 0) return;
-        final refreshed = _queue[transactionIndex].extras?['url']?.toString();
-        if ((url == null || url.isEmpty) &&
-            refreshed != null &&
-            refreshed.isNotEmpty &&
-            !refreshed.startsWith('data:')) {
-          url = refreshed;
-        }
-
-        if (url == null || url.isEmpty) {
-          if (_player.playing) {
-            await _player.pause();
-          }
+        debugPrint('[AudioHandler] 无法获取播放链接: ${item.title} id=${item.id}');
+        onError?.call('无法解析歌曲 "${item.title}" 的播放地址（源无效地址或本地缓存失败，已尝试降级音质）');
+        if (_queue.length > 1 && _currentIndex == transactionIndex) {
+          await Future.delayed(const Duration(seconds: 5));
           transactionIndex = activeItemIndex();
-          if (transactionIndex < 0) return;
-          debugPrint('[AudioHandler] 无法获取播放链接: ${item.title} id=${item.id}');
-          onError?.call('无法解析歌曲 "${item.title}" 的播放地址（源无效地址或本地缓存失败，已尝试降级音质）');
-          if (_queue.length > 1 && _currentIndex == transactionIndex) {
-            await Future.delayed(const Duration(seconds: 5));
-            transactionIndex = activeItemIndex();
-            if (transactionIndex >= 0 && _currentIndex == transactionIndex) {
-              await _skipToNextInternal();
-            }
+          if (transactionIndex >= 0 && _currentIndex == transactionIndex) {
+            await _skipToNextInternal();
           }
+        }
+        return;
+      }
+
+      final baseExtras =
+          Map<String, dynamic>.from(_queue[transactionIndex].extras ?? {});
+      baseExtras['url'] = url;
+      baseExtras['requestedQuality'] =
+          baseExtras['requestedQuality']?.toString() ?? preferredQuality;
+      // urlResolver 可能已把 actualQuality/remoteUrl 写到 mediaItem，合并回来
+      // 避免被队列 extras 覆盖后播放器只能显示请求音质。
+      final live = mediaItem.value;
+      if (live != null && live.id == itemId && live.extras != null) {
+        final le = live.extras!;
+        final aq = le['actualQuality']?.toString();
+        final remote = le['remoteUrl']?.toString();
+        final rq = le['requestedQuality']?.toString();
+        final plat = le['platform']?.toString();
+        if (aq != null && aq.isNotEmpty) baseExtras['actualQuality'] = aq;
+        if (remote != null && remote.isNotEmpty) {
+          baseExtras['remoteUrl'] = remote;
+        }
+        if (rq != null && rq.isNotEmpty) {
+          baseExtras['requestedQuality'] = rq;
+        }
+        if (plat != null && plat.isNotEmpty) baseExtras['platform'] = plat;
+      }
+      final updatedItem = _queue[transactionIndex].copyWith(extras: baseExtras);
+      _queue[transactionIndex] = updatedItem;
+      queue.add(List.from(_queue));
+      mediaItem.add(updatedItem);
+      _activeItemId = itemId;
+
+      // URL 解析在锁外；共享 player source 的安装和恢复停止串行执行。
+      if (_isStale(gen)) return;
+      var recoverAuthoritative = false;
+      await _withSourceMutation(() async {
+        transactionIndex = activeItemIndex();
+        if (transactionIndex < 0) return;
+        final installToken = ++_sourceInstallToken;
+        _installedSourceOwnerToken = installToken;
+        await _player.setAudioSource(
+          audioSourceFor(url!, tag: updatedItem),
+          initialPosition: Duration.zero,
+        );
+        if (_installedSourceOwnerToken != installToken) return;
+        transactionIndex = activeItemIndex();
+        if (transactionIndex < 0) {
+          await _player.stop();
+          recoverAuthoritative = recoverStaleInstall &&
+              _installedSourceOwnerToken == installToken &&
+              _playGeneration == gen;
           return;
         }
-
-        final baseExtras =
-            Map<String, dynamic>.from(_queue[transactionIndex].extras ?? {});
-        baseExtras['url'] = url;
-        baseExtras['requestedQuality'] =
-            baseExtras['requestedQuality']?.toString() ?? preferredQuality;
-        // urlResolver 可能已把 actualQuality/remoteUrl 写到 mediaItem，合并回来
-        // 避免被队列 extras 覆盖后播放器只能显示请求音质。
-        final live = mediaItem.value;
-        if (live != null && live.id == itemId && live.extras != null) {
-          final le = live.extras!;
-          final aq = le['actualQuality']?.toString();
-          final remote = le['remoteUrl']?.toString();
-          final rq = le['requestedQuality']?.toString();
-          final plat = le['platform']?.toString();
-          if (aq != null && aq.isNotEmpty) baseExtras['actualQuality'] = aq;
-          if (remote != null && remote.isNotEmpty) {
-            baseExtras['remoteUrl'] = remote;
-          }
-          if (rq != null && rq.isNotEmpty) {
-            baseExtras['requestedQuality'] = rq;
-          }
-          if (plat != null && plat.isNotEmpty) baseExtras['platform'] = plat;
+        _installedPlaybackGeneration = gen;
+        // seamless 自动下一首必须 play，即使 completed 后 playing 已是 false
+        if (_userWantsPlay || seamless) {
+          _userWantsPlay = true;
+          _startPlayer();
         }
-        final updatedItem =
-            _queue[transactionIndex].copyWith(extras: baseExtras);
-        _queue[transactionIndex] = updatedItem;
-        queue.add(List.from(_queue));
-        mediaItem.add(updatedItem);
-        _activeItemId = itemId;
-
-        // URL 解析在锁外；共享 player source 的安装和恢复停止串行执行。
-        if (_isStale(gen)) return;
-        var recoverAuthoritative = false;
-        await _withSourceMutation(() async {
+        if (!_isStale(gen)) _schedulePreload();
+      });
+      if (recoverAuthoritative) await _recoverAuthoritativeSource();
+    } catch (e) {
+      debugPrint('[AudioHandler] 播放失败: $e');
+      var transactionIndex = activeItemIndex();
+      if (transactionIndex >= 0 && _currentIndex == transactionIndex) {
+        onError?.call('播放歌曲 "${item.title}" 失败: $e');
+        if (_queue.length > 1) {
+          await Future.delayed(const Duration(seconds: 2));
           transactionIndex = activeItemIndex();
-          if (transactionIndex < 0) return;
-          final installToken = ++_sourceInstallToken;
-          _installedSourceOwnerToken = installToken;
-          await _player.setAudioSource(
-            audioSourceFor(url!, tag: updatedItem),
-            initialPosition: Duration.zero,
-          );
-          if (_installedSourceOwnerToken != installToken) return;
-          transactionIndex = activeItemIndex();
-          if (transactionIndex < 0) {
-            await _player.stop();
-            recoverAuthoritative = recoverStaleInstall &&
-                _installedSourceOwnerToken == installToken &&
-                _playGeneration == gen;
-            return;
-          }
-          // seamless 自动下一首必须 play，即使 completed 后 playing 已是 false
-          if (_userWantsPlay || seamless) {
-            _userWantsPlay = true;
-            _startPlayer();
-          }
-          if (!_isStale(gen)) _schedulePreload();
-        });
-        if (recoverAuthoritative) await _recoverAuthoritativeSource();
-      } catch (e) {
-        debugPrint('[AudioHandler] 播放失败: $e');
-        var transactionIndex = activeItemIndex();
-        if (transactionIndex >= 0 && _currentIndex == transactionIndex) {
-          onError?.call('播放歌曲 "${item.title}" 失败: $e');
-          if (_queue.length > 1) {
-            await Future.delayed(const Duration(seconds: 2));
-            transactionIndex = activeItemIndex();
-            if (transactionIndex >= 0 && _currentIndex == transactionIndex) {
-              await _skipToNextInternal(seamless: seamless);
-            }
+          if (transactionIndex >= 0 && _currentIndex == transactionIndex) {
+            await _skipToNextInternal(seamless: seamless);
           }
         }
       }
-    });
+    }
   }
 
   Future<void> _recoverAuthoritativeSource() async {
@@ -897,18 +882,8 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   @override
   Future<void> setRepeatMode(AudioServiceRepeatMode repeatMode) async {
     playbackState.add(playbackState.value.copyWith(repeatMode: repeatMode));
-    switch (repeatMode) {
-      case AudioServiceRepeatMode.none:
-        await _player.setLoopMode(LoopMode.off);
-        break;
-      case AudioServiceRepeatMode.all:
-      case AudioServiceRepeatMode.group:
-        await _player.setLoopMode(LoopMode.all);
-        break;
-      case AudioServiceRepeatMode.one:
-        await _player.setLoopMode(LoopMode.one);
-        break;
-    }
+    // Single-source repeat is explicit so every replay emits one completion.
+    await _player.setLoopMode(LoopMode.off);
   }
 
   @override

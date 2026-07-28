@@ -1,3 +1,4 @@
+import 'package:audio_service/audio_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lx_music_flutter/core/audio/audio_handler.dart';
 
@@ -86,6 +87,41 @@ void main() {
           loop: true,
         ),
         2,
+      );
+    });
+  });
+
+  group('completionQueueIndex', () {
+    test('repeat one completion keeps the current queue item', () {
+      expect(
+        completionQueueIndex(
+          currentIndex: 1,
+          queueLength: 3,
+          repeatMode: AudioServiceRepeatMode.one,
+          shuffle: false,
+        ),
+        1,
+      );
+    });
+
+    test('repeat all wraps while no-repeat stops', () {
+      expect(
+        completionQueueIndex(
+          currentIndex: 2,
+          queueLength: 3,
+          repeatMode: AudioServiceRepeatMode.all,
+          shuffle: false,
+        ),
+        0,
+      );
+      expect(
+        completionQueueIndex(
+          currentIndex: 2,
+          queueLength: 3,
+          repeatMode: AudioServiceRepeatMode.none,
+          shuffle: false,
+        ),
+        -1,
       );
     });
   });
