@@ -9,17 +9,21 @@ class CloudApiClient {
   static const _kUsername = 'cloud_api_username';
   static const _kRole = 'cloud_api_role';
 
-  final Dio _dio = Dio(BaseOptions(
-    connectTimeout: const Duration(seconds: 12),
-    receiveTimeout: const Duration(seconds: 30),
-    headers: {'Content-Type': 'application/json'},
-  ));
+  final Dio _dio;
 
   String? _baseUrl;
   String? _token;
   String? _username;
   String? _role;
   String? _configurationError;
+
+  CloudApiClient({Dio? dio})
+      : _dio = dio ??
+            Dio(BaseOptions(
+              connectTimeout: const Duration(seconds: 12),
+              receiveTimeout: const Duration(seconds: 30),
+              headers: {'Content-Type': 'application/json'},
+            ));
 
   String? get baseUrl => _baseUrl;
   String? get token => _token;

@@ -33,10 +33,11 @@ void main() {
     final service = SyncService(dio: dio);
     addTearDown(service.dispose);
 
-    final connected = await service.connect('  https://sync.example.com///  ');
+    final connected =
+        await service.connect('  https://sync.example.com/base///  ');
 
     expect(connected, isTrue);
-    expect(service.serverUrl, 'https://sync.example.com');
-    expect(requestedUrl, 'https://sync.example.com/api/health');
+    expect(service.serverUrl, 'https://sync.example.com/base');
+    expect(requestedUrl, 'https://sync.example.com/base/api/health');
   });
 }

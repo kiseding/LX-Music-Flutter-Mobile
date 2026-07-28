@@ -28,12 +28,17 @@ void main() {
       );
     });
 
-    test('normalizes only the path and preserves query and fragment', () {
-      expect(
-        validateHttpsServiceUrl(
-            'https://sync.example.com/base///?next=/#section/'),
-        'https://sync.example.com/base?next=/#section/',
-      );
+    test('rejects query and fragment components', () {
+      for (final value in [
+        'https://sync.example.com/base?next=/api',
+        'https://sync.example.com/base#section',
+      ]) {
+        expect(
+          () => validateHttpsServiceUrl(value),
+          throwsA(isA<ArgumentError>()),
+          reason: value,
+        );
+      }
     });
 
     test('rejects HTTP, credentials, missing hosts, and unsupported schemes',

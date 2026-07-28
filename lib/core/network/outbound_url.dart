@@ -25,6 +25,13 @@ String validateHttpsServiceUrl(String value) {
       'Server URL must not contain credentials',
     );
   }
+  if (uri.hasQuery || uri.hasFragment) {
+    throw ArgumentError.value(
+      value,
+      'url',
+      'Server URL must not contain a query or fragment',
+    );
+  }
   final normalizedPath = uri.path.replaceAll(RegExp(r'/+$'), '');
   return uri.replace(path: normalizedPath).toString();
 }
