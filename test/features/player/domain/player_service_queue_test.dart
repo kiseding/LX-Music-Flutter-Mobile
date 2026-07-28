@@ -237,6 +237,78 @@ void main() {
     expect(handler.mediaItem.value?.id, 'A');
     expect((player.loadedSource as ProgressiveAudioSource).tag.id, 'A');
   });
+
+  for (final replacementId in [null, 'D']) {
+    test(
+        'source load aborts when active item is '
+        '${replacementId == null ? 'removed' : 'replaced'}', () async {
+      MediaItem item(String id) => MediaItem(
+            id: id,
+            title: id,
+            extras: {
+              'url': 'file:///tmp/$id.mp3',
+              'requestedQuality': '320k',
+            },
+          );
+      final current = item('B');
+      await handler.updateQueue([item('A'), current, item('C')]);
+      player.gateNextSourceLoad();
+
+      final load = handler.skipToQueueItem(1);
+      await player.sourceLoadStarted.future;
+      await handler.updateQueue([
+        item('A'),
+        if (replacementId != null) item(replacementId),
+        item('C'),
+      ]);
+      player.releaseSourceLoad.complete();
+      await load;
+
+      expect(player.playCalls, 0);
+      expect(handler.mediaItem.value?.id, 'A');
+      expect(handler.queueItems.map((item) => item.id),
+          replacementId == null ? ['A', 'C'] : ['A', 'D', 'C']);
+    });
+  }
+
+  test('source load follows active item when metadata merely moves it',
+      () async {
+    MediaItem item(String id) => MediaItem(
+          id: id,
+          title: id,
+          extras: {
+            'url': 'file:///tmp/$id.mp3',
+            'requestedQuality': '320k',
+          },
+        );
+    final current = item('B');
+    await handler.updateQueue([item('A'), current, item('C')]);
+    player.gateNextSourceLoad();
+
+    final load = handler.skipToQueueItem(1);
+    await player.sourceLoadStarted.future;
+    await handler.updateQueue([current, item('A'), item('C')]);
+    player.releaseSourceLoad.complete();
+    await load;
+
+    expect(player.playCalls, 1);
+    expect(handler.currentQueueIndex, 0);
+    expect(handler.mediaItem.value?.id, 'B');
+    expect((player.loadedSource as ProgressiveAudioSource).tag.id, 'B');
+  });
+
+  test('post-load identity check guards play and preload', () {
+    final source = File('lib/core/audio/audio_handler.dart').readAsStringSync();
+    final transaction = source.substring(
+      source.indexOf('await _player.setAudioSource('),
+      source.indexOf(
+          '} catch (e) {', source.indexOf('await _player.setAudioSource(')),
+    );
+    final validation = transaction.indexOf('activeItemIndex()');
+    expect(validation, greaterThanOrEqualTo(0));
+    expect(validation, lessThan(transaction.indexOf('_startPlayer();')));
+    expect(validation, lessThan(transaction.indexOf('_schedulePreload();')));
+  });
 }
 
 class _RecordingAudioPlayer extends AudioPlayer {
@@ -244,13 +316,23 @@ class _RecordingAudioPlayer extends AudioPlayer {
   bool _playing = false;
   Completer<void>? _pauseStarted;
   Completer<void>? _releasePause;
+  Completer<void>? _sourceLoadStarted;
+  Completer<void>? _releaseSourceLoad;
+  int playCalls = 0;
 
   Completer<void> get pauseStarted => _pauseStarted!;
   Completer<void> get releasePause => _releasePause!;
+  Completer<void> get sourceLoadStarted => _sourceLoadStarted!;
+  Completer<void> get releaseSourceLoad => _releaseSourceLoad!;
 
   void gateNextPause() {
     _pauseStarted = Completer<void>();
     _releasePause = Completer<void>();
+  }
+
+  void gateNextSourceLoad() {
+    _sourceLoadStarted = Completer<void>();
+    _releaseSourceLoad = Completer<void>();
   }
 
   @override
@@ -267,11 +349,20 @@ class _RecordingAudioPlayer extends AudioPlayer {
     Duration? initialPosition,
   }) async {
     loadedSource = source;
+    final started = _sourceLoadStarted;
+    final release = _releaseSourceLoad;
+    if (started != null && release != null) {
+      started.complete();
+      await release.future;
+      _sourceLoadStarted = null;
+      _releaseSourceLoad = null;
+    }
     return null;
   }
 
   @override
   Future<void> play() async {
+    playCalls++;
     _playing = true;
   }
 

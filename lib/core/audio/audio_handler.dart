@@ -523,8 +523,14 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     final item = _queue[index];
     final itemId = item.id;
     int activeItemIndex() {
-      if (_isStale(gen) || _activeItemId != itemId) return -1;
-      return _queue.indexWhere((queueItem) => queueItem.id == itemId);
+      if (_isStale(gen) ||
+          _activeItemId != itemId ||
+          mediaItem.value?.id != itemId) {
+        return -1;
+      }
+      final relocated =
+          _queue.indexWhere((queueItem) => queueItem.id == itemId);
+      return relocated >= 0 && _currentIndex == relocated ? relocated : -1;
     }
 
     _activeItemId = itemId;
@@ -626,7 +632,8 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
           audioSourceFor(url, tag: updatedItem),
           initialPosition: Duration.zero,
         );
-        if (_isStale(gen)) return;
+        transactionIndex = activeItemIndex();
+        if (transactionIndex < 0) return;
         // seamless 自动下一首必须 play，即使 completed 后 playing 已是 false
         if (_userWantsPlay || seamless) {
           _userWantsPlay = true;
