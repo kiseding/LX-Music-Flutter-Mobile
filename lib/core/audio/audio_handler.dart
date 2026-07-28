@@ -182,6 +182,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
   /// 当前内部播放队列（供 urlResolver 按 id 查找 extras）
   List<MediaItem> get queueItems => List.unmodifiable(_queue);
+  int get currentQueueIndex => _queue.isEmpty ? -1 : _currentIndex;
 
   int _bumpGeneration() => ++_playGeneration;
 
@@ -299,6 +300,8 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       queueIndex: _currentIndex,
     ));
   }
+
+  void _publishPlaybackState() => _broadcastState(_player.playbackEvent);
 
   @override
   Future<void> play() async {
@@ -662,43 +665,26 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
   @override
   Future<void> updateQueue(List<MediaItem> queue) async {
-    final gen = _bumpGeneration();
-    final String? currentId = mediaItem.value?.id;
-    final pos = _player.position;
-    final newQueue = queue;
-
+    final currentId = mediaItem.value?.id;
     _queue
       ..clear()
-      ..addAll(newQueue);
-    this.queue.add(List.from(_queue));
-
-    if (newQueue.isEmpty) {
-      await _player.stop();
+      ..addAll(queue);
+    if (_queue.isEmpty) {
+      _currentIndex = -1;
+      _activeItemId = null;
+      this.queue.add(const <MediaItem>[]);
+      mediaItem.add(null);
+      await stop();
       return;
     }
-
-    var newIndex = 0;
-    if (currentId != null) {
-      final found = newQueue.indexWhere((item) => item.id == currentId);
-      if (found != -1) newIndex = found;
-    }
-    _currentIndex = newIndex;
-    mediaItem.add(newQueue[newIndex]);
-
-    final children = newQueue.map((item) {
-      final url = item.extras?['url']?.toString() ?? '';
-      return audioSourceFor(url.startsWith('data:') ? '' : url, tag: item);
-    }).toList();
-    if (_isStale(gen)) return;
-    await _player.setAudioSource(
-      ConcatenatingAudioSource(children: children),
-      initialIndex: newIndex,
-      initialPosition: pos,
-    );
-    if (_isStale(gen)) return;
-    if (_userWantsPlay) {
-      _startPlayer();
-    }
+    final retained = currentId == null
+        ? -1
+        : _queue.indexWhere((item) => item.id == currentId);
+    _currentIndex = retained >= 0 ? retained : 0;
+    _activeItemId = _queue[_currentIndex].id;
+    this.queue.add(List.unmodifiable(_queue));
+    mediaItem.add(_queue[_currentIndex]);
+    _publishPlaybackState();
   }
 
   @override
