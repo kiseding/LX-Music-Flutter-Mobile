@@ -17,7 +17,6 @@ typedef PlaybackDownloader = Future<void> Function(
   CancelToken? cancelToken,
 });
 
-/// 索引持久化抽象，便于测试注入内存实现。
 abstract class PlaybackCacheIndexStore {
   Future<String?> read();
   Future<void> write(String raw);
@@ -51,20 +50,40 @@ class MemoryPlaybackCacheIndexStore implements PlaybackCacheIndexStore {
   }
 }
 
-/// 播放前本地缓存：远程 URL 下载到本地后再播，条目保留 [ttl]。
+class PlaybackCacheLease {
+  final String path;
+  final String playableUri;
+  final Future<void> Function() _release;
+  bool _released = false;
+
+  PlaybackCacheLease._(this.path, this.playableUri, this._release);
+
+  Future<void> release() async {
+    if (_released) return;
+    _released = true;
+    await _release();
+  }
+}
+
 class PlaybackCacheService {
-  static const ttl = Duration(days: 3);
-  static const maxBytes = 1024 * 1024 * 1024; // 1GB
+  static const defaultTtl = Duration(days: 3);
+  static const defaultMaxBytes = 1024 * 1024 * 1024;
 
   final Dio _dio;
   final PlaybackDownloader? _downloader;
   final String? cacheRootOverride;
   final PlaybackCacheIndexStore _indexStore;
+  final DateTime Function() _clock;
+  final Duration ttl;
+  final int maxBytes;
 
   String? _root;
+  Future<void>? _initializing;
   final Map<String, _CacheEntry> _index = {};
-  final Map<String, Future<String?>> _inflight = {};
-  final Map<String, CancelToken> _cancelTokens = {};
+  final Map<String, _InflightOperation> _inflight = {};
+  final Map<String, int> _generations = {};
+  final Map<String, int> _leaseCounts = {};
+  Future<void> _pendingIndexWrite = Future<void>.value();
   bool _initialized = false;
 
   PlaybackCacheService({
@@ -72,19 +91,24 @@ class PlaybackCacheService {
     PlaybackDownloader? downloader,
     this.cacheRootOverride,
     PlaybackCacheIndexStore? indexStore,
+    DateTime Function()? clock,
+    this.ttl = defaultTtl,
+    this.maxBytes = defaultMaxBytes,
   })  : _dio = dio ?? _createDownloadDio(),
         _downloader = downloader,
-        _indexStore = indexStore ?? PrefsPlaybackCacheIndexStore();
+        _indexStore = indexStore ?? PrefsPlaybackCacheIndexStore(),
+        _clock = clock ?? DateTime.now;
 
   static Dio _createDownloadDio() {
     return AppHttpClient.create(
-        options: BaseOptions(
-      connectTimeout: const Duration(seconds: 20),
-      receiveTimeout: const Duration(minutes: 5),
-      followRedirects: true,
-      maxRedirects: 5,
-      validateStatus: (s) => s != null && s >= 200 && s < 400,
-    ));
+      options: BaseOptions(
+        connectTimeout: const Duration(seconds: 20),
+        receiveTimeout: const Duration(minutes: 5),
+        followRedirects: true,
+        maxRedirects: 5,
+        validateStatus: (s) => s != null && s >= 200 && s < 400,
+      ),
+    );
   }
 
   static String cacheKey({
@@ -92,8 +116,7 @@ class PlaybackCacheService {
     required String songId,
     required String quality,
   }) {
-    final raw = '$platform|$songId|$quality';
-    return sha1.convert(utf8.encode(raw)).toString();
+    return sha1.convert(utf8.encode('$platform|$songId|$quality')).toString();
   }
 
   static String toPlayableUri(String path) {
@@ -133,31 +156,73 @@ class PlaybackCacheService {
     return fallback;
   }
 
-  Future<void> init() async {
-    if (_initialized) return;
-    if (cacheRootOverride != null) {
-      _root = cacheRootOverride;
-    } else {
-      final dir = await getApplicationSupportDirectory();
-      _root = '${dir.path}/playback_cache';
-    }
-    await Directory(_root!).create(recursive: true);
+  Future<void> init() {
+    if (_initialized) return Future<void>.value();
+    return _initializing ??= _initialize();
+  }
+
+  Future<void> _initialize() async {
+    final requestedRoot = cacheRootOverride ??
+        '${(await getApplicationSupportDirectory()).path}/playback_cache';
+    final directory = Directory(requestedRoot);
+    await directory.create(recursive: true);
+    _root = _normalizeAbsolute(await directory.resolveSymbolicLinks());
     await _loadIndex();
-    await purgeExpired();
     _initialized = true;
+    await purgeExpired();
   }
 
   Future<void> dispose() async {
-    for (final t in _cancelTokens.values) {
-      t.cancel('disposed');
+    for (final operation in _inflight.values.toList()) {
+      operation.token.cancel('disposed');
+      _generations[operation.key] = operation.generation + 1;
     }
-    _cancelTokens.clear();
     _inflight.clear();
+    await _pendingIndexWrite;
   }
 
+  /// Cancels the shared operation for [key], so every current caller receives
+  /// null. Callers do not own cancellation independently.
   void cancelKey(String key) {
-    _cancelTokens.remove(key)?.cancel('switched track');
-    _inflight.remove(key);
+    final operation = _inflight[key];
+    final next = (_generations[key] ?? 0) + 1;
+    _generations[key] = next;
+    operation?.token.cancel('switched track');
+    if (identical(_inflight[key], operation)) {
+      _inflight.remove(key);
+    }
+  }
+
+  Future<PlaybackCacheLease?> acquireOrDownload({
+    required String remoteUrl,
+    required String platform,
+    required String songId,
+    required String quality,
+  }) async {
+    final key = cacheKey(
+      platform: platform,
+      songId: songId,
+      quality: quality,
+    );
+    final path = await _getOrDownloadPath(
+      key: key,
+      remoteUrl: remoteUrl,
+      platform: platform,
+      songId: songId,
+      quality: quality,
+    );
+    if (path == null) return null;
+    _leaseCounts[key] = (_leaseCounts[key] ?? 0) + 1;
+    final safePath = await _validatedExistingFile(path);
+    if (safePath == null) {
+      await _releaseLease(key);
+      return null;
+    }
+    return PlaybackCacheLease._(
+      safePath,
+      toPlayableUri(safePath),
+      () => _releaseLease(key),
+    );
   }
 
   Future<String?> getOrDownload({
@@ -165,38 +230,84 @@ class PlaybackCacheService {
     required String platform,
     required String songId,
     required String quality,
-  }) async {
-    await init();
-    final key = cacheKey(
+  }) {
+    return _getOrDownloadPath(
+      key: cacheKey(
+        platform: platform,
+        songId: songId,
+        quality: quality,
+      ),
+      remoteUrl: remoteUrl,
       platform: platform,
       songId: songId,
       quality: quality,
     );
+  }
 
-    final hit = _lookupValid(key);
+  Future<String?> _getOrDownloadPath({
+    required String key,
+    required String remoteUrl,
+    required String platform,
+    required String songId,
+    required String quality,
+  }) async {
+    await init();
+    final hit = await _lookupValid(key);
     if (hit != null) {
+      _index[key] = hit.copyWith(lastAccessedAt: _clock());
+      await _saveIndex();
+      final safePath = await _validatedExistingFile(hit.path);
+      if (safePath == null) return null;
       debugPrint('[PlaybackCache] hit key=$key');
-      return hit.path;
+      return safePath;
     }
 
     final existing = _inflight[key];
-    if (existing != null) return existing;
+    if (existing != null) return existing.future;
 
-    final future = _download(key, remoteUrl, platform, songId, quality);
-    _inflight[key] = future;
+    final generation = (_generations[key] ?? 0) + 1;
+    _generations[key] = generation;
+    final token = CancelToken();
+    late final _InflightOperation operation;
+    final future = _download(
+      key,
+      generation,
+      token,
+      remoteUrl,
+      platform,
+      songId,
+      quality,
+    );
+    operation = _InflightOperation(key, generation, token, future);
+    _inflight[key] = operation;
     try {
-      return await future;
+      final path = await future;
+      if (path == null || !_isCurrent(key, generation, token)) return null;
+      return await _validatedExistingFile(path);
     } finally {
-      _inflight.remove(key);
+      if (identical(_inflight[key], operation)) {
+        _inflight.remove(key);
+      }
+    }
+  }
+
+  Future<void> _releaseLease(String key) async {
+    final count = _leaseCounts[key] ?? 0;
+    if (count <= 1) {
+      _leaseCounts.remove(key);
+    } else {
+      _leaseCounts[key] = count - 1;
     }
   }
 
   Future<void> purgeExpired() async {
     if (_root == null) return;
-    final now = DateTime.now();
+    final now = _clock();
     final expired = _index.entries
-        .where((e) => now.difference(e.value.createdAt) > ttl)
-        .map((e) => e.key)
+        .where((entry) =>
+            !_isProtected(entry.key) &&
+            now.difference(entry.value.lastAccessedAt) > ttl)
+        .map((entry) => entry.key)
         .toList();
     for (final key in expired) {
       await _removeEntry(key);
@@ -206,56 +317,58 @@ class PlaybackCacheService {
   }
 
   Future<void> debugBackdateEntry(String key, {required int daysAgo}) async {
-    final e = _index[key];
-    if (e == null) return;
-    _index[key] = e.copyWith(
-      createdAt: DateTime.now().subtract(Duration(days: daysAgo)),
+    final entry = _index[key];
+    if (entry == null) return;
+    final backdated = _clock().subtract(Duration(days: daysAgo));
+    _index[key] = entry.copyWith(
+      createdAt: backdated,
+      lastAccessedAt: backdated,
     );
     await _saveIndex();
   }
 
-  _CacheEntry? _lookupValid(String key) {
-    final e = _index[key];
-    if (e == null) return null;
-    if (DateTime.now().difference(e.createdAt) > ttl) {
+  Future<_CacheEntry?> _lookupValid(String key) async {
+    final entry = _index[key];
+    if (entry == null) return null;
+    if (_clock().difference(entry.lastAccessedAt) > ttl && !_isProtected(key)) {
       return null;
     }
-    if (e.path.endsWith('.audio')) {
+    if (entry.path.endsWith('.audio')) {
+      await _removeEntry(key);
+      return null;
+    }
+    if (await _validatedExistingFile(entry.path) == null) {
       _index.remove(key);
-      try {
-        File(e.path).deleteSync();
-      } catch (_) {}
+      await _saveIndex();
       return null;
     }
-    if (!File(e.path).existsSync()) {
-      _index.remove(key);
-      return null;
-    }
-    return e;
+    return entry;
   }
 
   Future<String?> _download(
     String key,
+    int generation,
+    CancelToken token,
     String remoteUrl,
     String platform,
     String songId,
     String quality,
   ) async {
-    final urlExt = _guessExt(remoteUrl);
-    final partPath = '$_root/$key.part';
-    final token = CancelToken();
-    _cancelTokens[key] = token;
-
+    final partPath = '$_root/$key.$generation.part';
     try {
+      final safePartPath = await _validatedDestination(partPath);
+      if (safePartPath == null || !_isCurrent(key, generation, token)) {
+        return null;
+      }
       final downloadUrl = normalizeOutboundUrl(remoteUrl);
       debugPrint(
           '[PlaybackCache] download key=$key host=${Uri.tryParse(downloadUrl)?.host} path=${Uri.tryParse(downloadUrl)?.path}');
       if (_downloader != null) {
-        await _downloader(downloadUrl, partPath, cancelToken: token);
+        await _downloader(downloadUrl, safePartPath, cancelToken: token);
       } else {
         await _dio.download(
           downloadUrl,
-          partPath,
+          safePartPath,
           cancelToken: token,
           options: Options(
             headers: {
@@ -271,18 +384,16 @@ class PlaybackCacheService {
         );
       }
 
-      final part = File(partPath);
-      if (!await part.exists() || await part.length() == 0) {
-        debugPrint('[PlaybackCache] empty file key=$key');
-        if (await part.exists()) await part.delete();
+      if (!_isCurrent(key, generation, token)) {
+        await _deleteSafe(partPath);
         return null;
       }
-      // 过小通常是错误页/空响应（真实音轨至少数 KB）；测试注入可更小
-      final minBytes = _downloader != null ? 16 : 2048;
-      if (await part.length() < minBytes) {
-        debugPrint(
-            '[PlaybackCache] file too small key=$key size=${await part.length()}');
-        await part.delete();
+      final safePart = await _validatedExistingFile(partPath);
+      if (safePart == null) return null;
+      final part = File(safePart);
+      final length = await part.length();
+      if (length == 0 || length < (_downloader != null ? 16 : 2048)) {
+        await _deleteSafe(safePart);
         return null;
       }
       final header = await part.openRead(0, 64).fold<List<int>>(
@@ -290,86 +401,227 @@ class PlaybackCacheService {
         (all, chunk) => all..addAll(chunk),
       );
       if (_looksLikeNonAudio(header)) {
-        debugPrint('[PlaybackCache] non-audio body key=$key');
-        await part.delete();
+        await _deleteSafe(safePart);
         return null;
       }
+      final urlExt = _guessExt(remoteUrl);
       final detectedExt = extensionFromBytes(
         header,
         fallback: urlExt == '.audio' ? _qualityExt(quality) : urlExt,
       );
       if (detectedExt == '.audio') {
-        debugPrint('[PlaybackCache] unknown audio format key=$key');
-        await part.delete();
+        await _deleteSafe(safePart);
         return null;
       }
-      final path = '$_root/$key$detectedExt';
-      final out = File(path);
-      if (await out.exists()) await out.delete();
-      await part.rename(path);
+      final requestedPath = '$_root/$key$detectedExt';
+      final destination = await _validatedDestination(requestedPath);
+      if (destination == null ||
+          await _validatedExistingFile(safePart) == null ||
+          !_isCurrent(key, generation, token)) {
+        await _deleteSafe(safePart);
+        return null;
+      }
+      await _deleteSafe(destination);
+      if (await _validatedExistingFile(safePart) == null ||
+          await _validatedDestination(destination) == null ||
+          !_isCurrent(key, generation, token)) {
+        await _deleteSafe(safePart);
+        return null;
+      }
+      await File(safePart).rename(destination);
+      final safeOutput = await _validatedExistingFile(destination);
+      if (safeOutput == null || !_isCurrent(key, generation, token)) {
+        await _deleteSafe(destination);
+        return null;
+      }
 
-      final size = await File(path).length();
+      final size = await File(safeOutput).length();
+      final now = _clock();
       _index[key] = _CacheEntry(
         key: key,
-        path: path,
+        path: safeOutput,
         remoteUrl: remoteUrl,
-        createdAt: DateTime.now(),
+        createdAt: now,
+        lastAccessedAt: now,
         sizeBytes: size,
         quality: quality,
         platform: platform,
         songId: songId,
       );
       await purgeExpired();
+      if (!_isCurrent(key, generation, token)) {
+        if (_index[key]?.path == safeOutput) _index.remove(key);
+        await _deleteSafe(safeOutput);
+        await _saveIndex();
+        return null;
+      }
       await _saveIndex();
       debugPrint('[PlaybackCache] saved key=$key size=$size');
-      return path;
-    } on DioException catch (e) {
-      if (CancelToken.isCancel(e)) {
-        debugPrint('[PlaybackCache] cancelled key=$key');
-      } else {
-        debugPrint('[PlaybackCache] download failed key=$key: $e');
+      return await _validatedExistingFile(safeOutput);
+    } on DioException catch (error) {
+      if (!CancelToken.isCancel(error)) {
+        debugPrint('[PlaybackCache] download failed key=$key: $error');
       }
-      final part = File(partPath);
-      if (await part.exists()) await part.delete();
+      await _deleteSafe(partPath);
       return null;
-    } catch (e) {
-      debugPrint('[PlaybackCache] download error key=$key: $e');
-      final part = File(partPath);
-      if (await part.exists()) await part.delete();
+    } catch (error) {
+      debugPrint('[PlaybackCache] download error key=$key: $error');
+      await _deleteSafe(partPath);
       return null;
-    } finally {
-      _cancelTokens.remove(key);
     }
   }
 
+  bool _isCurrent(String key, int generation, CancelToken token) {
+    final operation = _inflight[key];
+    return !token.isCancelled &&
+        _generations[key] == generation &&
+        operation?.generation == generation &&
+        identical(operation?.token, token);
+  }
+
+  bool _isProtected(String key) {
+    return _inflight.containsKey(key) || (_leaseCounts[key] ?? 0) > 0;
+  }
+
+  Future<String?> _validatedExistingFile(String path) async {
+    final lexical = _lexicalChild(path);
+    if (lexical == null) return null;
+    try {
+      if (await FileSystemEntity.type(lexical, followLinks: true) !=
+          FileSystemEntityType.file) {
+        return null;
+      }
+      final resolved =
+          _normalizeAbsolute(await File(lexical).resolveSymbolicLinks());
+      return _isRootChild(resolved) ? resolved : null;
+    } on FileSystemException {
+      return null;
+    }
+  }
+
+  Future<String?> _validatedDestination(String path) async {
+    final lexical = _lexicalChild(path);
+    if (lexical == null) return null;
+    final parentPath = File(lexical).parent.path;
+    try {
+      final resolvedParent = _normalizeAbsolute(
+          await Directory(parentPath).resolveSymbolicLinks());
+      if (!_isRootOrChild(resolvedParent)) return null;
+      final name = lexical.substring(parentPath.length + 1);
+      final resolved = _normalizeAbsolute('$resolvedParent/$name');
+      return _isRootChild(resolved) ? resolved : null;
+    } on FileSystemException {
+      return null;
+    }
+  }
+
+  String? _lexicalChild(String path) {
+    if (_root == null || path.isEmpty) return null;
+    final normalized = _normalizeAbsolute(path);
+    return _isRootChild(normalized) ? normalized : null;
+  }
+
+  String _normalizeAbsolute(String path) {
+    final absolute = File(path).absolute.path;
+    return Uri.file(absolute).normalizePath().toFilePath();
+  }
+
+  bool _isRootChild(String path) {
+    final root = _root;
+    if (root == null) return false;
+    final separator = Platform.pathSeparator;
+    final prefix = root.endsWith(separator) ? root : '$root$separator';
+    return path.startsWith(prefix);
+  }
+
+  bool _isRootOrChild(String path) => path == _root || _isRootChild(path);
+
+  Future<void> _deleteSafe(String path) async {
+    final safePath = await _validatedExistingFile(path);
+    if (safePath == null) return;
+    try {
+      await File(safePath).delete();
+    } on FileSystemException {
+      // Cleanup is best-effort; the index is still dropped.
+    }
+  }
+
+  Future<void> _removeEntry(String key) async {
+    if (_isProtected(key)) return;
+    final entry = _index.remove(key);
+    if (entry != null) await _deleteSafe(entry.path);
+  }
+
+  Future<void> _enforceSizeCap() async {
+    var total =
+        _index.values.fold<int>(0, (sum, entry) => sum + entry.sizeBytes);
+    if (total <= maxBytes) return;
+    final ordered = _index.values.toList()
+      ..sort((a, b) => a.lastAccessedAt.compareTo(b.lastAccessedAt));
+    for (final entry in ordered) {
+      if (total <= maxBytes) break;
+      if (_isProtected(entry.key)) continue;
+      total -= entry.sizeBytes;
+      await _removeEntry(entry.key);
+    }
+  }
+
+  Future<void> _loadIndex() async {
+    _index.clear();
+    final raw = await _indexStore.read();
+    if (raw == null || raw.isEmpty) return;
+    try {
+      final list = json.decode(raw) as List;
+      for (final item in list) {
+        if (item is Map) {
+          final entry = _CacheEntry.fromJson(Map<String, dynamic>.from(item));
+          if (entry.key.isNotEmpty &&
+              await _validatedExistingFile(entry.path) != null) {
+            _index[entry.key] = entry;
+          }
+        }
+      }
+    } catch (error) {
+      debugPrint('[PlaybackCache] index load failed: $error');
+    }
+  }
+
+  Future<void> _saveIndex() {
+    final write = _pendingIndexWrite.then((_) async {
+      final snapshot = json.encode(
+        _index.values.map((entry) => entry.toJson()).toList(),
+      );
+      await _indexStore.write(snapshot);
+    });
+    _pendingIndexWrite = write.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace __) {},
+    );
+    return write;
+  }
+
   String _refererFor(String url, String platform) {
-    final p = platform.toLowerCase();
-    if (p == 'tx' || url.contains('qq.com') || url.contains('gtimg')) {
+    final value = platform.toLowerCase();
+    if (value == 'tx' || url.contains('qq.com') || url.contains('gtimg')) {
       return 'https://y.qq.com/';
     }
-    if (p == 'wy' || url.contains('163.com') || url.contains('music.126')) {
+    if (value == 'wy' || url.contains('163.com') || url.contains('music.126')) {
       return 'https://music.163.com/';
     }
-    if (p == 'kw' || url.contains('kuwo')) {
-      return 'https://www.kuwo.cn/';
-    }
+    if (value == 'kw' || url.contains('kuwo')) return 'https://www.kuwo.cn/';
     return 'https://www.google.com/';
   }
 
   bool _looksLikeNonAudio(List<int> header) {
     if (header.isEmpty) return true;
-    // HTML / JSON / XML 错误页
     final start =
         String.fromCharCodes(header.take(32)).trimLeft().toLowerCase();
-    if (start.startsWith('<!doctype') ||
+    return start.startsWith('<!doctype') ||
         start.startsWith('<html') ||
         start.startsWith('<?xml') ||
         start.startsWith('{') ||
         start.startsWith('[') ||
-        start.startsWith('error')) {
-      return true;
-    }
-    return false;
+        start.startsWith('error');
   }
 
   String _guessExt(String url) {
@@ -389,64 +641,23 @@ class PlaybackCacheService {
   }
 
   String _qualityExt(String quality) {
-    final q = quality.toLowerCase();
-    if (q == 'flac' || q == 'flac24bit' || q == 'hires') return '.flac';
-    if (q == 'aac') return '.aac';
-    if (q == 'm4a') return '.m4a';
+    final value = quality.toLowerCase();
+    if (value == 'flac' || value == 'flac24bit' || value == 'hires') {
+      return '.flac';
+    }
+    if (value == 'aac') return '.aac';
+    if (value == 'm4a') return '.m4a';
     return '.mp3';
   }
+}
 
-  Future<void> _removeEntry(String key) async {
-    final e = _index.remove(key);
-    if (e != null) {
-      final f = File(e.path);
-      if (await f.exists()) {
-        try {
-          await f.delete();
-        } catch (_) {}
-      }
-      final part = File('${e.path}.part');
-      if (await part.exists()) {
-        try {
-          await part.delete();
-        } catch (_) {}
-      }
-    }
-  }
+class _InflightOperation {
+  final String key;
+  final int generation;
+  final CancelToken token;
+  final Future<String?> future;
 
-  Future<void> _enforceSizeCap() async {
-    var total = _index.values.fold<int>(0, (s, e) => s + e.sizeBytes);
-    if (total <= maxBytes) return;
-    final ordered = _index.values.toList()
-      ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
-    for (final e in ordered) {
-      if (total <= maxBytes) break;
-      total -= e.sizeBytes;
-      await _removeEntry(e.key);
-    }
-  }
-
-  Future<void> _loadIndex() async {
-    _index.clear();
-    final raw = await _indexStore.read();
-    if (raw == null || raw.isEmpty) return;
-    try {
-      final list = json.decode(raw) as List;
-      for (final item in list) {
-        if (item is Map) {
-          final e = _CacheEntry.fromJson(Map<String, dynamic>.from(item));
-          _index[e.key] = e;
-        }
-      }
-    } catch (e) {
-      debugPrint('[PlaybackCache] index load failed: $e');
-    }
-  }
-
-  Future<void> _saveIndex() async {
-    final list = _index.values.map((e) => e.toJson()).toList();
-    await _indexStore.write(json.encode(list));
-  }
+  const _InflightOperation(this.key, this.generation, this.token, this.future);
 }
 
 class _CacheEntry {
@@ -454,6 +665,7 @@ class _CacheEntry {
   final String path;
   final String remoteUrl;
   final DateTime createdAt;
+  final DateTime lastAccessedAt;
   final int sizeBytes;
   final String quality;
   final String platform;
@@ -464,18 +676,20 @@ class _CacheEntry {
     required this.path,
     required this.remoteUrl,
     required this.createdAt,
+    required this.lastAccessedAt,
     required this.sizeBytes,
     required this.quality,
     required this.platform,
     required this.songId,
   });
 
-  _CacheEntry copyWith({DateTime? createdAt}) {
+  _CacheEntry copyWith({DateTime? createdAt, DateTime? lastAccessedAt}) {
     return _CacheEntry(
       key: key,
       path: path,
       remoteUrl: remoteUrl,
       createdAt: createdAt ?? this.createdAt,
+      lastAccessedAt: lastAccessedAt ?? this.lastAccessedAt,
       sizeBytes: sizeBytes,
       quality: quality,
       platform: platform,
@@ -488,24 +702,30 @@ class _CacheEntry {
         'path': path,
         'remoteUrl': remoteUrl,
         'createdAt': createdAt.millisecondsSinceEpoch,
+        'lastAccessedAt': lastAccessedAt.millisecondsSinceEpoch,
         'sizeBytes': sizeBytes,
         'quality': quality,
         'platform': platform,
         'songId': songId,
       };
 
-  factory _CacheEntry.fromJson(Map<String, dynamic> j) {
+  factory _CacheEntry.fromJson(Map<String, dynamic> json) {
+    final createdAt = DateTime.fromMillisecondsSinceEpoch(
+      (json['createdAt'] as num?)?.toInt() ?? 0,
+    );
     return _CacheEntry(
-      key: j['key']?.toString() ?? '',
-      path: j['path']?.toString() ?? '',
-      remoteUrl: j['remoteUrl']?.toString() ?? '',
-      createdAt: DateTime.fromMillisecondsSinceEpoch(
-        (j['createdAt'] as num?)?.toInt() ?? 0,
+      key: json['key']?.toString() ?? '',
+      path: json['path']?.toString() ?? '',
+      remoteUrl: json['remoteUrl']?.toString() ?? '',
+      createdAt: createdAt,
+      lastAccessedAt: DateTime.fromMillisecondsSinceEpoch(
+        (json['lastAccessedAt'] as num?)?.toInt() ??
+            createdAt.millisecondsSinceEpoch,
       ),
-      sizeBytes: (j['sizeBytes'] as num?)?.toInt() ?? 0,
-      quality: j['quality']?.toString() ?? '',
-      platform: j['platform']?.toString() ?? '',
-      songId: j['songId']?.toString() ?? '',
+      sizeBytes: (json['sizeBytes'] as num?)?.toInt() ?? 0,
+      quality: json['quality']?.toString() ?? '',
+      platform: json['platform']?.toString() ?? '',
+      songId: json['songId']?.toString() ?? '',
     );
   }
 }

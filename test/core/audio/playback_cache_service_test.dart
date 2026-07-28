@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
@@ -181,4 +183,535 @@ void main() {
       'file:///tmp/cached.flac',
     );
   });
+
+  test('leased entry survives expiration until its idempotent release',
+      () async {
+    var now = DateTime(2026, 1, 1);
+    final leasedCache = PlaybackCacheService(
+      cacheRootOverride: tempDir.path,
+      indexStore: MemoryPlaybackCacheIndexStore(),
+      clock: () => now,
+      ttl: const Duration(hours: 1),
+      downloader: (url, savePath, {cancelToken}) async {
+        await File(savePath).writeAsBytes(List<int>.filled(32, 1));
+      },
+    );
+    await cache.dispose();
+    cache = leasedCache;
+
+    final lease = await cache.acquireOrDownload(
+      remoteUrl: 'https://cdn.example.com/leased.mp3',
+      platform: 'tx',
+      songId: 'leased',
+      quality: '320k',
+    );
+    expect(lease, isNotNull);
+    now = now.add(const Duration(hours: 2));
+
+    await cache.purgeExpired();
+    expect(File(lease!.path).existsSync(), isTrue);
+    await lease.release();
+    await lease.release();
+    await cache.purgeExpired();
+    expect(File(lease.path).existsSync(), isFalse);
+  });
+
+  test('shared cache leases use exact reference counts', () async {
+    var now = DateTime(2026, 1, 1);
+    final leasedCache = PlaybackCacheService(
+      cacheRootOverride: tempDir.path,
+      indexStore: MemoryPlaybackCacheIndexStore(),
+      clock: () => now,
+      ttl: const Duration(hours: 1),
+      downloader: (url, savePath, {cancelToken}) async {
+        await File(savePath).writeAsBytes(List<int>.filled(32, 1));
+      },
+    );
+    await cache.dispose();
+    cache = leasedCache;
+
+    final first = await cache.acquireOrDownload(
+      remoteUrl: 'https://cdn.example.com/shared-lease.mp3',
+      platform: 'tx',
+      songId: 'shared-lease',
+      quality: '320k',
+    );
+    final second = await cache.acquireOrDownload(
+      remoteUrl: 'https://cdn.example.com/shared-lease.mp3',
+      platform: 'tx',
+      songId: 'shared-lease',
+      quality: '320k',
+    );
+    now = now.add(const Duration(hours: 2));
+
+    await first!.release();
+    await cache.purgeExpired();
+    expect(File(first.path).existsSync(), isTrue);
+    await second!.release();
+    await cache.purgeExpired();
+    expect(File(first.path).existsSync(), isFalse);
+  });
+
+  test('leased and inflight entries are excluded from size eviction', () async {
+    final firstStarted = Completer<void>();
+    final finishFirst = Completer<void>();
+    final sizeCache = PlaybackCacheService(
+      cacheRootOverride: tempDir.path,
+      indexStore: MemoryPlaybackCacheIndexStore(),
+      maxBytes: 40,
+      downloader: (url, savePath, {cancelToken}) async {
+        if (url.contains('first')) {
+          firstStarted.complete();
+          await finishFirst.future;
+        }
+        await File(savePath).writeAsBytes(List<int>.filled(32, 1));
+      },
+    );
+    await cache.dispose();
+    cache = sizeCache;
+
+    final firstFuture = cache.acquireOrDownload(
+      remoteUrl: 'https://cdn.example.com/first.mp3',
+      platform: 'tx',
+      songId: 'first',
+      quality: '320k',
+    );
+    await firstStarted.future;
+    final second = await cache.acquireOrDownload(
+      remoteUrl: 'https://cdn.example.com/second.mp3',
+      platform: 'tx',
+      songId: 'second',
+      quality: '320k',
+    );
+    finishFirst.complete();
+    final first = await firstFuture;
+
+    expect(first, isNotNull);
+    expect(second, isNotNull);
+    expect(File(first!.path).existsSync(), isTrue);
+    expect(File(second!.path).existsSync(), isTrue);
+    await second.release();
+    await cache.purgeExpired();
+    expect(File(first.path).existsSync(), isTrue);
+    expect(File(second.path).existsSync(), isFalse);
+    await first.release();
+  });
+
+  test('cache hits persist lastAccessedAt and size eviction uses true LRU',
+      () async {
+    var now = DateTime(2026, 1, 1);
+    final store = MemoryPlaybackCacheIndexStore();
+    final lruCache = PlaybackCacheService(
+      cacheRootOverride: tempDir.path,
+      indexStore: store,
+      clock: () => now,
+      maxBytes: 64,
+      downloader: (url, savePath, {cancelToken}) async {
+        await File(savePath).writeAsBytes(List<int>.filled(32, 1));
+      },
+    );
+    await cache.dispose();
+    cache = lruCache;
+
+    Future<String> get(String id) async {
+      final path = await cache.getOrDownload(
+        remoteUrl: 'https://cdn.example.com/$id.mp3',
+        platform: 'tx',
+        songId: id,
+        quality: '320k',
+      );
+      return path!;
+    }
+
+    final first = await get('first');
+    now = now.add(const Duration(minutes: 1));
+    final second = await get('second');
+    now = now.add(const Duration(minutes: 1));
+    expect(await get('first'), first);
+    final persisted = (jsonDecode(store.value!) as List).cast<Map>();
+    final firstJson = persisted.firstWhere((item) => item['path'] == first);
+    expect(firstJson['lastAccessedAt'], now.millisecondsSinceEpoch);
+    now = now.add(const Duration(minutes: 1));
+    final third = await get('third');
+
+    expect(File(first).existsSync(), isTrue);
+    expect(File(second).existsSync(), isFalse);
+    expect(File(third).existsSync(), isTrue);
+  });
+
+  test('rejects poisoned outside-root index without deleting outside file',
+      () async {
+    final outside = await Directory.systemTemp.createTemp('cache_outside_');
+    addTearDown(() => outside.deleteSync(recursive: true));
+    final outsideFile = File('${outside.path}/song.mp3')
+      ..writeAsBytesSync(List<int>.filled(32, 1));
+    final store = MemoryPlaybackCacheIndexStore()
+      ..value = jsonEncode([
+        _entryJson(
+          key: PlaybackCacheService.cacheKey(
+            platform: 'tx',
+            songId: 'poisoned',
+            quality: '320k',
+          ),
+          path: outsideFile.path,
+        ),
+      ]);
+    final safeCache = _cacheForPersistedPath(tempDir, store);
+    await cache.dispose();
+    cache = safeCache;
+
+    await cache.init();
+    final result = await cache.getOrDownload(
+      remoteUrl: 'https://cdn.example.com/poisoned.mp3',
+      platform: 'tx',
+      songId: 'poisoned',
+      quality: '320k',
+    );
+
+    expect(result, isNot(outsideFile.path));
+    expect(outsideFile.existsSync(), isTrue);
+  });
+
+  test('rejects dot-dot and sibling-prefix persisted paths', () async {
+    final parent = tempDir.parent;
+    final sibling = Directory('${tempDir.path}_sibling')..createSync();
+    addTearDown(() => sibling.deleteSync(recursive: true));
+    final escaped =
+        File('${parent.path}/${tempDir.path.split('/').last}/../escape.mp3')
+          ..writeAsBytesSync(List<int>.filled(32, 1));
+    final siblingFile = File('${sibling.path}/song.mp3')
+      ..writeAsBytesSync(List<int>.filled(32, 1));
+    for (final record in [
+      ('dot-dot', escaped.path),
+      ('sibling', siblingFile.path),
+    ]) {
+      final store = MemoryPlaybackCacheIndexStore()
+        ..value = jsonEncode([
+          _entryJson(
+            key: PlaybackCacheService.cacheKey(
+              platform: 'tx',
+              songId: record.$1,
+              quality: '320k',
+            ),
+            path: record.$2,
+          ),
+        ]);
+      final safeCache = _cacheForPersistedPath(tempDir, store);
+      await safeCache.init();
+      final result = await safeCache.getOrDownload(
+        remoteUrl: 'https://cdn.example.com/${record.$1}.mp3',
+        platform: 'tx',
+        songId: record.$1,
+        quality: '320k',
+      );
+      expect(result, isNot(record.$2));
+      expect(File(record.$2).existsSync(), isTrue);
+      await safeCache.dispose();
+    }
+  });
+
+  test('missing persisted file is removed from the index', () async {
+    final store = MemoryPlaybackCacheIndexStore()
+      ..value = jsonEncode([
+        _entryJson(
+          key: PlaybackCacheService.cacheKey(
+            platform: 'tx',
+            songId: 'missing',
+            quality: '320k',
+          ),
+          path: '${tempDir.path}/missing.mp3',
+        ),
+      ]);
+    final safeCache = _cacheForPersistedPath(tempDir, store);
+    await cache.dispose();
+    cache = safeCache;
+
+    await cache.init();
+    await cache.purgeExpired();
+
+    expect(jsonDecode(store.value!) as List, isEmpty);
+  });
+
+  test('rejects a persisted symlink escape without deleting its target',
+      () async {
+    if (Platform.isWindows) return;
+    final outside = await Directory.systemTemp.createTemp('cache_symlink_');
+    addTearDown(() => outside.deleteSync(recursive: true));
+    final target = File('${outside.path}/song.mp3')
+      ..writeAsBytesSync(List<int>.filled(32, 1));
+    final link = Link('${tempDir.path}/linked.mp3');
+    try {
+      await link.create(target.path);
+    } on FileSystemException {
+      return;
+    }
+    final store = MemoryPlaybackCacheIndexStore()
+      ..value = jsonEncode([
+        _entryJson(
+          key: PlaybackCacheService.cacheKey(
+            platform: 'tx',
+            songId: 'linked',
+            quality: '320k',
+          ),
+          path: link.path,
+        ),
+      ]);
+    final safeCache = _cacheForPersistedPath(tempDir, store);
+    await cache.dispose();
+    cache = safeCache;
+
+    await cache.init();
+    final result = await cache.getOrDownload(
+      remoteUrl: 'https://cdn.example.com/linked.mp3',
+      platform: 'tx',
+      songId: 'linked',
+      quality: '320k',
+    );
+
+    expect(result, isNot(link.path));
+    expect(target.existsSync(), isTrue);
+  });
+
+  test('cancelKey cancels every shared caller for the operation key', () async {
+    final started = Completer<void>();
+    final finish = Completer<void>();
+    var calls = 0;
+    final sharedCache = PlaybackCacheService(
+      cacheRootOverride: tempDir.path,
+      indexStore: MemoryPlaybackCacheIndexStore(),
+      downloader: (url, savePath, {cancelToken}) async {
+        calls++;
+        started.complete();
+        await finish.future;
+        await File(savePath).writeAsBytes(List<int>.filled(32, 1));
+      },
+    );
+    await cache.dispose();
+    cache = sharedCache;
+    final args = (
+      remoteUrl: 'https://cdn.example.com/shared.mp3',
+      platform: 'tx',
+      songId: 'shared',
+      quality: '320k',
+    );
+
+    final first = cache.acquireOrDownload(
+      remoteUrl: args.remoteUrl,
+      platform: args.platform,
+      songId: args.songId,
+      quality: args.quality,
+    );
+    final second = cache.acquireOrDownload(
+      remoteUrl: args.remoteUrl,
+      platform: args.platform,
+      songId: args.songId,
+      quality: args.quality,
+    );
+    await started.future;
+    cache.cancelKey(PlaybackCacheService.cacheKey(
+      platform: args.platform,
+      songId: args.songId,
+      quality: args.quality,
+    ));
+    finish.complete();
+
+    expect(await first, isNull);
+    expect(await second, isNull);
+    expect(calls, 1);
+  });
+
+  test('late cancelled downloader cannot replace a newer generation', () async {
+    final firstStarted = Completer<void>();
+    final finishFirst = Completer<void>();
+    var calls = 0;
+    final generationCache = PlaybackCacheService(
+      cacheRootOverride: tempDir.path,
+      indexStore: MemoryPlaybackCacheIndexStore(),
+      downloader: (url, savePath, {cancelToken}) async {
+        calls++;
+        if (calls == 1) {
+          firstStarted.complete();
+          await finishFirst.future;
+        }
+        await File(savePath).writeAsBytes(List<int>.filled(32, calls));
+      },
+    );
+    await cache.dispose();
+    cache = generationCache;
+    const platform = 'tx';
+    const songId = 'generation';
+    const quality = '320k';
+    final key = PlaybackCacheService.cacheKey(
+      platform: platform,
+      songId: songId,
+      quality: quality,
+    );
+
+    final stale = cache.getOrDownload(
+      remoteUrl: 'https://cdn.example.com/old.mp3',
+      platform: platform,
+      songId: songId,
+      quality: quality,
+    );
+    await firstStarted.future;
+    cache.cancelKey(key);
+    final fresh = await cache.getOrDownload(
+      remoteUrl: 'https://cdn.example.com/new.mp3',
+      platform: platform,
+      songId: songId,
+      quality: quality,
+    );
+    finishFirst.complete();
+
+    expect(await stale, isNull);
+    expect(fresh, isNotNull);
+    expect(await File(fresh!).readAsBytes(), List<int>.filled(32, 2));
+    expect(
+        await cache.getOrDownload(
+          remoteUrl: 'https://cdn.example.com/new.mp3',
+          platform: platform,
+          songId: songId,
+          quality: quality,
+        ),
+        fresh);
+  });
+
+  test('late cancelled downloader cannot detach newer inflight cancellation',
+      () async {
+    final firstStarted = Completer<void>();
+    final finishFirst = Completer<void>();
+    final secondStarted = Completer<void>();
+    final finishSecond = Completer<void>();
+    var calls = 0;
+    final generationCache = PlaybackCacheService(
+      cacheRootOverride: tempDir.path,
+      indexStore: MemoryPlaybackCacheIndexStore(),
+      downloader: (url, savePath, {cancelToken}) async {
+        calls++;
+        if (calls == 1) {
+          firstStarted.complete();
+          await finishFirst.future;
+        } else {
+          secondStarted.complete();
+          await finishSecond.future;
+        }
+        await File(savePath).writeAsBytes(List<int>.filled(32, calls));
+      },
+    );
+    await cache.dispose();
+    cache = generationCache;
+    final key = PlaybackCacheService.cacheKey(
+      platform: 'tx',
+      songId: 'token-generation',
+      quality: '320k',
+    );
+
+    final stale = cache.getOrDownload(
+      remoteUrl: 'https://cdn.example.com/old.mp3',
+      platform: 'tx',
+      songId: 'token-generation',
+      quality: '320k',
+    );
+    await firstStarted.future;
+    cache.cancelKey(key);
+    final replacement = cache.getOrDownload(
+      remoteUrl: 'https://cdn.example.com/new.mp3',
+      platform: 'tx',
+      songId: 'token-generation',
+      quality: '320k',
+    );
+    await secondStarted.future;
+    finishFirst.complete();
+    expect(await stale, isNull);
+    cache.cancelKey(key);
+    finishSecond.complete();
+
+    expect(await replacement, isNull);
+  });
+
+  test('serialized index writes cannot persist an older snapshot last',
+      () async {
+    final store = _BlockingIndexStore();
+    final persistentCache = PlaybackCacheService(
+      cacheRootOverride: tempDir.path,
+      indexStore: store,
+      downloader: (url, savePath, {cancelToken}) async {
+        await File(savePath).writeAsBytes(List<int>.filled(32, 1));
+      },
+    );
+    await cache.dispose();
+    cache = persistentCache;
+    await cache.init();
+    store.blockNextWrite();
+
+    final first = cache.getOrDownload(
+      remoteUrl: 'https://cdn.example.com/one.mp3',
+      platform: 'tx',
+      songId: 'one',
+      quality: '320k',
+    );
+    await store.firstWriteStarted.future;
+    final second = cache.getOrDownload(
+      remoteUrl: 'https://cdn.example.com/two.mp3',
+      platform: 'tx',
+      songId: 'two',
+      quality: '320k',
+    );
+    store.releaseFirstWrite.complete();
+    await Future.wait([first, second]);
+
+    final persisted = jsonDecode(store.value!) as List;
+    expect(persisted, hasLength(2));
+  });
+}
+
+Map<String, Object> _entryJson({required String key, required String path}) => {
+      'key': key,
+      'path': path,
+      'remoteUrl': 'https://cdn.example.com/song.mp3',
+      'createdAt': DateTime(2026, 1, 1).millisecondsSinceEpoch,
+      'lastAccessedAt': DateTime(2026, 1, 1).millisecondsSinceEpoch,
+      'sizeBytes': 32,
+      'quality': '320k',
+      'platform': 'tx',
+      'songId': 'song',
+    };
+
+PlaybackCacheService _cacheForPersistedPath(
+  Directory root,
+  PlaybackCacheIndexStore store,
+) =>
+    PlaybackCacheService(
+      cacheRootOverride: root.path,
+      indexStore: store,
+      clock: () => DateTime(2026, 1, 2),
+      downloader: (url, savePath, {cancelToken}) async {
+        await File(savePath).writeAsBytes(List<int>.filled(32, 2));
+      },
+    );
+
+class _BlockingIndexStore implements PlaybackCacheIndexStore {
+  String? value;
+  Completer<void> firstWriteStarted = Completer<void>();
+  Completer<void> releaseFirstWrite = Completer<void>();
+  var _blockNext = false;
+
+  void blockNextWrite() {
+    firstWriteStarted = Completer<void>();
+    releaseFirstWrite = Completer<void>();
+    _blockNext = true;
+  }
+
+  @override
+  Future<String?> read() async => value;
+
+  @override
+  Future<void> write(String raw) async {
+    if (_blockNext) {
+      _blockNext = false;
+      firstWriteStarted.complete();
+      await releaseFirstWrite.future;
+    }
+    value = raw;
+  }
 }
