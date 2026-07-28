@@ -39,6 +39,7 @@ class PlaybackCommandCoordinator {
   int _playCommandToken = 0;
   int? _activePlayCommandToken;
   final Map<int, _PlayEndReason> _playEndReasons = {};
+  final Map<int, int> _playSourceTokens = {};
   int _lastPlayAttemptRevision = -1;
   int? _failedPlayIntentRevision;
   int? _failedPlaySourceToken;
@@ -94,6 +95,7 @@ class PlaybackCommandCoordinator {
     _desiredPlaying = true;
     _preservingPause = false;
     _stopDesired = false;
+    _retirePausedPlayLifecycle();
     return _markDirty();
   }
 
@@ -111,12 +113,17 @@ class PlaybackCommandCoordinator {
 
   Future<void> resumePreservingIntent() {
     _preservingPause = false;
+    _retirePausedPlayLifecycle();
     return _markDirty();
   }
 
   Future<void> setPlayingPreservingIntent(bool playing) {
     _desiredPlaying = playing;
-    if (!playing) _preservingPause = true;
+    if (playing) {
+      _retirePausedPlayLifecycle();
+    } else {
+      _preservingPause = true;
+    }
     return _markDirty();
   }
 
@@ -304,7 +311,6 @@ class PlaybackCommandCoordinator {
                 : _PlayEndReason.pause;
           }
           await _player.pause();
-          _activePlayCommandToken = null;
           _notifyIfCurrent(commandRevision);
         }
         return;
@@ -322,6 +328,7 @@ class PlaybackCommandCoordinator {
         _lastPlayAttemptRevision = _revision;
         final playToken = ++_playCommandToken;
         _activePlayCommandToken = playToken;
+        _playSourceTokens[playToken] = _installedSourceToken!;
         try {
           final lifecycle = _player.play();
           _notifyIfCurrent(commandRevision);
@@ -346,12 +353,17 @@ class PlaybackCommandCoordinator {
   }
 
   void _onPlayLifecycleComplete(int token) {
+    final ownsLifecycle = _ownsPlayLifecycle(token);
     final reason = _playEndReasons.remove(token) ??
         (_player.processingState == ProcessingState.completed
             ? _PlayEndReason.completed
             : _PlayEndReason.unknown);
-    final ownsLifecycle = _activePlayCommandToken == token;
-    if (ownsLifecycle) _activePlayCommandToken = null;
+    if (!ownsLifecycle) {
+      _playSourceTokens.remove(token);
+      return;
+    }
+    _playSourceTokens.remove(token);
+    _activePlayCommandToken = null;
     if (reason == _PlayEndReason.completed || reason == _PlayEndReason.stop) {
       return;
     }
@@ -363,19 +375,37 @@ class PlaybackCommandCoordinator {
     Object error,
     StackTrace stackTrace,
   ) {
+    final ownsLifecycle = _ownsPlayLifecycle(token);
     _playEndReasons.remove(token);
-    if (_activePlayCommandToken != token) {
-      _markDirty();
+    if (!ownsLifecycle) {
+      _playSourceTokens.remove(token);
       return;
     }
-    if (_activePlayCommandToken == token) {
-      _activePlayCommandToken = null;
-      _failedPlayIntentRevision = _intentRevision;
-      _failedPlaySourceToken = _installedSourceToken;
-      _onError?.call('play', error, stackTrace);
-      _onStateChanged?.call();
-    }
+    _playSourceTokens.remove(token);
+    _activePlayCommandToken = null;
+    _failedPlayIntentRevision = _intentRevision;
+    _failedPlaySourceToken = _installedSourceToken;
+    _onError?.call('play', error, stackTrace);
+    _onStateChanged?.call();
     _markDirty();
+  }
+
+  bool _ownsPlayLifecycle(int token) {
+    final sourceToken = _playSourceTokens[token];
+    return _activePlayCommandToken == token &&
+        sourceToken != null &&
+        sourceToken == _installedSourceToken &&
+        sourceToken == _desiredSource?.token;
+  }
+
+  void _retirePausedPlayLifecycle() {
+    final token = _activePlayCommandToken;
+    if (token == null) return;
+    final reason = _playEndReasons[token];
+    if (reason == _PlayEndReason.pause ||
+        reason == _PlayEndReason.preservingPause) {
+      _activePlayCommandToken = null;
+    }
   }
 
   void _notifyIfCurrent(int commandRevision) {

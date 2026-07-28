@@ -152,6 +152,80 @@ void main() {
     expect(errors, isEmpty);
   });
 
+  test('superseded source play error is inert before replacement commit',
+      () async {
+    final player = _LifecycleAudioPlayer();
+    final errors = <String>[];
+    var publications = 0;
+    final coordinator = PlaybackCommandCoordinator(
+      player,
+      onError: (operation, _, __) => errors.add(operation),
+      onStateChanged: () => publications++,
+    );
+    addTearDown(player.dispose);
+    await _install(coordinator);
+    await coordinator.explicitPlay();
+    coordinator.requestSource(
+      mediaId: 'B',
+      queueIndex: 1,
+      position: Duration.zero,
+    );
+    await coordinator.settled;
+    final calls = player.calls.toList();
+    final publicationsBeforeError = publications;
+
+    player.failCurrentPlay();
+    await pumpEventQueue();
+
+    expect(errors, isEmpty);
+    expect(publications, publicationsBeforeError);
+    expect(player.calls, calls);
+  });
+
+  test('superseded source play completion is inert before replacement commit',
+      () async {
+    final player = _LifecycleAudioPlayer();
+    var publications = 0;
+    final coordinator = PlaybackCommandCoordinator(
+      player,
+      onStateChanged: () => publications++,
+    );
+    addTearDown(player.dispose);
+    await _install(coordinator);
+    await coordinator.explicitPlay();
+    coordinator.requestSource(
+      mediaId: 'B',
+      queueIndex: 1,
+      position: Duration.zero,
+    );
+    await coordinator.settled;
+    final calls = player.calls.toList();
+    final publicationsBeforeCompletion = publications;
+
+    player.completeCurrentPlay();
+    await pumpEventQueue();
+
+    expect(publications, publicationsBeforeCompletion);
+    expect(player.calls, calls);
+  });
+
+  test('current source play error still reports once', () async {
+    final player = _LifecycleAudioPlayer();
+    final errors = <String>[];
+    final coordinator = PlaybackCommandCoordinator(
+      player,
+      onError: (operation, _, __) => errors.add(operation),
+    );
+    addTearDown(player.dispose);
+    await _install(coordinator);
+    await coordinator.explicitPlay();
+
+    player.failCurrentPlay();
+    await pumpEventQueue();
+
+    expect(errors, ['play']);
+  });
+
   test('failed seek is consumed before a later interruption pause', () async {
     final errors = <String>[];
     final player = _LifecycleAudioPlayer()..failNextSeek = true;
@@ -294,6 +368,7 @@ class _LifecycleAudioPlayer extends AudioPlayer {
   int playCalls = 0;
   int seekCalls = 0;
   bool failNextSeek = false;
+  final calls = <String>[];
 
   @override
   bool get playing => _playing;
@@ -308,12 +383,14 @@ class _LifecycleAudioPlayer extends AudioPlayer {
     int? initialIndex,
     Duration? initialPosition,
   }) async {
+    calls.add('source');
     _processingState = ProcessingState.ready;
     return null;
   }
 
   @override
   Future<void> play() {
+    calls.add('play');
     playCalls++;
     _playing = true;
     _processingState = ProcessingState.ready;
@@ -323,12 +400,14 @@ class _LifecycleAudioPlayer extends AudioPlayer {
 
   @override
   Future<void> pause() async {
+    calls.add('pause');
     _playing = false;
     _completePlayLifecycle();
   }
 
   @override
   Future<void> stop() async {
+    calls.add('stop');
     _playing = false;
     _processingState = ProcessingState.idle;
     _completePlayLifecycle();
@@ -336,6 +415,7 @@ class _LifecycleAudioPlayer extends AudioPlayer {
 
   @override
   Future<void> seek(Duration? position, {int? index}) async {
+    calls.add('seek');
     seekCalls++;
     if (failNextSeek) {
       failNextSeek = false;
@@ -347,6 +427,16 @@ class _LifecycleAudioPlayer extends AudioPlayer {
     _playing = false;
     _processingState = ProcessingState.completed;
     _completePlayLifecycle();
+  }
+
+  void completeCurrentPlay() => _completePlayLifecycle();
+
+  void failCurrentPlay() {
+    final lifecycle = _playLifecycle;
+    _playLifecycle = null;
+    if (lifecycle != null && !lifecycle.isCompleted) {
+      lifecycle.completeError(StateError('play'));
+    }
   }
 
   void _completePlayLifecycle() {

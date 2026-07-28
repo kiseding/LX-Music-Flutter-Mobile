@@ -670,12 +670,13 @@ void main() {
     await handler.endAudioInterruption(mayResume: false);
     await handler.skipToQueueItem(1);
     expect(player.playing, isFalse);
+    final pauseCalls = player.pauseCalls;
 
     playGate.release.complete();
     await pumpEventQueue();
 
     expect(handler.mediaItem.value?.id, 'B');
-    expect(player.playing, isFalse);
+    expect(player.pauseCalls, pauseCalls);
   });
 
   test('completion cannot auto-advance while interrupted', () async {
