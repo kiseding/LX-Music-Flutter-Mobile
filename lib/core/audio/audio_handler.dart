@@ -50,6 +50,15 @@ AudioSource audioSourceFor(String url, {MediaItem? tag}) {
   );
 }
 
+AudioProcessingState audioProcessingState(ProcessingState state) =>
+    switch (state) {
+      ProcessingState.idle => AudioProcessingState.idle,
+      ProcessingState.loading => AudioProcessingState.loading,
+      ProcessingState.buffering => AudioProcessingState.buffering,
+      ProcessingState.ready => AudioProcessingState.ready,
+      ProcessingState.completed => AudioProcessingState.completed,
+    };
+
 /// 单曲 setAudioSource 架构下，just_audio 的 shuffle/seekToNext 无效。
 /// 在应用层从队列索引选下一首（尽量不立刻重复当前曲）。
 int nextQueueIndex({
@@ -168,6 +177,8 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   String? _installedMediaId;
   int _lastHandledCompletionGeneration = -1;
   String? _activeItemId;
+  AudioServiceRepeatMode _repeatMode = AudioServiceRepeatMode.none;
+  AudioServiceShuffleMode _shuffleMode = AudioServiceShuffleMode.none;
 
   // 注入 URL 解析器
   UrlResolver? urlResolver;
@@ -179,24 +190,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   void Function(String message)? onError;
 
   LxAudioHandler({AudioPlayer? player}) : _player = player ?? AudioPlayer() {
-    // 初始化 playbackState，避免 value 访问时抛异常
-    playbackState.add(PlaybackState(
-      controls: [
-        MediaControl.skipToPrevious,
-        MediaControl.play,
-        MediaControl.stop,
-        MediaControl.skipToNext,
-      ],
-      systemActions: {
-        MediaAction.seek,
-        MediaAction.seekForward,
-        MediaAction.seekBackward,
-      },
-      playing: false,
-      updatePosition: Duration.zero,
-      bufferedPosition: Duration.zero,
-      speed: 1.0,
-    ));
+    _publishPlaybackState();
     _init();
   }
 
@@ -239,7 +233,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   }
 
   void _init() {
-    _player.playbackEventStream.listen(_broadcastState);
+    _player.playbackEventStream.listen((_) => _publishPlaybackState());
 
     // 播放完成 → 无缝连播下一首。
     // 锁屏/后台时绝不能先 pause + playing:false：iOS 会结束后台音频会话。
@@ -305,8 +299,8 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   }
 
   // 将播放状态广播给系统控制中心
-  void _broadcastState(PlaybackEvent event) {
-    playbackState.add(playbackState.value.copyWith(
+  void _publishPlaybackState({AudioProcessingState? override}) {
+    playbackState.add(PlaybackState(
       controls: [
         MediaControl.skipToPrevious,
         if (_player.playing) MediaControl.pause else MediaControl.play,
@@ -318,15 +312,17 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         MediaAction.seekForward,
         MediaAction.seekBackward,
       },
+      processingState:
+          override ?? audioProcessingState(_player.processingState),
       playing: _player.playing,
       updatePosition: _player.position,
       bufferedPosition: _player.bufferedPosition,
       speed: _player.speed,
-      queueIndex: _currentIndex,
+      queueIndex: currentQueueIndex,
+      repeatMode: _repeatMode,
+      shuffleMode: _shuffleMode,
     ));
   }
-
-  void _publishPlaybackState() => _broadcastState(_player.playbackEvent);
 
   @override
   Future<void> play() async {
@@ -397,7 +393,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     if (ps == ProcessingState.completed) {
       try {
         await _player.seek(target);
-        _broadcastState(_player.playbackEvent);
+        _publishPlaybackState();
         return;
       } catch (e) {
         debugPrint('[AudioHandler] seek from completed: $e');
@@ -405,7 +401,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     }
 
     await _player.seek(target);
-    _broadcastState(_player.playbackEvent);
+    _publishPlaybackState();
   }
 
   @override
@@ -491,10 +487,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     } catch (e) {
       debugPrint('[AudioHandler] halt pause failed: $e');
     }
-    playbackState.add(playbackState.value.copyWith(
-      playing: false,
-      processingState: AudioProcessingState.buffering,
-    ));
+    _publishPlaybackState(override: AudioProcessingState.buffering);
   }
 
   Future<int> _preloadCount() async {
@@ -612,10 +605,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       if (url == null || url.isEmpty) {
         if (urlResolver != null) {
           // seamless 连播时保持 playing=true，只标 buffering，避免锁屏杀会话
-          playbackState.add(playbackState.value.copyWith(
-            processingState: AudioProcessingState.buffering,
-            playing: seamless ? true : playbackState.value.playing,
-          ));
+          _publishPlaybackState(override: AudioProcessingState.buffering);
           // 强制按当前 preferredQuality 重新解析，忽略过期的 extras.url
           final resolveExtras = item.extras == null
               ? <String, dynamic>{}
@@ -891,7 +881,8 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
   @override
   Future<void> setRepeatMode(AudioServiceRepeatMode repeatMode) async {
-    playbackState.add(playbackState.value.copyWith(repeatMode: repeatMode));
+    _repeatMode = repeatMode;
+    _publishPlaybackState();
     // Single-source repeat is explicit so every replay emits one completion.
     await _player.setLoopMode(LoopMode.off);
   }
@@ -899,7 +890,8 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   @override
   Future<void> setShuffleMode(AudioServiceShuffleMode shuffleMode) async {
     final enabled = shuffleMode == AudioServiceShuffleMode.all;
-    playbackState.add(playbackState.value.copyWith(shuffleMode: shuffleMode));
+    _shuffleMode = shuffleMode;
+    _publishPlaybackState();
     await _player.setShuffleModeEnabled(enabled);
   }
 
