@@ -244,34 +244,40 @@ class ScrubCoordinator {
     await _pauseFuture;
     if (generation != _generation) return;
 
-    // 屏幕显示时间是权威：先钉在目标，再把引擎往屏幕拉（只 seek 一次）
+    // 官方时钟保持冻结；UI 拖动预览由本地 _seeking 负责。
+    // 禁止在引擎 settle 前把官方时钟钉到目标，否则歌词/时间会领先 FLAC 出声。
     final posNotifier = _ref.read(playerPositionProvider.notifier);
-    posNotifier.unfreeze(position);
-    posNotifier.freeze();
 
     final h =
         audioHandler is LxAudioHandler ? audioHandler as LxAudioHandler : null;
+    Duration settled = position;
     if (h != null) {
       final quality = h.mediaItem.value?.extras?['actualQuality']?.toString() ??
           h.mediaItem.value?.extras?['requestedQuality']?.toString() ??
           h.preferredQuality;
-      await h.seekToDisplay(
-        position,
-        budget: seekBudgetForQuality(quality),
-      );
+      final budget = seekBudgetForQuality(quality);
+      // 只 seek 一次并等待 position 稳定
+      settled = await h.seekToDisplay(position, budget: budget);
+      if (generation != _generation) return;
+
+      if (resumeAfter) {
+        await h.play();
+        if (generation != _generation) return;
+        // 起播后只轮询，绝不二次 seek（会打断 FLAC 解码）
+        settled = await h.waitForSettledPosition(
+          position,
+          budget: budget,
+          requirePlaying: true,
+        );
+      }
     } else {
       await _ref.read(playerServiceProvider).seek(position);
-    }
-    if (generation != _generation) return;
-
-    // FLAC：起播后再 seek 会打断解码，声音落后 UI；只 play 一次。
-    if (resumeAfter && h != null) {
-      await h.play();
+      settled = position;
     }
 
     if (generation != _generation) return;
-    // 最终仍以屏幕目标为准，避免引擎回写把 UI 拉回去
-    posNotifier.unfreeze(position);
+    // 用引擎稳定位置解冻，歌词/时间/进度与可听输出同一时钟
+    posNotifier.unfreeze(settled);
   }
 }
 

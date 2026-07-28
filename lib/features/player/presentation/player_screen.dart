@@ -525,13 +525,13 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                   onHorizontalDragEnd: (_) async {
                     final target =
                         Duration(milliseconds: (_seekValue * totalMs).round());
-                    setState(() => _seeking = false);
                     final generation = await _scrubFuture;
                     await ref.read(finishScrubProvider)(
                       generation,
                       target,
                       resumeAfter: _wasPlayingBeforeSeek,
                     );
+                    if (mounted) setState(() => _seeking = false);
                   },
                   onTapUp: (d) async {
                     final playing =
@@ -541,7 +541,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                         Duration(milliseconds: (v * totalMs).round());
                     setState(() {
                       _seekValue = v;
-                      _seeking = false;
+                      _seeking = true;
                       _wasPlayingBeforeSeek = playing;
                     });
                     final generation = await ref.read(beginScrubProvider)();
@@ -550,6 +550,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                       target,
                       resumeAfter: playing,
                     );
+                    if (mounted) setState(() => _seeking = false);
                   },
                   child: SizedBox(
                     height: 28,

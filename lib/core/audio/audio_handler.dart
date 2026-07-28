@@ -372,39 +372,66 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     _broadcastState(_player.playbackEvent);
   }
 
-  /// 以屏幕显示时间为准：只 seek 一次，再在 [budget] 内等待引擎 position 对齐。
-  /// FLAC 上反复 seek 会打断解码，造成「进度已到、声音还在旧位置」。
+  /// 只 seek 一次，再等待引擎 position 稳定靠近目标（不循环 seek）。
   Future<Duration> seekToDisplay(
     Duration displayPosition, {
     Duration? budget,
-    Duration tolerance = const Duration(milliseconds: 120),
+    Duration tolerance = const Duration(milliseconds: 150),
+    int stableHits = 3,
+  }) async {
+    var target = displayPosition;
+    if (target.isNegative) target = Duration.zero;
+    await seek(target);
+    return waitForSettledPosition(
+      target,
+      budget: budget,
+      tolerance: tolerance,
+      stableHits: stableHits,
+      requirePlaying: false,
+    );
+  }
+
+  /// 不起 seek，只在 [budget] 内轮询，直到 position 连续稳定在目标附近。
+  /// FLAC 起播后禁止再 seek，否则解码重启、声音落后 UI。
+  Future<Duration> waitForSettledPosition(
+    Duration target, {
+    Duration? budget,
+    Duration tolerance = const Duration(milliseconds: 150),
+    int stableHits = 3,
+    bool requirePlaying = false,
   }) async {
     final quality = mediaItem.value?.extras?['actualQuality']?.toString() ??
         mediaItem.value?.extras?['requestedQuality']?.toString() ??
         preferredQuality;
     final settleBudget = budget ?? seekBudgetForQuality(quality);
     final deadline = DateTime.now().add(settleBudget);
-    var target = displayPosition;
     if (target.isNegative) target = Duration.zero;
 
-    await seek(target);
-
+    var hits = 0;
+    Duration last = _player.position;
     while (DateTime.now().isBefore(deadline)) {
       final p = _player.position;
       final near =
           (p - target).inMilliseconds.abs() <= tolerance.inMilliseconds;
       final ready = _player.processingState == ProcessingState.ready ||
-          _player.processingState == ProcessingState.buffering ||
-          _player.processingState == ProcessingState.completed;
-      if (near && ready) {
-        _broadcastState(_player.playbackEvent);
-        return p;
+          _player.processingState == ProcessingState.buffering;
+      final playingOk = !requirePlaying || _player.playing;
+      if (near && ready && playingOk) {
+        hits += 1;
+        last = p;
+        if (hits >= stableHits) {
+          _broadcastState(_player.playbackEvent);
+          return p;
+        }
+      } else {
+        hits = 0;
+        last = p;
       }
       await Future<void>.delayed(const Duration(milliseconds: 25));
     }
 
     _broadcastState(_player.playbackEvent);
-    return _player.position;
+    return last;
   }
 
   @override

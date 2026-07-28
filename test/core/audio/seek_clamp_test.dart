@@ -18,8 +18,7 @@ void main() {
     expect(handler, isNot(contains('await _player.play()')));
   });
 
-  test('seekToDisplay seeks once then waits instead of re-seeking in a loop',
-      () {
+  test('seekToDisplay seeks once then waits for stable engine position', () {
     final handler = File(
       'lib/core/audio/audio_handler.dart',
     ).readAsStringSync();
@@ -28,12 +27,10 @@ void main() {
       handler.indexOf('Future<void> stop() async'),
     );
 
-    // Exactly one engine seek for alignment (await seek(...)).
     expect('await seek('.allMatches(method).length, 1);
+    expect(method, contains('waitForSettledPosition'));
+    expect(method, contains('stableHits'));
     expect(method, contains('ProcessingState.ready'));
-    expect(method, contains('milliseconds: 25'));
-    // Must not call seek again inside the wait loop.
-    expect(method, isNot(contains('// 引擎还没跟上屏幕：再 seek 一次')));
   });
 
   test('lossless formats get a longer seek settle budget', () {
@@ -45,7 +42,7 @@ void main() {
     expect(handler, contains('milliseconds: 1200'));
   });
 
-  test('scrub does not re-seek after play which restarts flac decode', () {
+  test('scrub keeps display frozen until engine settles after play', () {
     final provider = File(
       'lib/features/player/presentation/player_provider.dart',
     ).readAsStringSync();
@@ -57,11 +54,34 @@ void main() {
     expect(scrub, contains('seekToDisplay('));
     expect(scrub, contains('seekBudgetForQuality'));
     expect(scrub, contains('await h.play()'));
-    // Post-play second seekToDisplay is the FLAC desync trigger.
+    // Must not pin UI to target before engine is ready.
+    expect(scrub, isNot(contains('posNotifier.unfreeze(position)')));
+    expect(scrub, contains('unfreeze(settled)'));
     expect(
       scrub.split('seekToDisplay(').length - 1,
       1,
       reason: 'only one seekToDisplay per scrub finish',
+    );
+  });
+
+  test('progress UI holds local preview until scrub finish returns', () {
+    final full = File(
+      'lib/features/player/presentation/player_screen.dart',
+    ).readAsStringSync();
+    final mini = File(
+      'lib/features/player/presentation/widgets/mini_player.dart',
+    ).readAsStringSync();
+
+    // Clear seeking only after finishScrub completes.
+    final fullEnd = full.substring(full.indexOf('onHorizontalDragEnd:'));
+    final miniEnd = mini.substring(mini.indexOf('onHorizontalDragEnd:'));
+    expect(
+      fullEnd.indexOf('finishScrubProvider'),
+      lessThan(fullEnd.indexOf('_seeking = false')),
+    );
+    expect(
+      miniEnd.indexOf('finishScrubProvider'),
+      lessThan(miniEnd.indexOf('_seeking = false')),
     );
   });
 
