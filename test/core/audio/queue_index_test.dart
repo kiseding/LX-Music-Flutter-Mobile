@@ -124,5 +124,48 @@ void main() {
         -1,
       );
     });
+
+    test('repeat group wraps to the first queue item', () {
+      expect(
+        completionQueueIndex(
+          currentIndex: 2,
+          queueLength: 3,
+          repeatMode: AudioServiceRepeatMode.group,
+          shuffle: false,
+        ),
+        0,
+      );
+    });
+
+    test('shuffle completion uses the supplied selection', () {
+      var calls = 0;
+      expect(
+        completionQueueIndex(
+          currentIndex: 1,
+          queueLength: 4,
+          repeatMode: AudioServiceRepeatMode.none,
+          shuffle: true,
+          randomNext: (max) {
+            calls++;
+            expect(max, 3);
+            return 1;
+          },
+        ),
+        2,
+      );
+      expect(calls, 1);
+    });
+
+    test('single-item no-repeat completion stops', () {
+      expect(
+        completionQueueIndex(
+          currentIndex: 0,
+          queueLength: 1,
+          repeatMode: AudioServiceRepeatMode.none,
+          shuffle: false,
+        ),
+        -1,
+      );
+    });
   });
 }

@@ -165,6 +165,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   int _installedSourceOwnerToken = 0;
   Future<void> _sourceMutationTail = Future<void>.value();
   int _installedPlaybackGeneration = -1;
+  String? _installedMediaId;
   int _lastHandledCompletionGeneration = -1;
   String? _activeItemId;
 
@@ -261,9 +262,11 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         expectedIndex < 0 ||
         expectedIndex >= _queue.length ||
         _queue[expectedIndex].id != expectedId ||
-        mediaItem.value?.id != expectedId) {
+        mediaItem.value?.id != expectedId ||
+        _installedMediaId != expectedId) {
       return;
     }
+    final expectedIntentGeneration = _userIntentGeneration;
     _lastHandledCompletionGeneration = gen;
     final shuffle = _player.shuffleModeEnabled ||
         playbackState.value.shuffleMode == AudioServiceShuffleMode.all;
@@ -279,15 +282,22 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     Future(() async {
       try {
         if (_isStale(gen) ||
+            _installedPlaybackGeneration != gen ||
+            _installedMediaId != expectedId ||
             _activeItemId != expectedId ||
             _currentIndex != expectedIndex ||
             expectedIndex >= _queue.length ||
             _queue[expectedIndex].id != expectedId ||
-            mediaItem.value?.id != expectedId) {
+            mediaItem.value?.id != expectedId ||
+            _userIntentGeneration != expectedIntentGeneration ||
+            !_userWantsPlay) {
           return;
         }
-        _userWantsPlay = true; // 自动下一首：恢复意图
-        await skipToQueueItem(target, seamless: true);
+        await _loadQueueItem(
+          target,
+          seamless: true,
+          preserveUserIntent: true,
+        );
       } catch (e) {
         debugPrint('[AudioHandler] auto-next failed: $e');
       }
@@ -696,9 +706,9 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
           return;
         }
         _installedPlaybackGeneration = gen;
-        // seamless 自动下一首必须 play，即使 completed 后 playing 已是 false
-        if (_userWantsPlay || seamless) {
-          _userWantsPlay = true;
+        _installedMediaId = itemId;
+        // completed 后 engine playing 可能为 false，以当前用户意图决定是否续播。
+        if (_userWantsPlay) {
           _startPlayer();
         }
         if (!_isStale(gen)) _schedulePreload();
