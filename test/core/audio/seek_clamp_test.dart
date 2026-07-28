@@ -209,6 +209,89 @@ void main() {
     expect(handler.mediaItem.value?.id, 'B');
     expect(handler.playbackState.value.updatePosition, Duration.zero);
   });
+
+  test('explicit play during stale scrub pause is restored', () async {
+    final pauseGate = _Gate();
+    final player = _SeekAudioPlayer(
+      processingState: ProcessingState.ready,
+      pauseGate: pauseGate,
+    );
+    final handler = LxAudioHandler(player: player);
+    addTearDown(player.dispose);
+    await handler.setPlaylist([_item('A')]);
+    await pumpEventQueue();
+    final sourceGeneration = handler.sourceGeneration;
+    final userIntentGeneration = handler.userIntentGeneration;
+
+    final scrubPause = handler.pauseForScrub(
+      sourceGeneration: sourceGeneration,
+      userIntentGeneration: userIntentGeneration,
+      stillOwnsScrub: () => true,
+    );
+    await pauseGate.started.future;
+    await handler.play();
+    pauseGate.release.complete();
+    await scrubPause;
+
+    expect(player.playing, isTrue);
+  });
+
+  test('newer source selection survives stale scrub pause', () async {
+    final pauseGate = _Gate();
+    final player = _SeekAudioPlayer(
+      processingState: ProcessingState.ready,
+      pauseGate: pauseGate,
+    );
+    final handler = LxAudioHandler(player: player);
+    addTearDown(player.dispose);
+    await handler.setPlaylist([_item('A'), _item('B')]);
+    await pumpEventQueue();
+
+    final scrubPause = handler.pauseForScrub(
+      sourceGeneration: handler.sourceGeneration,
+      userIntentGeneration: handler.userIntentGeneration,
+      stillOwnsScrub: () => true,
+    );
+    await pauseGate.started.future;
+    await handler.skipToQueueItem(1);
+    pauseGate.release.complete();
+    await scrubPause;
+
+    expect(handler.mediaItem.value?.id, 'B');
+    expect((player.audioSource as ProgressiveAudioSource).tag.id, 'B');
+    expect(player.playing, isTrue);
+  });
+
+  for (final action
+      in <({String name, Future<void> Function(LxAudioHandler) run})>[
+    (name: 'pause', run: (handler) => handler.pause()),
+    (name: 'stop', run: (handler) => handler.stop()),
+  ]) {
+    test('newer explicit ${action.name} is not revived by stale scrub pause',
+        () async {
+      final pauseGate = _Gate();
+      final player = _SeekAudioPlayer(
+        processingState: ProcessingState.ready,
+        pauseGate: pauseGate,
+      );
+      final handler = LxAudioHandler(player: player);
+      addTearDown(player.dispose);
+      await handler.setPlaylist([_item('A')]);
+      await pumpEventQueue();
+
+      final scrubPause = handler.pauseForScrub(
+        sourceGeneration: handler.sourceGeneration,
+        userIntentGeneration: handler.userIntentGeneration,
+        stillOwnsScrub: () => true,
+      );
+      await pauseGate.started.future;
+      await action.run(handler);
+      pauseGate.release.complete();
+      await scrubPause;
+
+      expect(player.playing, isFalse);
+    });
+  }
 }
 
 MediaItem _item(String id) => MediaItem(
@@ -228,6 +311,7 @@ class _SeekAudioPlayer extends AudioPlayer {
   final Duration? failedSeekPosition;
   final Object? seekError;
   final _Gate? seekGate;
+  _Gate? pauseGate;
   final requestedPositions = <Duration>[];
   AudioSource? loadedSource;
   bool _playing = false;
@@ -240,6 +324,7 @@ class _SeekAudioPlayer extends AudioPlayer {
     this.failedSeekPosition,
     this.seekError,
     this.seekGate,
+    this.pauseGate,
   })  : engineProcessingState = processingState,
         enginePosition = position;
 
@@ -294,6 +379,12 @@ class _SeekAudioPlayer extends AudioPlayer {
 
   @override
   Future<void> pause() async {
+    final gate = pauseGate;
+    pauseGate = null;
+    if (gate != null) {
+      gate.started.complete();
+      await gate.release.future;
+    }
     _playing = false;
   }
 

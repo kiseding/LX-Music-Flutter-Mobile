@@ -1,9 +1,14 @@
 import 'dart:async';
 
+import 'package:audio_service/audio_service.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:just_audio/just_audio.dart';
+import 'package:lx_music_flutter/core/audio/audio_handler.dart';
 import 'package:lx_music_flutter/features/player/presentation/player_provider.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   test('loading seek unfreezes to current engine position without resuming',
       () async {
     final playback = _FakeScrubPlayback(
@@ -346,6 +351,45 @@ void main() {
     expect(playback.pauseCalls, 1);
     expect(playback.resumeCalls, 1);
   });
+
+  test('newer scrub resume survives older preserving pause completion',
+      () async {
+    final oldPauseGate = _Gate();
+    final player = _CoordinatorAudioPlayer(oldPauseGate);
+    final handler = LxAudioHandler(player: player);
+    addTearDown(player.dispose);
+    await handler.setPlaylist([
+      const MediaItem(
+        id: 'A',
+        title: 'A',
+        extras: {
+          'url': 'file:///tmp/A.mp3',
+          'requestedQuality': '320k',
+        },
+      )
+    ]);
+    await pumpEventQueue();
+    final position = _FakeScrubPosition();
+    final coordinator = ScrubCoordinator(
+      _RealHandlerScrubPlayback(handler),
+      position,
+    );
+
+    final oldBegin = coordinator.begin();
+    await oldPauseGate.started.future;
+    final newerGeneration = await coordinator.begin();
+    await coordinator.finish(
+      newerGeneration,
+      const Duration(seconds: 30),
+      resumeAfter: true,
+    );
+    expect(player.playing, isTrue);
+
+    oldPauseGate.release.complete();
+    await oldBegin;
+
+    expect(player.playing, isTrue);
+  });
 }
 
 class _FakeScrubPlayback implements ScrubPlayback {
@@ -386,7 +430,11 @@ class _FakeScrubPlayback implements ScrubPlayback {
   }
 
   @override
-  Future<void> pauseForScrub() async {
+  Future<void> pauseForScrub({
+    required int sourceGeneration,
+    required int userIntentGeneration,
+    required bool Function() stillOwnsScrub,
+  }) async {
     pauseCalls++;
     final gate = pauseGate;
     if (gate != null) {
@@ -431,4 +479,99 @@ class _FakeScrubPosition implements ScrubPosition {
 class _Gate {
   final started = Completer<void>();
   final release = Completer<void>();
+}
+
+class _RealHandlerScrubPlayback implements ScrubPlayback {
+  final LxAudioHandler handler;
+
+  _RealHandlerScrubPlayback(this.handler);
+
+  @override
+  bool get playing => handler.player.playing;
+
+  @override
+  Duration get position => handler.player.position;
+
+  @override
+  int get sourceGeneration => handler.sourceGeneration;
+
+  @override
+  int get userIntentGeneration => handler.userIntentGeneration;
+
+  @override
+  Future<void> pauseForScrub({
+    required int sourceGeneration,
+    required int userIntentGeneration,
+    required bool Function() stillOwnsScrub,
+  }) =>
+      handler.pauseForScrub(
+        sourceGeneration: sourceGeneration,
+        userIntentGeneration: userIntentGeneration,
+        stillOwnsScrub: stillOwnsScrub,
+      );
+
+  @override
+  Future<Duration?> seekConfirmed(Duration position) =>
+      handler.seekConfirmed(position);
+
+  @override
+  Future<void> resumeAfterScrub() => handler.play();
+}
+
+class _CoordinatorAudioPlayer extends AudioPlayer {
+  final _Gate oldPauseGate;
+  bool _oldPausePending = true;
+  bool _playing = false;
+  Duration _position = Duration.zero;
+  AudioSource? _source;
+
+  _CoordinatorAudioPlayer(this.oldPauseGate);
+
+  @override
+  bool get playing => _playing;
+
+  @override
+  Duration get position => _position;
+
+  @override
+  Duration? get duration => const Duration(minutes: 3);
+
+  @override
+  ProcessingState get processingState => ProcessingState.ready;
+
+  @override
+  AudioSource? get audioSource => _source;
+
+  @override
+  Future<Duration?> setAudioSource(
+    AudioSource source, {
+    bool preload = true,
+    int? initialIndex,
+    Duration? initialPosition,
+  }) async {
+    _source = source;
+    _position = initialPosition ?? Duration.zero;
+    return duration;
+  }
+
+  @override
+  Future<void> play() async => _playing = true;
+
+  @override
+  Future<void> pause() async {
+    if (_oldPausePending) {
+      _oldPausePending = false;
+      oldPauseGate.started.complete();
+      await oldPauseGate.release.future;
+    }
+    _playing = false;
+  }
+
+  @override
+  Future<void> seek(Duration? position, {int? index}) async {
+    if (position != null) _position = position;
+  }
+
+  @override
+  Future<void> stop() async => _playing = false;
 }

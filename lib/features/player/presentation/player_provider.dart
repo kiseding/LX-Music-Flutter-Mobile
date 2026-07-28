@@ -226,7 +226,11 @@ abstract interface class ScrubPlayback {
   int get sourceGeneration;
   int get userIntentGeneration;
 
-  Future<void> pauseForScrub();
+  Future<void> pauseForScrub({
+    required int sourceGeneration,
+    required int userIntentGeneration,
+    required bool Function() stillOwnsScrub,
+  });
   Future<Duration?> seekConfirmed(Duration position);
   Future<void> resumeAfterScrub();
 }
@@ -251,8 +255,13 @@ class ScrubCoordinator {
     _transactions.clear();
     _position.freeze();
 
-    final pauseFuture =
-        _playback.playing ? _playback.pauseForScrub() : Future<void>.value();
+    final pauseFuture = _playback.playing
+        ? _playback.pauseForScrub(
+            sourceGeneration: sourceGeneration,
+            userIntentGeneration: userIntentGeneration,
+            stillOwnsScrub: () => generation == _generation,
+          )
+        : Future<void>.value();
     _transactions[generation] = _ScrubTransaction(
       sourceGeneration: sourceGeneration,
       userIntentGeneration: userIntentGeneration,
@@ -337,8 +346,17 @@ class _HandlerScrubPlayback implements ScrubPlayback {
   int get userIntentGeneration => _handler?.userIntentGeneration ?? 0;
 
   @override
-  Future<void> pauseForScrub() =>
-      _handler?.pauseInternal(clearIntent: false) ?? Future<void>.value();
+  Future<void> pauseForScrub({
+    required int sourceGeneration,
+    required int userIntentGeneration,
+    required bool Function() stillOwnsScrub,
+  }) =>
+      _handler?.pauseForScrub(
+        sourceGeneration: sourceGeneration,
+        userIntentGeneration: userIntentGeneration,
+        stillOwnsScrub: stillOwnsScrub,
+      ) ??
+      Future<void>.value();
 
   @override
   Future<Duration?> seekConfirmed(Duration position) async {

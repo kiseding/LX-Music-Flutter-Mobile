@@ -401,6 +401,54 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     await super.pause();
   }
 
+  Future<void> pauseForScrub({
+    required int sourceGeneration,
+    required int userIntentGeneration,
+    required bool Function() stillOwnsScrub,
+  }) async {
+    try {
+      await _player.pause();
+    } catch (e) {
+      debugPrint('[AudioHandler] scrub pause failed: $e');
+    }
+    await super.pause();
+
+    final stale = sourceGeneration != _playGeneration ||
+        userIntentGeneration != _userIntentGeneration ||
+        !stillOwnsScrub();
+    if (stale && _userWantsPlay) {
+      _restoreAuthoritativePlaybackAfterScrubPause();
+    }
+  }
+
+  void _restoreAuthoritativePlaybackAfterScrubPause() {
+    final sourceGeneration = _playGeneration;
+    final userIntentGeneration = _userIntentGeneration;
+    final sourceOwnerToken = _installedSourceOwnerToken;
+    final itemId = _activeItemId;
+    final index = _currentIndex;
+
+    bool stillOwnsRestore() =>
+        _userWantsPlay &&
+        sourceGeneration == _playGeneration &&
+        userIntentGeneration == _userIntentGeneration &&
+        sourceOwnerToken == _installedSourceOwnerToken &&
+        _installedPlaybackGeneration == sourceGeneration &&
+        _installedMediaId == itemId &&
+        itemId != null &&
+        mediaItem.value?.id == itemId &&
+        index == _currentIndex &&
+        index >= 0 &&
+        index < _queue.length &&
+        _queue[index].id == itemId;
+
+    if (!stillOwnsRestore()) return;
+    _startPlayer(stillOwnsStart: stillOwnsRestore);
+    if (stillOwnsRestore()) {
+      _publishPlaybackState(playingOverride: true);
+    }
+  }
+
   @override
   Future<void> seek(Duration position) async {
     await seekConfirmed(position);
