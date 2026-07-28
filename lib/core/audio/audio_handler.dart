@@ -1071,10 +1071,12 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       }
     }
     queue.add(List.from(_queue));
+    final sourceGeneration = _playGeneration;
     final initialIntentGeneration = _userIntentGeneration;
     if (reloadIntent.resumeAfterReload) {
       await pauseInternal(clearIntent: false);
     }
+    if (_playGeneration != sourceGeneration) return;
 
     final idx = reloadItemId == null
         ? -1
