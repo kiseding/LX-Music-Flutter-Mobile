@@ -22,12 +22,15 @@ class PlaybackCommandCoordinator {
   int? _installedSourceToken;
   bool _stopDesired = false;
   bool _desiredPlaying = false;
+  bool _preservingPause = false;
   int _intentRevision = 0;
   int? _resumeDeniedIntentRevision;
   int _interruptionDepth = 0;
   bool _interruptionMayResume = true;
+  int _interruptionBeginIntentRevision = 0;
   int _seekRevision = 0;
   int _appliedSeekRevision = 0;
+  int _failedSeekRevision = 0;
   Duration? _desiredSeek;
   LoopMode? _desiredLoopMode;
   LoopMode? _appliedLoopMode;
@@ -35,6 +38,7 @@ class PlaybackCommandCoordinator {
   bool? _appliedShuffleEnabled;
   int _playCommandToken = 0;
   int? _activePlayCommandToken;
+  final Map<int, _PlayEndReason> _playEndReasons = {};
   int _lastPlayAttemptRevision = -1;
   int? _failedPlayIntentRevision;
   int? _failedPlaySourceToken;
@@ -88,6 +92,7 @@ class PlaybackCommandCoordinator {
   Future<void> explicitPlay() {
     _intentRevision++;
     _desiredPlaying = true;
+    _preservingPause = false;
     _stopDesired = false;
     return _markDirty();
   }
@@ -95,14 +100,23 @@ class PlaybackCommandCoordinator {
   Future<void> explicitPause() {
     _intentRevision++;
     _desiredPlaying = false;
+    _preservingPause = false;
     return _markDirty();
   }
 
-  Future<void> pausePreservingIntent() =>
-      _markDirty(forcePause: true, awaitApplication: true);
+  Future<void> pausePreservingIntent() {
+    _preservingPause = true;
+    return _markDirty(awaitApplication: true);
+  }
+
+  Future<void> resumePreservingIntent() {
+    _preservingPause = false;
+    return _markDirty();
+  }
 
   Future<void> setPlayingPreservingIntent(bool playing) {
     _desiredPlaying = playing;
+    if (!playing) _preservingPause = true;
     return _markDirty();
   }
 
@@ -117,6 +131,7 @@ class PlaybackCommandCoordinator {
   Future<void> stop() {
     _intentRevision++;
     _desiredPlaying = false;
+    _preservingPause = false;
     _desiredSource = null;
     _stopDesired = true;
     _sourceToken++;
@@ -127,7 +142,7 @@ class PlaybackCommandCoordinator {
     _desiredSeek = position;
     final revision = ++_seekRevision;
     await _markDirty(awaitApplication: true);
-    return _appliedSeekRevision >= revision;
+    return _appliedSeekRevision == revision;
   }
 
   Future<void> setLoopMode(LoopMode mode) {
@@ -141,17 +156,26 @@ class PlaybackCommandCoordinator {
   }
 
   Future<void> beginInterruption() {
-    if (_interruptionDepth == 0) _interruptionMayResume = true;
+    if (_interruptionDepth == 0) {
+      _interruptionMayResume = true;
+      _interruptionBeginIntentRevision = _intentRevision;
+    }
     _interruptionDepth++;
     return _markDirty();
   }
 
-  Future<void> endInterruption({required bool mayResume}) {
+  Future<void> endInterruption({
+    required bool mayResume,
+    bool allowAutomaticResume = true,
+  }) {
     if (_interruptionDepth == 0) return settled;
     if (!mayResume) _interruptionMayResume = false;
     _interruptionDepth--;
     if (_interruptionDepth == 0) {
-      if (!_interruptionMayResume) {
+      final hasNewExplicitPlay =
+          _desiredPlaying && _intentRevision > _interruptionBeginIntentRevision;
+      if (!_interruptionMayResume ||
+          (!allowAutomaticResume && !hasNewExplicitPlay)) {
         _resumeDeniedIntentRevision = _intentRevision;
       }
       _interruptionMayResume = true;
@@ -164,12 +188,12 @@ class PlaybackCommandCoordinator {
     _interruptionMayResume = true;
     _intentRevision++;
     _desiredPlaying = false;
+    _preservingPause = false;
     _resumeDeniedIntentRevision = _intentRevision;
     return _markDirty();
   }
 
   Future<void> _markDirty({
-    bool forcePause = false,
     bool awaitApplication = false,
   }) {
     final revision = ++_revision;
@@ -178,7 +202,7 @@ class PlaybackCommandCoordinator {
     _pendingReconciliations++;
     final next = () async {
       await previous;
-      await _reconcile(revision, forcePause: forcePause);
+      await _reconcile(revision);
     }();
     final tracked = next.whenComplete(() => _pendingReconciliations--);
     _tail = tracked.catchError((Object _, StackTrace __) {});
@@ -189,12 +213,12 @@ class PlaybackCommandCoordinator {
 
   bool get _effectivePlaying =>
       _desiredPlaying &&
+      !_preservingPause &&
       !interruptionActive &&
       (_resumeDeniedIntentRevision == null ||
           _intentRevision > _resumeDeniedIntentRevision!);
 
-  Future<void> _reconcile(int commandRevision,
-      {bool forcePause = false}) async {
+  Future<void> _reconcile(int commandRevision) async {
     try {
       if (_desiredLoopMode != null && _desiredLoopMode != _appliedLoopMode) {
         final mode = _desiredLoopMode!;
@@ -215,6 +239,10 @@ class PlaybackCommandCoordinator {
         if (_installedSourceToken != null ||
             _player.playing ||
             _player.processingState != ProcessingState.idle) {
+          final playToken = _activePlayCommandToken;
+          if (playToken != null) {
+            _playEndReasons[playToken] = _PlayEndReason.stop;
+          }
           await _player.stop();
         }
         _installedSourceToken = null;
@@ -251,18 +279,30 @@ class PlaybackCommandCoordinator {
 
       if (_desiredSeek != null &&
           _appliedSeekRevision != _seekRevision &&
+          _failedSeekRevision != _seekRevision &&
           _installedSourceToken == _desiredSource?.token) {
         final position = _desiredSeek!;
         final seekRevision = _seekRevision;
-        await _player.seek(position);
-        _appliedSeekRevision = seekRevision;
+        try {
+          await _player.seek(position);
+          _appliedSeekRevision = seekRevision;
+        } catch (error, stackTrace) {
+          _failedSeekRevision = seekRevision;
+          _onError?.call('seek', error, stackTrace);
+        }
         _notifyIfCurrent(commandRevision);
       }
 
       final sourceReady = _desiredSource != null &&
           _installedSourceToken == _desiredSource!.token;
-      if (forcePause || !_effectivePlaying) {
+      if (!_effectivePlaying) {
         if (_player.playing || _activePlayCommandToken != null) {
+          final playToken = _activePlayCommandToken;
+          if (playToken != null) {
+            _playEndReasons[playToken] = _preservingPause
+                ? _PlayEndReason.preservingPause
+                : _PlayEndReason.pause;
+          }
           await _player.pause();
           _activePlayCommandToken = null;
           _notifyIfCurrent(commandRevision);
@@ -306,8 +346,14 @@ class PlaybackCommandCoordinator {
   }
 
   void _onPlayLifecycleComplete(int token) {
-    if (_activePlayCommandToken == token) {
-      _activePlayCommandToken = null;
+    final reason = _playEndReasons.remove(token) ??
+        (_player.processingState == ProcessingState.completed
+            ? _PlayEndReason.completed
+            : _PlayEndReason.unknown);
+    final ownsLifecycle = _activePlayCommandToken == token;
+    if (ownsLifecycle) _activePlayCommandToken = null;
+    if (reason == _PlayEndReason.completed || reason == _PlayEndReason.stop) {
+      return;
     }
     _markDirty();
   }
@@ -317,6 +363,11 @@ class PlaybackCommandCoordinator {
     Object error,
     StackTrace stackTrace,
   ) {
+    _playEndReasons.remove(token);
+    if (_activePlayCommandToken != token) {
+      _markDirty();
+      return;
+    }
     if (_activePlayCommandToken == token) {
       _activePlayCommandToken = null;
       _failedPlayIntentRevision = _intentRevision;
@@ -331,6 +382,8 @@ class PlaybackCommandCoordinator {
     if (commandRevision == _revision) _onStateChanged?.call();
   }
 }
+
+enum _PlayEndReason { preservingPause, pause, stop, completed, unknown }
 
 class _DesiredSource {
   final int token;

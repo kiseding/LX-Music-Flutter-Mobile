@@ -496,6 +496,27 @@ void main() {
     expect(player.playing, isFalse);
   });
 
+  test('explicit play during interruption starts after resumable final end',
+      () async {
+    final player = _InterruptionAudioPlayer();
+    final handler = LxAudioHandler(player: player);
+    addTearDown(player.dispose);
+    await handler.setPlaylist([_item('A')]);
+    await handler.pause();
+    await handler.beginAudioInterruption();
+    final playCalls = player.playCalls;
+
+    await handler.play();
+
+    expect(player.playCalls, playCalls);
+    expect(player.playing, isFalse);
+
+    await handler.endAudioInterruption(mayResume: true);
+
+    expect(player.playCalls, playCalls + 1);
+    expect(player.playing, isTrue);
+  });
+
   test('play idle recovery cannot forget a completed interruption cycle',
       () async {
     final sourceGate = _Gate();
@@ -648,13 +669,13 @@ void main() {
     await handler.beginAudioInterruption();
     await handler.endAudioInterruption(mayResume: false);
     await handler.skipToQueueItem(1);
-    expect(player.playing, isTrue);
+    expect(player.playing, isFalse);
 
     playGate.release.complete();
     await pumpEventQueue();
 
     expect(handler.mediaItem.value?.id, 'B');
-    expect(player.playing, isTrue);
+    expect(player.playing, isFalse);
   });
 
   test('completion cannot auto-advance while interrupted', () async {

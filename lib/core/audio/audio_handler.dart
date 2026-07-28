@@ -525,7 +525,8 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         _interruptionMediaId == _activeItemId &&
         _userWantsPlay;
     await _commands.endInterruption(
-      mayResume: mayResume && (!finalEnd || ownsPlayback),
+      mayResume: mayResume,
+      allowAutomaticResume: !finalEnd || ownsPlayback,
     );
     if (interruptionGeneration != _interruptionGeneration) return;
     if (!finalEnd || _interruptionPolicy.active) return;
@@ -575,15 +576,16 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     int? interruptionGeneration,
     int? startBlockGeneration,
   }) async {
-    if (!_mayStartAfterInterruption(
-      provenance: PlaybackStartProvenance(
-        interruptionGeneration ?? _interruptionGeneration,
-        startBlockGeneration ?? _playbackStartBlockGeneration,
-      ),
-    )) {
+    final provenance = PlaybackStartProvenance(
+      interruptionGeneration ?? _interruptionGeneration,
+      startBlockGeneration ?? _playbackStartBlockGeneration,
+    );
+    if (provenance.blockGeneration != _playbackStartBlockGeneration ||
+        (!interruptionActive &&
+            provenance.interruptionGeneration != _interruptionGeneration)) {
       return;
     }
-    await _commands.explicitPlay();
+    await _commands.resumePreservingIntent();
   }
 
   void _restoreAuthoritativePlaybackAfterScrubPause({
@@ -615,7 +617,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     if (!stillOwnsRestore()) return;
     final started = stillOwnsRestore();
     if (started) {
-      unawaited(_commands.explicitPlay());
+      unawaited(_commands.resumePreservingIntent());
       _publishPlaybackState(playingOverride: true);
     }
   }
@@ -690,7 +692,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   Future<void> skipToNext({bool seamless = false}) async {
     final provenance = _captureStartProvenance();
     final intentGeneration = _expressPlayIntent();
-    unawaited(_commands.explicitPlay());
+    unawaited(_commands.setPlayingPreservingIntent(true));
     await _skipToNextInternal(
       seamless: seamless,
       expectedUserIntentGeneration: intentGeneration,
@@ -742,7 +744,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   Future<void> skipToPrevious() async {
     final provenance = _captureStartProvenance();
     final intentGeneration = _expressPlayIntent();
-    unawaited(_commands.explicitPlay());
+    unawaited(_commands.setPlayingPreservingIntent(true));
     await _skipToPreviousInternal(
       expectedUserIntentGeneration: intentGeneration,
       provenance: provenance,
@@ -871,8 +873,9 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         index >= 0 && index < _queue.length ? _queue[index].id : null;
     final sourceGeneration = _playGeneration;
     if (selectedItemId == null) return;
-    unawaited(
-        playAfterLoad ? _commands.explicitPlay() : _commands.explicitPause());
+    unawaited(playAfterLoad
+        ? _commands.setPlayingPreservingIntent(true)
+        : _commands.explicitPause());
     final sourceCommandToken = _commands.requestSource(
       mediaId: selectedItemId,
       queueIndex: index,
@@ -1051,6 +1054,13 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         }
         return;
       }
+      final ownsExpectedIntent = expectedUserIntentGeneration == null ||
+          expectedUserIntentGeneration == _userIntentGeneration;
+      final shouldResumePreservingPause =
+          ownsExpectedIntent && (playAfterLoad ?? _userWantsPlay);
+      if (shouldResumePreservingPause) {
+        await _commands.resumePreservingIntent();
+      }
       _installedSourceOwnerToken = commandToken;
       transactionIndex = activeItemIndex();
       if (transactionIndex < 0) {
@@ -1117,7 +1127,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       {int initialIndex = 0}) async {
     final provenance = _captureStartProvenance();
     _expressPlayIntent();
-    unawaited(_commands.explicitPlay());
+    unawaited(_commands.setPlayingPreservingIntent(true));
     _bumpGeneration();
     _queue
       ..clear()
