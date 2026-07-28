@@ -1,16 +1,16 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
+import 'dart:io' show ZLibCodec;
 import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_js/flutter_js.dart';
 import 'package:dio/dio.dart';
-import 'package:dio/io.dart';
 import 'package:crypto/crypto.dart';
 import 'package:uuid/uuid.dart';
 import 'package:encrypt/encrypt.dart' as encrypt_lib;
 import 'package:pointycastle/export.dart' as pc;
 import 'lx_source_capabilities.dart';
+import '../../../core/network/app_http_client.dart';
 import '../domain/custom_source.dart';
 import '../../player/domain/music_item.dart';
 
@@ -72,27 +72,12 @@ class CustomSourceEngine {
   Future<void> Function(dynamic)? _handleLxRequest;
 
   CustomSourceEngine() {
-    _dio = Dio(BaseOptions(
-      connectTimeout: const Duration(seconds: 10),
-      receiveTimeout: const Duration(seconds: 15),
-    ));
-    // 仅 debug 放行坏证书；release 使用系统信任
-    if (kDebugMode) {
-      try {
-        (_dio.httpClientAdapter as IOHttpClientAdapter).createHttpClient = () {
-          final client = HttpClient()
-            ..badCertificateCallback = (cert, host, port) => true;
-          return client;
-        };
-      } catch (_) {
-        try {
-          _dio.httpClientAdapter = IOHttpClientAdapter(
-            createHttpClient: () => HttpClient()
-              ..badCertificateCallback = (cert, host, port) => true,
-          );
-        } catch (_) {}
-      }
-    }
+    _dio = AppHttpClient.create(
+      options: BaseOptions(
+        connectTimeout: const Duration(seconds: 10),
+        receiveTimeout: const Duration(seconds: 15),
+      ),
+    );
   }
 
   /// 取消在途 HTTP/请求，防止 dispose/reload 后回调打到已销毁 runtime

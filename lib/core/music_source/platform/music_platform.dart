@@ -1,6 +1,5 @@
-import 'dart:io';
 import 'package:dio/dio.dart';
-import 'package:dio/io.dart';
+import '../../network/app_http_client.dart';
 import '../../../features/player/domain/music_item.dart';
 
 class LeaderboardCategory {
@@ -49,33 +48,19 @@ abstract class MusicPlatform {
   Future<List<MusicItem>> getLeaderboardSongs(String leaderboardId, {int page = 1, int limit = 100}) async => [];
 
   Dio createDio() {
-    final dio = Dio(BaseOptions(
+    return AppHttpClient.create(options: BaseOptions(
       connectTimeout: const Duration(seconds: 10),
       receiveTimeout: const Duration(seconds: 15),
       headers: {'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36'},
     ));
-    _disableCertCheck(dio);
-    return dio;
   }
 
   Dio createDioForService({Duration? connectTimeout, Duration? receiveTimeout, Map<String, dynamic>? headers}) {
-    final dio = Dio(BaseOptions(
+    return AppHttpClient.create(options: BaseOptions(
       connectTimeout: connectTimeout ?? const Duration(seconds: 8),
       receiveTimeout: receiveTimeout ?? const Duration(seconds: 10),
       headers: headers,
     ));
-    _disableCertCheck(dio);
-    return dio;
-  }
-
-  static void _disableCertCheck(Dio dio) {
-    try {
-      (dio.httpClientAdapter as IOHttpClientAdapter).createHttpClient = () {
-        final client = HttpClient()
-          ..badCertificateCallback = (cert, host, port) => true;
-        return client;
-      };
-    } catch (_) {}
   }
 
   MusicItem parseItem(Map<String, dynamic> raw, String source);

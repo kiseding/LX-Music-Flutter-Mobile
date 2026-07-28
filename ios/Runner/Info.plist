@@ -74,13 +74,6 @@
 		<string>fetch</string>
 	</array>
 	
-	<!-- 网络权限 -->
-	<key>NSAppTransportSecurity</key>
-	<dict>
-		<key>NSAllowsArbitraryLoads</key>
-		<true/>
-	</dict>
-	
 	<!-- 麦克风权限（用于语音搜索，可选） -->
 	<key>NSMicrophoneUsageDescription</key>
 	<string>LX Music 需要访问麦克风以进行语音搜索</string>

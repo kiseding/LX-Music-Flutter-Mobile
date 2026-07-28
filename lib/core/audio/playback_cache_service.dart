@@ -4,10 +4,11 @@ import 'dart:io';
 
 import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
-import 'package:dio/io.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import '../network/app_http_client.dart';
 
 typedef PlaybackDownloader = Future<void> Function(
   String url,
@@ -75,23 +76,13 @@ class PlaybackCacheService {
         _indexStore = indexStore ?? PrefsPlaybackCacheIndexStore();
 
   static Dio _createDownloadDio() {
-    final dio = Dio(BaseOptions(
+    return AppHttpClient.create(options: BaseOptions(
       connectTimeout: const Duration(seconds: 20),
       receiveTimeout: const Duration(minutes: 5),
       followRedirects: true,
       maxRedirects: 5,
       validateStatus: (s) => s != null && s >= 200 && s < 400,
     ));
-    // 生产环境使用系统证书信任链，禁止默认放行坏证书（MITM）
-    if (kDebugMode) {
-      try {
-        dio.httpClientAdapter = IOHttpClientAdapter(
-          createHttpClient: () => HttpClient()
-            ..badCertificateCallback = (cert, host, port) => true,
-        );
-      } catch (_) {}
-    }
-    return dio;
   }
 
   static String cacheKey({

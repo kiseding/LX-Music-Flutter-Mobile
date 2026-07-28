@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'package:dio/dio.dart';
-import 'package:dio/io.dart';
-import 'dart:io';
+import '../../../core/network/app_http_client.dart';
 import '../../../core/music_source/platform/source_utils.dart';
 import '../../player/domain/music_item.dart';
 
@@ -21,8 +20,8 @@ class ImportedPlaylist {
 
 /// 本地解析 QQ / 酷我 / 网易歌单（无需登录）
 class PlaylistImportService {
-  final Dio _dio = () {
-    final dio = Dio(BaseOptions(
+  final Dio _dio = AppHttpClient.create(
+    options: BaseOptions(
       connectTimeout: const Duration(seconds: 12),
       receiveTimeout: const Duration(seconds: 20),
       headers: {
@@ -30,14 +29,8 @@ class PlaylistImportService {
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       },
       validateStatus: (s) => s != null && s < 500,
-    ));
-    try {
-      (dio.httpClientAdapter as IOHttpClientAdapter).createHttpClient = () {
-        return HttpClient()..badCertificateCallback = (c, h, p) => true;
-      };
-    } catch (_) {}
-    return dio;
-  }();
+    ),
+  );
 
   Future<ImportedPlaylist> import({
     required String input,
@@ -123,14 +116,19 @@ class PlaylistImportService {
               ? Map<String, dynamic>.from(m['file'])
               : <String, dynamic>{};
           final types = <String>[];
-          if ('${file['size_hires'] ?? 0}' != '0' && file['size_hires'] != null)
+          if ('${file['size_hires'] ?? 0}' != '0' && file['size_hires'] != null) {
             types.add('flac24bit');
-          if ('${file['size_flac'] ?? 0}' != '0' && file['size_flac'] != null)
+          }
+          if ('${file['size_flac'] ?? 0}' != '0' && file['size_flac'] != null) {
             types.add('flac');
+          }
           if ('${file['size_320mp3'] ?? 0}' != '0' &&
-              file['size_320mp3'] != null) types.add('320k');
-          if (types.isEmpty && '${file['size_128mp3'] ?? 0}' != '0')
+              file['size_320mp3'] != null) {
+            types.add('320k');
+          }
+          if (types.isEmpty && '${file['size_128mp3'] ?? 0}' != '0') {
             types.add('128k');
+          }
           final singers = (m['singer'] as List?)
                   ?.map((x) => (x as Map)['name'])
                   .join('、') ??

@@ -2,11 +2,11 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
-import 'package:dio/io.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../../../core/audio/playback_cache_service.dart';
+import '../../../core/network/app_http_client.dart';
 import '../../../core/network/music_source_service.dart';
 import '../../../core/network/play_url_result.dart';
 import '../../../core/storage/storage_service.dart';
@@ -34,22 +34,13 @@ class DownloadService {
   DownloadService({Dio? dio}) : _dio = dio ?? _createDownloadDio();
 
   static Dio _createDownloadDio() {
-    final dio = Dio(BaseOptions(
+    return AppHttpClient.create(options: BaseOptions(
       connectTimeout: const Duration(seconds: 20),
       receiveTimeout: const Duration(minutes: 5),
       followRedirects: true,
       maxRedirects: 5,
       validateStatus: (s) => s != null && s >= 200 && s < 400,
     ));
-    if (kDebugMode) {
-      try {
-        dio.httpClientAdapter = IOHttpClientAdapter(
-          createHttpClient: () => HttpClient()
-            ..badCertificateCallback = (cert, host, port) => true,
-        );
-      } catch (_) {}
-    }
-    return dio;
   }
 
   void setMusicSourceService(MusicSourceService service) {
