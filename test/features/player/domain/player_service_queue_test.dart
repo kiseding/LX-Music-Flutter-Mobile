@@ -264,7 +264,7 @@ void main() {
       player.releaseSourceLoad.complete();
       await load;
 
-      expect(player.playCalls, 0);
+      expect(player.playedSourceIds, isNot(contains('B')));
       expect(handler.mediaItem.value?.id, 'A');
       expect(handler.queueItems.map((item) => item.id),
           replacementId == null ? ['A', 'C'] : ['A', 'D', 'C']);
@@ -309,6 +309,94 @@ void main() {
     expect(validation, lessThan(transaction.indexOf('_startPlayer();')));
     expect(validation, lessThan(transaction.indexOf('_schedulePreload();')));
   });
+
+  for (final replacementId in [null, 'D']) {
+    test(
+        'stale installed source is recovered when item is '
+        '${replacementId == null ? 'removed' : 'replaced'}', () async {
+      MediaItem item(String id) => MediaItem(
+            id: id,
+            title: id,
+            extras: {
+              'url': 'file:///tmp/$id.mp3',
+              'requestedQuality': '320k',
+            },
+          );
+      final current = item('B');
+      await handler.updateQueue([item('A'), current, item('C')]);
+      player.gateNextSourceLoad();
+
+      final load = handler.skipToQueueItem(1);
+      await player.sourceLoadStarted.future;
+      await handler.updateQueue([
+        item('A'),
+        if (replacementId != null) item(replacementId),
+        item('C'),
+      ]);
+      player.releaseSourceLoad.complete();
+      await load;
+      player.playedSourceIds.clear();
+
+      await handler.play();
+
+      expect(player.playedSourceIds, ['A']);
+      expect((player.loadedSource as ProgressiveAudioSource).tag.id, 'A');
+      expect(handler.mediaItem.value?.id, 'A');
+    });
+  }
+
+  test('new user play wins during paused current-item removal', () async {
+    MediaItem item(String id) => MediaItem(
+          id: id,
+          title: id,
+          extras: {
+            'url': 'file:///tmp/$id.mp3',
+            'requestedQuality': '320k',
+          },
+        );
+    final current = item('B');
+    await handler.updateQueue([item('A'), current, item('C')]);
+    await handler.skipToQueueItem(1);
+    await handler.pause();
+    player.gateNextSourceLoad();
+
+    final removal = handler.removeQueueItem(current);
+    await player.sourceLoadStarted.future;
+    await handler.play();
+    player.releaseSourceLoad.complete();
+    await removal;
+
+    expect(player.playing, isTrue);
+    expect((player.loadedSource as ProgressiveAudioSource).tag.id, 'C');
+  });
+
+  test('new user pause wins during playing current-item removal', () async {
+    MediaItem item(String id) => MediaItem(
+          id: id,
+          title: id,
+          extras: {
+            'url': 'file:///tmp/$id.mp3',
+            'requestedQuality': '320k',
+          },
+        );
+    final current = item('B');
+    await handler.updateQueue([item('A'), current, item('C')]);
+    await handler.skipToQueueItem(1);
+    player.gateNextSourceLoad();
+
+    final removal = handler.removeQueueItem(current);
+    await player.sourceLoadStarted.future;
+    await handler.pause();
+    player.releaseSourceLoad.complete();
+    await removal;
+    final loadsAfterRemoval = player.sourceLoadCalls;
+    handler.urlResolver = (id, [extras]) async => 'file:///tmp/$id.flac';
+
+    await handler.applyPreferredQuality('flac');
+
+    expect(player.playing, isFalse);
+    expect(player.sourceLoadCalls, loadsAfterRemoval);
+  });
 }
 
 class _RecordingAudioPlayer extends AudioPlayer {
@@ -319,6 +407,8 @@ class _RecordingAudioPlayer extends AudioPlayer {
   Completer<void>? _sourceLoadStarted;
   Completer<void>? _releaseSourceLoad;
   int playCalls = 0;
+  int sourceLoadCalls = 0;
+  final playedSourceIds = <String>[];
 
   Completer<void> get pauseStarted => _pauseStarted!;
   Completer<void> get releasePause => _releasePause!;
@@ -348,6 +438,7 @@ class _RecordingAudioPlayer extends AudioPlayer {
     int? initialIndex,
     Duration? initialPosition,
   }) async {
+    sourceLoadCalls++;
     loadedSource = source;
     final started = _sourceLoadStarted;
     final release = _releaseSourceLoad;
@@ -363,6 +454,10 @@ class _RecordingAudioPlayer extends AudioPlayer {
   @override
   Future<void> play() async {
     playCalls++;
+    final source = loadedSource;
+    if (source is ProgressiveAudioSource) {
+      playedSourceIds.add((source.tag as MediaItem).id);
+    }
     _playing = true;
   }
 

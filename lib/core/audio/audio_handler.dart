@@ -141,6 +141,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   /// 单调世代：setPlaylist/切歌时递增，取消过期的异步解析/播放
   int _playGeneration = 0;
   bool _userWantsPlay = true;
+  int _userIntentGeneration = 0;
   bool _handlingCompleted = false;
 
   /// >0 时忽略 completed / currentIndex 自动推进（换源、点选切歌期间）
@@ -305,6 +306,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
   @override
   Future<void> play() async {
+    _userIntentGeneration++;
     _userWantsPlay = true;
     // 如果播放器处于空闲/错误状态，先重置再播放
     if (_player.processingState == ProcessingState.idle) {
@@ -329,7 +331,10 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
   /// [clearIntent]=false：拖进度条暂停，不取消「还要继续听」意图（自动下一首仍有效）
   Future<void> pauseInternal({bool clearIntent = true}) async {
-    if (clearIntent) _userWantsPlay = false;
+    if (clearIntent) {
+      _userIntentGeneration++;
+      _userWantsPlay = false;
+    }
     try {
       await _player.pause();
     } catch (e) {
@@ -381,6 +386,11 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
   @override
   Future<void> stop() async {
+    _userIntentGeneration++;
+    await _stopInternal();
+  }
+
+  Future<void> _stopInternal() async {
     _userWantsPlay = false;
     _bumpGeneration();
     await _player.stop();
@@ -516,10 +526,19 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
   @override
   Future<void> skipToQueueItem(int index, {bool seamless = false}) async {
+    await _loadQueueItem(index, seamless: seamless);
+  }
+
+  Future<void> _loadQueueItem(
+    int index, {
+    bool seamless = false,
+    bool preserveUserIntent = false,
+    bool recoverStaleInstall = true,
+  }) async {
     if (index < 0 || index >= _queue.length) return;
 
     final gen = _bumpGeneration();
-    _userWantsPlay = true;
+    if (!preserveUserIntent) _userWantsPlay = true;
     final item = _queue[index];
     final itemId = item.id;
     int activeItemIndex() {
@@ -633,7 +652,10 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
           initialPosition: Duration.zero,
         );
         transactionIndex = activeItemIndex();
-        if (transactionIndex < 0) return;
+        if (transactionIndex < 0) {
+          await _recoverStaleSource(recover: recoverStaleInstall);
+          return;
+        }
         // seamless 自动下一首必须 play，即使 completed 后 playing 已是 false
         if (_userWantsPlay || seamless) {
           _userWantsPlay = true;
@@ -655,6 +677,23 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         }
       }
     });
+  }
+
+  Future<void> _recoverStaleSource({required bool recover}) async {
+    await _player.stop();
+    if (!recover) return;
+
+    final authoritativeId = mediaItem.value?.id;
+    if (authoritativeId == null || _activeItemId != authoritativeId) return;
+    final authoritativeIndex =
+        _queue.indexWhere((item) => item.id == authoritativeId);
+    if (authoritativeIndex < 0 || _currentIndex != authoritativeIndex) return;
+
+    await _loadQueueItem(
+      authoritativeIndex,
+      preserveUserIntent: true,
+      recoverStaleInstall: false,
+    );
   }
 
   // 设置播放列表并开始播放
@@ -692,7 +731,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       _activeItemId = null;
       this.queue.add(const <MediaItem>[]);
       mediaItem.add(null);
-      await stop();
+      await _stopInternal();
       return;
     }
     final retained = currentId == null
@@ -727,6 +766,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       final removedCurrent = currentId == targetId;
       final wasPlaying = _player.playing;
       final wantedPlay = _userWantsPlay;
+      final intentGeneration = _userIntentGeneration;
       if (removedCurrent && _activeItemId != targetId) return;
       if (removedCurrent && wasPlaying) {
         await _haltCurrentPlayback();
@@ -744,7 +784,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         _activeItemId = null;
         queue.add(const <MediaItem>[]);
         this.mediaItem.add(null);
-        await stop();
+        await _stopInternal();
         return;
       }
 
@@ -755,7 +795,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       if (removedCurrent) {
         final replacementId = _queue[replacementIndex].id;
         queue.add(List.unmodifiable(_queue));
-        await skipToQueueItem(replacementIndex);
+        await _loadQueueItem(replacementIndex, preserveUserIntent: true);
         var relocatedReplacement =
             _queue.indexWhere((item) => item.id == replacementId);
         if (relocatedReplacement < 0 ||
@@ -763,7 +803,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
             _activeItemId != replacementId) {
           return;
         }
-        if (!wasPlaying) {
+        if (_userIntentGeneration == intentGeneration && !wasPlaying) {
           await pauseInternal(clearIntent: false);
           relocatedReplacement =
               _queue.indexWhere((item) => item.id == replacementId);
@@ -773,7 +813,9 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
             return;
           }
         }
-        _userWantsPlay = wantedPlay;
+        if (_userIntentGeneration == intentGeneration) {
+          _userWantsPlay = wantedPlay;
+        }
         return;
       }
 
