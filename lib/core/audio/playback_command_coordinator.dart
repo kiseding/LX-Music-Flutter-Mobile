@@ -90,7 +90,10 @@ class PlaybackCommandCoordinator {
   int get intentRevision => _intentRevision;
   int get interruptionDepth => _interruptionDepth;
   bool get interruptionActive => _interruptionDepth > 0;
-  bool get desiredPlaying => _desiredPlaying;
+  bool get desiredPlayingIntent =>
+      _desiredPlaying &&
+      (_resumeDeniedIntentRevision == null ||
+          _intentRevision > _resumeDeniedIntentRevision!);
   bool get effectivePlaying => _effectivePlaying;
   Future<void> get settled => _tail;
 
@@ -271,11 +274,9 @@ class PlaybackCommandCoordinator {
   }
 
   bool get _effectivePlaying =>
-      _desiredPlaying &&
+      desiredPlayingIntent &&
       _preservingPauseOwners.isEmpty &&
-      !interruptionActive &&
-      (_resumeDeniedIntentRevision == null ||
-          _intentRevision > _resumeDeniedIntentRevision!);
+      !interruptionActive;
 
   Future<void> _reconcile(int commandRevision) async {
     try {

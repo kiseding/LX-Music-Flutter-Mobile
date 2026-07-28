@@ -110,12 +110,30 @@ void main() {
     await coordinator.beginInterruption();
     await coordinator.endInterruption(mayResume: false);
 
+    expect(coordinator.desiredPlayingIntent, isFalse);
+
     await coordinator.setDesiredPlayingPreservingIntent(false);
     await coordinator.setDesiredPlayingPreservingIntent(true);
 
+    expect(coordinator.desiredPlayingIntent, isFalse);
     expect(player.playing, isFalse);
     await coordinator.recordExplicitPlayIntent();
+    expect(coordinator.desiredPlayingIntent, isTrue);
     expect(player.playing, isTrue);
+  });
+
+  test('desired playing intent ignores temporary interruption blocking',
+      () async {
+    final player = _LifecycleAudioPlayer();
+    final coordinator = PlaybackCommandCoordinator(player);
+    addTearDown(player.dispose);
+    await _install(coordinator);
+    await coordinator.recordExplicitPlayIntent();
+
+    await coordinator.beginInterruption();
+
+    expect(coordinator.desiredPlayingIntent, isTrue);
+    expect(coordinator.effectivePlaying, isFalse);
   });
 
   for (final releaseFirst in ['first', 'second']) {

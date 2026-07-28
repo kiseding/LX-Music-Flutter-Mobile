@@ -63,7 +63,7 @@ void main() {
     final paused = qualityReloadIntent(
       position: const Duration(seconds: 42),
       duration: const Duration(minutes: 3),
-      wasPlaying: false,
+      desiredPlayingIntent: false,
     );
 
     expect(paused.position, const Duration(seconds: 42));
@@ -74,7 +74,7 @@ void main() {
     final playing = qualityReloadIntent(
       position: const Duration(minutes: 4),
       duration: const Duration(minutes: 3),
-      wasPlaying: true,
+      desiredPlayingIntent: true,
     );
 
     expect(playing.position, const Duration(minutes: 3));
@@ -92,8 +92,9 @@ void main() {
     player.setEngineState(
       position: const Duration(seconds: 42),
       duration: const Duration(minutes: 3),
-      playing: false,
+      playing: true,
     );
+    await handler.pause();
     final playCalls = player.playCalls;
 
     await handler.applyPreferredQuality('flac');
@@ -124,6 +125,77 @@ void main() {
     expect(player.initialPositions.last, const Duration(seconds: 42));
     expect(player.playCalls, playCalls + 1);
     expect(player.playing, isTrue);
+  });
+
+  test('quality begun during interruption resumes new quality after end',
+      () async {
+    final player = _QualityAudioPlayer();
+    final handler = LxAudioHandler(player: player);
+    addTearDown(player.dispose);
+    handler.urlResolver = (id, [extras]) async =>
+        'file:///tmp/$id-${extras?['requestedQuality']}.mp3';
+    await handler.setPlaylist([_item('A')]);
+    player.setEngineState(
+      position: const Duration(seconds: 42),
+      duration: const Duration(minutes: 3),
+      playing: true,
+    );
+    await handler.beginAudioInterruption();
+
+    await handler.applyPreferredQuality('flac');
+
+    expect(player.initialPositions.last, const Duration(seconds: 42));
+    expect(handler.queueItems.single.extras?['requestedQuality'], 'flac');
+    expect(player.playing, isFalse);
+    await handler.endAudioInterruption(mayResume: true);
+    expect(player.playing, isTrue);
+  });
+
+  test('quality begun during interruption stays paused after denied end',
+      () async {
+    final player = _QualityAudioPlayer();
+    final handler = LxAudioHandler(player: player);
+    addTearDown(player.dispose);
+    handler.urlResolver = (id, [extras]) async =>
+        'file:///tmp/$id-${extras?['requestedQuality']}.mp3';
+    await handler.setPlaylist([_item('A')]);
+    player.setEngineState(
+      position: const Duration(seconds: 42),
+      duration: const Duration(minutes: 3),
+      playing: true,
+    );
+    await handler.beginAudioInterruption();
+
+    await handler.applyPreferredQuality('flac');
+    await handler.endAudioInterruption(mayResume: false);
+
+    expect(player.initialPositions.last, const Duration(seconds: 42));
+    expect(handler.queueItems.single.extras?['requestedQuality'], 'flac');
+    expect(player.playing, isFalse);
+  });
+
+  test('explicit pause during interruption keeps quality reload paused',
+      () async {
+    final player = _QualityAudioPlayer();
+    final handler = LxAudioHandler(player: player);
+    addTearDown(player.dispose);
+    handler.urlResolver = (id, [extras]) async =>
+        'file:///tmp/$id-${extras?['requestedQuality']}.mp3';
+    await handler.setPlaylist([_item('A')]);
+    player.setEngineState(
+      position: const Duration(seconds: 42),
+      duration: const Duration(minutes: 3),
+      playing: true,
+    );
+    await handler.beginAudioInterruption();
+    await handler.pause();
+
+    await handler.applyPreferredQuality('flac');
+    await handler.endAudioInterruption(mayResume: true);
+
+    expect(player.initialPositions.last, const Duration(seconds: 42));
+    expect(handler.queueItems.single.extras?['requestedQuality'], 'flac');
+    expect(player.playing, isFalse);
   });
 
   test('newer pause wins while quality URL is resolving', () async {

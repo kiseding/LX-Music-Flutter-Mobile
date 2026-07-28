@@ -173,7 +173,7 @@ class QualityReloadIntent {
 QualityReloadIntent qualityReloadIntent({
   required Duration position,
   required Duration? duration,
-  required bool wasPlaying,
+  required bool desiredPlayingIntent,
 }) {
   var clampedPosition = position.isNegative ? Duration.zero : position;
   if (duration != null &&
@@ -181,7 +181,7 @@ QualityReloadIntent qualityReloadIntent({
       clampedPosition > duration) {
     clampedPosition = duration;
   }
-  return QualityReloadIntent(clampedPosition, wasPlaying);
+  return QualityReloadIntent(clampedPosition, desiredPlayingIntent);
 }
 
 enum InterruptionAction {
@@ -1365,7 +1365,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     final reloadIntent = qualityReloadIntent(
       position: _player.position,
       duration: _player.duration,
-      wasPlaying: _player.playing,
+      desiredPlayingIntent: _commands.desiredPlayingIntent,
     );
     preferredQuality = quality;
     if (_queue.isEmpty) return;
