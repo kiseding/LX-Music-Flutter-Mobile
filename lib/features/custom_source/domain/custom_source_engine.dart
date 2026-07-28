@@ -11,6 +11,7 @@ import 'package:encrypt/encrypt.dart' as encrypt_lib;
 import 'package:pointycastle/export.dart' as pc;
 import 'lx_source_capabilities.dart';
 import '../../../core/network/app_http_client.dart';
+import '../../../core/network/outbound_url.dart';
 import '../domain/custom_source.dart';
 import '../../player/domain/music_item.dart';
 
@@ -1619,7 +1620,7 @@ class CustomSourceEngine {
     );
 
     return _dio.request(
-      url,
+      normalizeOutboundUrl(url),
       data: body,
       queryParameters: queryParams,
       options: dioOptions,

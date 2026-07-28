@@ -8,6 +8,11 @@ void main() {
       'https://p1.music.126.net/F0fTkmBTVykCa2o7Vgu1rQ==/109951173569626660.jpg';
   const qqUrl = 'https://y.gtimg.cn/music/photo_new/T002R300x300M000abc.jpg';
 
+  test('artwork provider normalizes dynamic HTTP URLs', () {
+    const image = ArtworkNetworkImage('http://images.example.com/cover.jpg');
+    expect(image.resolvedUrl, 'https://images.example.com/cover.jpg');
+  });
+
   test('netease artwork requests use browser headers', () {
     final headers = artworkRequestHeaders(neteaseUrl);
     expect(headers['User-Agent'], contains('Mozilla'));

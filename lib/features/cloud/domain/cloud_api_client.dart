@@ -1,5 +1,6 @@
 import 'package:dio/dio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../../../core/network/outbound_url.dart';
 
 /// 对接 workers/ 子项目（lx-music-api）的客户端。
 class CloudApiClient {
@@ -23,19 +24,21 @@ class CloudApiClient {
   String? get token => _token;
   String? get username => _username;
   String? get role => _role;
-  bool get isLoggedIn => _token != null && _token!.isNotEmpty && _baseUrl != null;
+  bool get isLoggedIn =>
+      _token != null && _token!.isNotEmpty && _baseUrl != null;
   bool get isAdmin => _role == 'admin';
 
   Future<void> load() async {
     final prefs = await SharedPreferences.getInstance();
-    _baseUrl = prefs.getString(_kBase);
+    final savedBaseUrl = prefs.getString(_kBase);
+    _baseUrl = savedBaseUrl == null ? null : normalizeOutboundUrl(savedBaseUrl);
     _token = prefs.getString(_kToken);
     _username = prefs.getString(_kUsername);
     _role = prefs.getString(_kRole);
   }
 
   Future<void> setBaseUrl(String url) async {
-    _baseUrl = url.replaceAll(RegExp(r'/+$'), '');
+    _baseUrl = normalizeOutboundUrl(url).replaceAll(RegExp(r'/+$'), '');
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_kBase, _baseUrl!);
   }
@@ -108,7 +111,8 @@ class CloudApiClient {
     return data;
   }
 
-  Future<Map<String, dynamic>> register(String username, String password) async {
+  Future<Map<String, dynamic>> register(
+      String username, String password) async {
     final resp = await _dio.post(
       _url('/api/user/register'),
       data: {'username': username, 'password': password},
@@ -128,7 +132,8 @@ class CloudApiClient {
   Future<bool> verify() async {
     if (!isLoggedIn) return false;
     try {
-      final resp = await _dio.get(_url('/api/user/auth/verify'), options: _authOptions());
+      final resp = await _dio.get(_url('/api/user/auth/verify'),
+          options: _authOptions());
       final data = resp.data;
       if (data is Map && data['valid'] == true) {
         if (data['role'] != null) _role = data['role'].toString();
@@ -143,7 +148,8 @@ class CloudApiClient {
   }
 
   Future<Map<String, dynamic>> fetchUserList() async {
-    final resp = await _dio.get(_url('/api/user/list'), options: _authOptions());
+    final resp =
+        await _dio.get(_url('/api/user/list'), options: _authOptions());
     return Map<String, dynamic>.from(resp.data as Map);
   }
 
@@ -184,10 +190,13 @@ class CloudApiClient {
   }
 
   Future<List<Map<String, dynamic>>> adminListUsers() async {
-    final resp = await _dio.get(_url('/api/admin/users'), options: _authOptions());
+    final resp =
+        await _dio.get(_url('/api/admin/users'), options: _authOptions());
     final data = resp.data;
     if (data is Map && data['users'] is List) {
-      return (data['users'] as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+      return (data['users'] as List)
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
     }
     return [];
   }

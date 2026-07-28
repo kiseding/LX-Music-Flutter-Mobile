@@ -3,6 +3,7 @@ import '../../features/player/domain/music_item.dart';
 import '../../features/custom_source/domain/custom_source_service.dart';
 import '../music_source/platform/built_in_source_manager.dart';
 import 'play_url_result.dart';
+import 'outbound_url.dart';
 
 class MusicSourceService {
   final CustomSourceService _customSourceService;
@@ -183,7 +184,8 @@ class MusicSourceService {
             .getMusicUrlDetailed(source.id, musicForScript,
                 quality: resolvedQuality)
             .timeout(const Duration(seconds: 20));
-        final url = detailed?.url;
+        final rawUrl = detailed?.url;
+        final url = rawUrl == null ? null : normalizeOutboundUrl(rawUrl);
         if (url != null && url.isNotEmpty) {
           if (!isPlayableMediaUrl(url)) {
             final host = Uri.tryParse(url)?.host ?? '?';
@@ -223,9 +225,10 @@ class MusicSourceService {
         (platform == 'kw' || platform == 'tx' || platform == 'wy')) {
       for (final q in qualities) {
         try {
-          final url = await _builtInSources
+          final rawUrl = await _builtInSources
               .getMusicUrl(platform, music, quality: q)
               .timeout(const Duration(seconds: 8));
+          final url = rawUrl == null ? null : normalizeOutboundUrl(rawUrl);
           if (url != null && url.isNotEmpty) {
             if (!isPlayableMediaUrl(url)) {
               debugPrint('[getPlayUrl] 内置源 $platform q=$q 返回无效播放地址，跳过');

@@ -5,6 +5,8 @@ import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import '../network/outbound_url.dart';
+
 /// Headers / client identity required by some music CDNs (especially NetEase).
 ///
 /// Critical: [NetworkImage] uses `HttpHeaders.add`, so a custom User-Agent is
@@ -67,6 +69,7 @@ class ArtworkNetworkImage extends ImageProvider<ArtworkNetworkImage> {
 
   final String url;
   final double scale;
+  String get resolvedUrl => normalizeOutboundUrl(url);
 
   @override
   Future<ArtworkNetworkImage> obtainKey(ImageConfiguration configuration) {
@@ -98,9 +101,9 @@ class ArtworkNetworkImage extends ImageProvider<ArtworkNetworkImage> {
   ) async {
     try {
       assert(key == this);
-      final uri = Uri.parse(key.url);
+      final uri = Uri.parse(key.resolvedUrl);
       final client = HttpClient();
-      final headers = artworkRequestHeaders(key.url);
+      final headers = artworkRequestHeaders(key.resolvedUrl);
       if (headers.containsKey('User-Agent')) {
         client.userAgent = headers['User-Agent'];
       }

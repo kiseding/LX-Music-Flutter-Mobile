@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import '../../../core/audio/playback_cache_service.dart';
 import '../../../core/network/app_http_client.dart';
 import '../../../core/network/music_source_service.dart';
+import '../../../core/network/outbound_url.dart';
 import '../../../core/network/play_url_result.dart';
 import '../../../core/storage/storage_service.dart';
 import '../../player/domain/music_item.dart';
@@ -34,7 +35,8 @@ class DownloadService {
   DownloadService({Dio? dio}) : _dio = dio ?? _createDownloadDio();
 
   static Dio _createDownloadDio() {
-    return AppHttpClient.create(options: BaseOptions(
+    return AppHttpClient.create(
+        options: BaseOptions(
       connectTimeout: const Duration(seconds: 20),
       receiveTimeout: const Duration(minutes: 5),
       followRedirects: true,
@@ -174,7 +176,7 @@ class DownloadService {
         );
         if (resolved == null) continue;
 
-        final downloadUrl = _normalizeMediaUrl(resolved.url);
+        final downloadUrl = normalizeOutboundUrl(resolved.url);
         _updateTask(
           task.id,
           url: resolved.url,
@@ -571,8 +573,8 @@ class DownloadService {
     final completedTasks = _tasks
         .where((t) => t.status == DownloadStatus.completed)
         .toList()
-      ..sort((a, b) =>
-          (a.completedAt ?? a.createdAt).compareTo(b.completedAt ?? b.createdAt));
+      ..sort((a, b) => (a.completedAt ?? a.createdAt)
+          .compareTo(b.completedAt ?? b.createdAt));
 
     int currentSize = await getCacheSize();
 
@@ -604,18 +606,6 @@ class DownloadService {
       return 'https://www.kuwo.cn/';
     }
     return 'https://www.google.com/';
-  }
-
-  String _normalizeMediaUrl(String url) {
-    final uri = Uri.tryParse(url);
-    if (uri == null) return url;
-    if (uri.scheme == 'http' &&
-        (uri.host.contains('music.tc.qq.com') ||
-            uri.host.contains('gtimg.com') ||
-            uri.host.contains('qq.com'))) {
-      return uri.replace(scheme: 'https').toString();
-    }
-    return url;
   }
 
   bool _looksLikeNonAudio(List<int> header) {
@@ -698,7 +688,8 @@ class DownloadService {
   }
 
   /// 清理同 baseName 的其它成品扩展名；**永不删除 .part**（进行中的临时文件）。
-  Future<void> _cleanupSiblingFiles(String baseName, {required String keep}) async {
+  Future<void> _cleanupSiblingFiles(String baseName,
+      {required String keep}) async {
     final dirPath = _downloadDir;
     if (dirPath == null) return;
     final dir = Directory(dirPath);

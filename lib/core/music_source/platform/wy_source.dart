@@ -7,6 +7,10 @@ import '../../../features/player/domain/music_item.dart';
 import 'music_platform.dart';
 import 'source_utils.dart';
 
+const neteaseSearchEndpoint = 'https://interface.music.163.com/eapi/batch';
+const neteaseLyricEndpoint =
+    'https://interface.music.163.com/eapi/song/lyric/v1';
+
 const _eapiKey = 'e82ckenh8dichen8';
 const _presetKey = '0CoJUm6Qyw8W8jud';
 const _iv = '0102030405060708';
@@ -137,7 +141,7 @@ class WySource extends MusicPlatform {
 
       final response = await _dio
           .post(
-            'https://interface.music.163.com/eapi/batch',
+            neteaseSearchEndpoint,
             data: eapiParams,
             options: Options(contentType: 'application/x-www-form-urlencoded'),
           )
@@ -293,7 +297,7 @@ class WySource extends MusicPlatform {
       });
 
       final response = await lyricDio.post(
-        'https://interface.music.163.com/eapi/song/lyric/v1',
+        neteaseLyricEndpoint,
         data: 'params=${eapiParams['params']}',
       );
 

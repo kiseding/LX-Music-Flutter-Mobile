@@ -6,6 +6,15 @@ import 'music_platform.dart';
 import 'source_utils.dart';
 import 'wbd_crypto.dart';
 
+const kuwoSearchBaseUrl = 'https://search.kuwo.cn';
+const kuwoArtworkEndpoint = 'https://artistpicserver.kuwo.cn/pic.web';
+const kuwoAntiServerEndpoint = 'https://antiserver.kuwo.cn/anti.s';
+const kuwoPlayInfoEndpoint =
+    'https://www.kuwo.cn/api/v1/www/music/playInfo';
+const kuwoLegacyPlayEndpoint = 'https://www.kuwo.cn/url';
+const kuwoLyricEndpoint = 'https://newlyric.kuwo.cn/newlyric.lrc';
+const kuwoPlaylistEndpoint = 'https://nplserver.kuwo.cn/pl.svc';
+
 class _KwToken {
   final String name;
   final String value;
@@ -23,7 +32,7 @@ class KwSource extends MusicPlatform {
 
   KwSource() {
     _dio = createDio();
-    _dio.options.baseUrl = 'https://search.kuwo.cn';
+    _dio.options.baseUrl = kuwoSearchBaseUrl;
     _dio.options.headers.addAll({
       'Referer': 'https://www.kuwo.cn/',
       'Cookie': 'kw_token=',
@@ -31,7 +40,8 @@ class KwSource extends MusicPlatform {
   }
 
   @override
-  Future<List<MusicItem>> search(String keyword, {int page = 1, int limit = 20}) async {
+  Future<List<MusicItem>> search(String keyword,
+      {int page = 1, int limit = 20}) async {
     try {
       final response = await _dio.get(
         '/r.s',
@@ -68,7 +78,9 @@ class KwSource extends MusicPlatform {
   }
 
   static List<MusicItem> _parseSearchResult(dynamic data) {
-    final body = data is Map<String, dynamic> ? data : (data is String ? jsonDecode(data) : null);
+    final body = data is Map<String, dynamic>
+        ? data
+        : (data is String ? jsonDecode(data) : null);
     if (body == null) return [];
 
     final abslist = body['abslist'] as List<dynamic>?;
@@ -96,17 +108,24 @@ class KwSource extends MusicPlatform {
     }
     if (songmid.isEmpty) return null;
 
-    final duration = int.tryParse(item['DURATION']?.toString() ?? item['duration']?.toString() ?? '') ?? 0;
+    final duration = int.tryParse(item['DURATION']?.toString() ??
+            item['duration']?.toString() ??
+            '') ??
+        0;
 
     // 排行榜 API 使用 artistPic 作为封面
-    final artwork = item['pic'] as String?
-        ?? item['artistPic'] as String?
-        ?? ((songmid.isNotEmpty && songmid.length > 5) ? 'https://img.kuwo.cn/star/starheads/${songmid}_small.jpg' : '');
+    final artwork = item['pic'] as String? ??
+        item['artistPic'] as String? ??
+        ((songmid.isNotEmpty && songmid.length > 5)
+            ? 'https://img.kuwo.cn/star/starheads/${songmid}_small.jpg'
+            : '');
 
     return MusicItem(
       id: songmid,
-      name: (item['SONGNAME'] as String? ?? item['name'] as String? ?? '').trim(),
-      singer: (item['ARTIST'] as String? ?? item['artist'] as String? ?? '').replaceAll('&', '、'),
+      name:
+          (item['SONGNAME'] as String? ?? item['name'] as String? ?? '').trim(),
+      singer: (item['ARTIST'] as String? ?? item['artist'] as String? ?? '')
+          .replaceAll('&', '、'),
       source: 'kw',
       platform: 'kw',
       artwork: artwork,
@@ -114,7 +133,8 @@ class KwSource extends MusicPlatform {
       songmid: songmid,
       hash: songmid,
       duration: Duration(seconds: duration),
-      album: (item['ALBUM'] as String? ?? item['album'] as String? ?? '').trim(),
+      album:
+          (item['ALBUM'] as String? ?? item['album'] as String? ?? '').trim(),
     );
   }
 
@@ -137,7 +157,7 @@ class KwSource extends MusicPlatform {
 
     try {
       final response = await _dio.get(
-        'https://artistpicserver.kuwo.cn/pic.web',
+        kuwoArtworkEndpoint,
         queryParameters: {
           'corp': 'kuwo',
           'type': 'rid_pic',
@@ -161,18 +181,22 @@ class KwSource extends MusicPlatform {
   Future<_KwToken?> _fetchKwToken() async {
     try {
       final dio = createDioForService(headers: {
-        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1',
+        'User-Agent':
+            'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1',
       });
-      final response = await dio.get(
-        'https://www.kuwo.cn/',
-        options: Options(responseType: ResponseType.plain),
-      ).timeout(const Duration(seconds: 8));
+      final response = await dio
+          .get(
+            'https://www.kuwo.cn/',
+            options: Options(responseType: ResponseType.plain),
+          )
+          .timeout(const Duration(seconds: 8));
       final body = response.data?.toString() ?? '';
       // 从 Set-Cookie 中提取 Hm_Iuvt_* cookie
       if (response.headers.map['set-cookie'] != null) {
         for (final cookie in response.headers.map['set-cookie']!) {
           debugPrint('[KW] Cookie: $cookie');
-          final cookieMatch = RegExp(r'(Hm_Iuvt_\w+)=([^;]+)').firstMatch(cookie);
+          final cookieMatch =
+              RegExp(r'(Hm_Iuvt_\w+)=([^;]+)').firstMatch(cookie);
           if (cookieMatch != null) {
             final name = cookieMatch.group(1)!;
             final value = cookieMatch.group(2)!;
@@ -184,7 +208,8 @@ class KwSource extends MusicPlatform {
       // 兜底从 body 搜 Hm_Iuvt
       final idx = body.indexOf('Hm_Iuvt');
       if (idx >= 0) {
-        debugPrint('[KW] 页面中找到 Hm_Iuvt, 上下文: ${body.substring(idx, (idx + 100).clamp(0, body.length))}');
+        debugPrint(
+            '[KW] 页面中找到 Hm_Iuvt, 上下文: ${body.substring(idx, (idx + 100).clamp(0, body.length))}');
       }
       debugPrint('[KW] 未能提取 CSRF token, body length=${body.length}');
       return null;
@@ -195,7 +220,8 @@ class KwSource extends MusicPlatform {
   }
 
   @override
-  Future<String?> getMusicUrl(MusicItem music, {String quality = '128k'}) async {
+  Future<String?> getMusicUrl(MusicItem music,
+      {String quality = '128k'}) async {
     final rid = music.songmid ?? music.id;
     debugPrint('[KW] getMusicUrl: rid=$rid, quality=$quality');
 
@@ -204,14 +230,15 @@ class KwSource extends MusicPlatform {
       final kwToken = await _fetchKwToken();
       if (kwToken != null) {
         final urlDio = createDioForService(headers: {
-          'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1',
+          'User-Agent':
+              'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1',
           'Referer': 'https://www.kuwo.cn/',
           'Cookie': '${kwToken.name}=${kwToken.value}',
           'csrf': kwToken.value,
         });
 
         final response = await urlDio.get(
-          'https://www.kuwo.cn/api/v1/www/music/playInfo',
+          kuwoPlayInfoEndpoint,
           queryParameters: {
             'mid': rid,
             'type': _qualityToType(quality),
@@ -230,7 +257,8 @@ class KwSource extends MusicPlatform {
           }
           debugPrint('[KW] playInfo 接口: url为空, code=${data["code"]}');
         } else {
-          debugPrint('[KW] playInfo 接口: 非期望响应, success=${data is Map ? data["success"] : "N/A"}');
+          debugPrint(
+              '[KW] playInfo 接口: 非期望响应, success=${data is Map ? data["success"] : "N/A"}');
         }
       } else {
         debugPrint('[KW] playInfo 接口: 无 csrf token, 跳过');
@@ -246,18 +274,21 @@ class KwSource extends MusicPlatform {
           'User-Agent': 'okhttp/3.10.0',
         });
 
-        final response = await urlDio.get(
-          'https://antiserver.kuwo.cn/anti.s',
-          queryParameters: {
-            'type': 'convert_url',
-            'rid': ridFormat,
-            'format': _qualityToFormat(quality),
-            'response': 'url',
-          },
-          options: Options(responseType: ResponseType.plain),
-        ).timeout(const Duration(seconds: 8));
+        final response = await urlDio
+            .get(
+              kuwoAntiServerEndpoint,
+              queryParameters: {
+                'type': 'convert_url',
+                'rid': ridFormat,
+                'format': _qualityToFormat(quality),
+                'response': 'url',
+              },
+              options: Options(responseType: ResponseType.plain),
+            )
+            .timeout(const Duration(seconds: 8));
 
-        debugPrint('[KW] antiserver 接口(rid=$ridFormat): status=${response.statusCode}, data=$response.data');
+        debugPrint(
+            '[KW] antiserver 接口(rid=$ridFormat): status=${response.statusCode}, data=$response.data');
         String url = response.data?.toString().trim() ?? '';
         // 去掉末尾的 .data 后缀（Android ExoPlayer 不识别 .data 扩展名）
         if (url.endsWith('.data')) {
@@ -282,7 +313,7 @@ class KwSource extends MusicPlatform {
         });
 
         final response = await urlDio.get(
-          'https://www.kuwo.cn/url',
+          kuwoLegacyPlayEndpoint,
           queryParameters: {
             'format': _qualityToFormat(quality),
             'rid': ridFormat,
@@ -291,7 +322,8 @@ class KwSource extends MusicPlatform {
           },
         );
 
-        debugPrint('[KW] convert_url3 接口(rid=$ridFormat): status=${response.statusCode}, data=$response.data');
+        debugPrint(
+            '[KW] convert_url3 接口(rid=$ridFormat): status=${response.statusCode}, data=$response.data');
         final data = response.data;
         if (data is Map && data['url'] != null) {
           final url = data['url'] as String;
@@ -310,16 +342,23 @@ class KwSource extends MusicPlatform {
 
   String _qualityToType(String quality) {
     switch (quality) {
-      case '320k': return 'mp3';
-      case 'flac': case 'flac24bit': return 'flac';
-      default: return 'mp3';
+      case '320k':
+        return 'mp3';
+      case 'flac':
+      case 'flac24bit':
+        return 'flac';
+      default:
+        return 'mp3';
     }
   }
 
   String _qualityToFormat(String quality) {
     switch (quality) {
-      case 'flac': case 'flac24bit': return 'flac';
-      default: return 'mp3';
+      case 'flac':
+      case 'flac24bit':
+        return 'flac';
+      default:
+        return 'mp3';
     }
   }
 
@@ -343,7 +382,7 @@ class KwSource extends MusicPlatform {
       lyricDio.options.responseType = ResponseType.bytes;
 
       final response = await lyricDio.get(
-        'https://newlyric.kuwo.cn/newlyric.lrc?$params',
+        '$kuwoLyricEndpoint?$params',
       );
 
       final data = response.data;
@@ -363,11 +402,13 @@ class KwSource extends MusicPlatform {
 
   @override
   MusicItem parseItem(Map<String, dynamic> raw, String source) {
-    return _parseSearchItem(raw) ?? MusicItem(id: '', name: '', singer: '', source: 'kw', platform: 'kw');
+    return _parseSearchItem(raw) ??
+        MusicItem(id: '', name: '', singer: '', source: 'kw', platform: 'kw');
   }
 
   @override
-  Future<List<MusicItem>> searchSongLists(String keyword, {int page = 1, int limit = 20}) async {
+  Future<List<MusicItem>> searchSongLists(String keyword,
+      {int page = 1, int limit = 20}) async {
     try {
       final response = await _dio.get(
         '/r.s',
@@ -388,39 +429,45 @@ class KwSource extends MusicPlatform {
 
       final data = response.data;
       if (data == null) return [];
-      final body = data is Map<String, dynamic> ? data : (data is String ? _jsonDecode(data) : null);
+      final body = data is Map<String, dynamic>
+          ? data
+          : (data is String ? _jsonDecode(data) : null);
       if (body == null) return [];
 
       final abslist = body['abslist'] as List<dynamic>?;
       if (abslist == null) return [];
 
-      return abslist.map((item) {
-        final m = item as Map<String, dynamic>;
-        return MusicItem(
-          id: (m['playlistid'] ?? m['DC_TARGETID'] ?? '').toString(),
-          name: (m['name'] ?? m['SONGNAME'] ?? '').toString().trim(),
-          singer: (m['nickname'] ?? m['ARTIST'] ?? '').toString().trim(),
-          source: 'kw',
-          platform: 'kw',
-          artwork: (m['img300'] ?? m['img'] ?? '').toString(),
-          album: '${(m['songnum'] ?? 0)} 首',
-          isPlayable: false,
-        );
-      }).where((m) => m.id.isNotEmpty).toList();
+      return abslist
+          .map((item) {
+            final m = item as Map<String, dynamic>;
+            return MusicItem(
+              id: (m['playlistid'] ?? m['DC_TARGETID'] ?? '').toString(),
+              name: (m['name'] ?? m['SONGNAME'] ?? '').toString().trim(),
+              singer: (m['nickname'] ?? m['ARTIST'] ?? '').toString().trim(),
+              source: 'kw',
+              platform: 'kw',
+              artwork: (m['img300'] ?? m['img'] ?? '').toString(),
+              album: '${(m['songnum'] ?? 0)} 首',
+              isPlayable: false,
+            );
+          })
+          .where((m) => m.id.isNotEmpty)
+          .toList();
     } catch (e) {
       return [];
     }
   }
 
   @override
-  Future<List<MusicItem>> getSongListDetail(String songListId, {int page = 1, int limit = 50}) async {
+  Future<List<MusicItem>> getSongListDetail(String songListId,
+      {int page = 1, int limit = 50}) async {
     try {
       final dio = createDioForService(headers: {
         'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36',
         'Referer': 'https://www.kuwo.cn/',
       });
       final response = await dio.get(
-        'https://nplserver.kuwo.cn/pl.svc',
+        kuwoPlaylistEndpoint,
         queryParameters: {
           'op': 'getlistinfo',
           'pid': songListId,
@@ -435,13 +482,18 @@ class KwSource extends MusicPlatform {
 
       final data = response.data;
       if (data == null) return [];
-      final body = data is Map<String, dynamic> ? data : (data is String ? _jsonDecode(data) : null);
+      final body = data is Map<String, dynamic>
+          ? data
+          : (data is String ? _jsonDecode(data) : null);
       if (body == null) return [];
 
       final musiclist = body['musiclist'] as List<dynamic>?;
       if (musiclist == null) return [];
 
-      return musiclist.map((item) => _staticParseItem(item as Map<String, dynamic>)).whereType<MusicItem>().toList();
+      return musiclist
+          .map((item) => _staticParseItem(item as Map<String, dynamic>))
+          .whereType<MusicItem>()
+          .toList();
     } catch (e) {
       return [];
     }
@@ -508,7 +560,8 @@ class KwSource extends MusicPlatform {
   }
 
   @override
-  Future<List<MusicItem>> getLeaderboardSongs(String leaderboardId, {int page = 1, int limit = 100}) async {
+  Future<List<MusicItem>> getLeaderboardSongs(String leaderboardId,
+      {int page = 1, int limit = 100}) async {
     try {
       final parts = leaderboardId.split(':');
       final bangid = parts.length == 2 ? parts[1] : leaderboardId;
@@ -527,18 +580,22 @@ class KwSource extends MusicPlatform {
         'rn': limit,
       };
 
-      final url = 'https://wbd.kuwo.cn/api/bd/bang/bang_info?${WbdCrypto.buildParam(requestBody)}';
+      final url =
+          'https://wbd.kuwo.cn/api/bd/bang/bang_info?${WbdCrypto.buildParam(requestBody)}';
       debugPrint('[KW] Request URL: $url');
 
-      final response = await _dio.get(
-        url,
-        options: Options(responseType: ResponseType.plain),
-      ).timeout(const Duration(seconds: 10));
+      final response = await _dio
+          .get(
+            url,
+            options: Options(responseType: ResponseType.plain),
+          )
+          .timeout(const Duration(seconds: 10));
 
       final data = response.data;
       debugPrint('[KW] Response status: ${response.statusCode}');
       debugPrint('[KW] Response type: ${data.runtimeType}');
-      debugPrint('[KW] Response data (first 500 chars): ${data.toString().substring(0, data.toString().length > 500 ? 500 : data.toString().length)}');
+      debugPrint(
+          '[KW] Response data (first 500 chars): ${data.toString().substring(0, data.toString().length > 500 ? 500 : data.toString().length)}');
 
       // API 返回 base64 编码的加密数据（text/plain），Dio 返回 String
       String base64Result;
@@ -558,8 +615,9 @@ class KwSource extends MusicPlatform {
 
       debugPrint('[KW] Decoding base64 data...');
       final decrypted = WbdCrypto.decodeData(base64Result);
-      debugPrint('[KW] Decrypted data (first 500 chars): ${decrypted.substring(0, decrypted.length > 500 ? 500 : decrypted.length)}');
-      
+      debugPrint(
+          '[KW] Decrypted data (first 500 chars): ${decrypted.substring(0, decrypted.length > 500 ? 500 : decrypted.length)}');
+
       final bodyMap = jsonDecode(decrypted) as Map<String, dynamic>;
       debugPrint('[KW] Parsed JSON code: ${bodyMap['code']}');
 

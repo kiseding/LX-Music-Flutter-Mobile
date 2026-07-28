@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:dio/dio.dart';
+import '../../../core/network/outbound_url.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../domain/custom_source.dart';
 import '../domain/custom_source_engine.dart';
@@ -66,8 +67,9 @@ class CustomSourceService {
     if (s.id == defaultSourceId) return true;
     if (nameL.contains('huibq') || authorL.contains('huibq')) return true;
     if (nameL.contains('lxmusic源') || nameL.contains('lxmusic')) return true;
-    if (homeL.contains('huibq') || homeL.contains('lx-music-source'))
+    if (homeL.contains('huibq') || homeL.contains('lx-music-source')) {
       return true;
+    }
     return false;
   }
 
@@ -370,7 +372,7 @@ class CustomSourceService {
 
   Future<bool> importSourceFromUrl(String url) async {
     try {
-      final response = await _dio.get(url,
+      final response = await _dio.get(normalizeOutboundUrl(url),
           options: Options(responseType: ResponseType.plain));
       final script = response.data.toString();
       if (validateScript(script)) {

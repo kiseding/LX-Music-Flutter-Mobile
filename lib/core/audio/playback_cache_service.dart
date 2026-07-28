@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../network/app_http_client.dart';
+import '../network/outbound_url.dart';
 
 typedef PlaybackDownloader = Future<void> Function(
   String url,
@@ -76,7 +77,8 @@ class PlaybackCacheService {
         _indexStore = indexStore ?? PrefsPlaybackCacheIndexStore();
 
   static Dio _createDownloadDio() {
-    return AppHttpClient.create(options: BaseOptions(
+    return AppHttpClient.create(
+        options: BaseOptions(
       connectTimeout: const Duration(seconds: 20),
       receiveTimeout: const Duration(minutes: 5),
       followRedirects: true,
@@ -103,7 +105,8 @@ class PlaybackCacheService {
     return path == null ? null : toPlayableUri(path);
   }
 
-  static String extensionFromBytes(List<int> bytes, {required String fallback}) {
+  static String extensionFromBytes(List<int> bytes,
+      {required String fallback}) {
     bool starts(List<int> signature) {
       if (bytes.length < signature.length) return false;
       for (var i = 0; i < signature.length; i++) {
@@ -116,8 +119,11 @@ class PlaybackCacheService {
     if (starts(const [0x49, 0x44, 0x33])) return '.mp3';
     if (starts(const [0x4f, 0x67, 0x67, 0x53])) return '.ogg';
     if (starts(const [0x52, 0x49, 0x46, 0x46])) return '.wav';
-    if (bytes.length >= 8 && bytes[4] == 0x66 && bytes[5] == 0x74 &&
-        bytes[6] == 0x79 && bytes[7] == 0x70) {
+    if (bytes.length >= 8 &&
+        bytes[4] == 0x66 &&
+        bytes[5] == 0x74 &&
+        bytes[6] == 0x79 &&
+        bytes[7] == 0x70) {
       return '.m4a';
     }
     if (bytes.length >= 2 && bytes[0] == 0xff) {
@@ -241,7 +247,7 @@ class PlaybackCacheService {
     _cancelTokens[key] = token;
 
     try {
-      final downloadUrl = _normalizeMediaUrl(remoteUrl);
+      final downloadUrl = normalizeOutboundUrl(remoteUrl);
       debugPrint(
           '[PlaybackCache] download key=$key host=${Uri.tryParse(downloadUrl)?.host} path=${Uri.tryParse(downloadUrl)?.path}');
       if (_downloader != null) {
@@ -350,23 +356,11 @@ class PlaybackCacheService {
     return 'https://www.google.com/';
   }
 
-  String _normalizeMediaUrl(String url) {
-    final uri = Uri.tryParse(url);
-    if (uri == null) return url;
-    // QQ 音源 CDN 常见 http，优先升 https 提高 iOS 下载成功率
-    if (uri.scheme == 'http' &&
-        (uri.host.contains('music.tc.qq.com') ||
-            uri.host.contains('gtimg.com') ||
-            uri.host.contains('qq.com'))) {
-      return uri.replace(scheme: 'https').toString();
-    }
-    return url;
-  }
-
   bool _looksLikeNonAudio(List<int> header) {
     if (header.isEmpty) return true;
     // HTML / JSON / XML 错误页
-    final start = String.fromCharCodes(header.take(32)).trimLeft().toLowerCase();
+    final start =
+        String.fromCharCodes(header.take(32)).trimLeft().toLowerCase();
     if (start.startsWith('<!doctype') ||
         start.startsWith('<html') ||
         start.startsWith('<?xml') ||
@@ -380,7 +374,15 @@ class PlaybackCacheService {
 
   String _guessExt(String url) {
     final path = Uri.tryParse(url)?.path.toLowerCase() ?? url.toLowerCase();
-    for (final ext in ['.flac', '.m4a', '.mp3', '.aac', '.ogg', '.wav', '.ape']) {
+    for (final ext in [
+      '.flac',
+      '.m4a',
+      '.mp3',
+      '.aac',
+      '.ogg',
+      '.wav',
+      '.ape'
+    ]) {
       if (path.contains(ext)) return ext;
     }
     return '.audio';

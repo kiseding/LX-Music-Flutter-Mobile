@@ -10,15 +10,18 @@ void main() {
   late Directory tempDir;
   late PlaybackCacheService cache;
   var downloadCount = 0;
+  String? downloadedUrl;
 
   setUp(() async {
     tempDir = await Directory.systemTemp.createTemp('playback_cache_test_');
     downloadCount = 0;
+    downloadedUrl = null;
     cache = PlaybackCacheService(
       cacheRootOverride: tempDir.path,
       indexStore: MemoryPlaybackCacheIndexStore(),
       downloader: (url, savePath, {CancelToken? cancelToken}) async {
         downloadCount++;
+        downloadedUrl = url;
         final file = File(savePath);
         await file.parent.create(recursive: true);
         final bytes = url.contains('no-extension')
@@ -77,6 +80,18 @@ void main() {
     );
     expect(path2, path1);
     expect(downloadCount, 1);
+  });
+
+  test('normalizes arbitrary dynamic HTTP media URLs before download',
+      () async {
+    await cache.getOrDownload(
+      remoteUrl: 'http://media.example.com/a.mp3?token=1',
+      platform: 'custom',
+      songId: 'dynamic-http',
+      quality: '128k',
+    );
+
+    expect(downloadedUrl, 'https://media.example.com/a.mp3?token=1');
   });
 
   test('expired entries are deleted and re-downloaded', () async {
@@ -148,7 +163,8 @@ void main() {
     expect(path, endsWith('.flac'));
   });
 
-  test('flac quality supplies extension when the header is non-standard', () async {
+  test('flac quality supplies extension when the header is non-standard',
+      () async {
     final path = await cache.getOrDownload(
       remoteUrl: 'https://cdn.example.com/opaque-stream',
       platform: 'tx',

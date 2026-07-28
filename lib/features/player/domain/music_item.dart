@@ -1,3 +1,5 @@
+import '../../../core/network/outbound_url.dart';
+
 class MusicItem {
   final String id;
   final String name;
@@ -117,10 +119,6 @@ class MusicItem {
 
   static String? _normalizeArtwork(
       String source, String platform, String? artwork) {
-    final uri = artwork == null ? null : Uri.tryParse(artwork);
-    if ((source == 'wy' || platform == 'wy') && uri?.scheme == 'http') {
-      return uri!.replace(scheme: 'https').toString();
-    }
-    return artwork;
+    return artwork == null ? null : normalizeOutboundUrl(artwork);
   }
 }

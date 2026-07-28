@@ -2,6 +2,22 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:lx_music_flutter/features/player/domain/music_item.dart';
 
 void main() {
+  test('MusicItem normalizes arbitrary dynamic artwork to HTTPS', () {
+    final item = MusicItem(
+      id: 'dynamic-artwork',
+      name: 'Track',
+      singer: 'Artist',
+      source: 'custom',
+      platform: 'custom',
+      artwork: 'http://images.example.com/cover.jpg?size=300',
+    );
+
+    expect(
+      item.artwork,
+      'https://images.example.com/cover.jpg?size=300',
+    );
+  });
+
   group('MusicItem', () {
     test('should create MusicItem with required fields', () {
       final music = MusicItem(

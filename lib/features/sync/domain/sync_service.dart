@@ -3,6 +3,7 @@ import 'package:dio/dio.dart';
 import '../../playlist/domain/playlist.dart';
 import '../../player/domain/music_item.dart';
 import '../../../core/storage/storage_service.dart';
+import '../../../core/network/outbound_url.dart';
 
 enum SyncStatus {
   disconnected,
@@ -41,9 +42,11 @@ class SyncService {
   SyncStatus _status = SyncStatus.disconnected;
   SyncStatus get status => _status;
   String? get serverUrl => _serverUrl;
-  bool get isConnected => _status == SyncStatus.connected || _status == SyncStatus.synced;
+  bool get isConnected =>
+      _status == SyncStatus.connected || _status == SyncStatus.synced;
 
-  final StreamController<SyncStatus> _statusController = StreamController<SyncStatus>.broadcast();
+  final StreamController<SyncStatus> _statusController =
+      StreamController<SyncStatus>.broadcast();
   Stream<SyncStatus> get statusStream => _statusController.stream;
 
   // ---- 连接管理 ----
@@ -51,7 +54,8 @@ class SyncService {
   /// 连接到同步服务器（HTTP 健康检查）
   Future<bool> connect(String serverUrl, {String? token}) async {
     try {
-      _serverUrl = serverUrl.replaceAll(RegExp(r'/+$'), '');
+      _serverUrl =
+          normalizeOutboundUrl(serverUrl).replaceAll(RegExp(r'/+$'), '');
       _token = token;
       _updateStatus(SyncStatus.connecting);
 
@@ -129,7 +133,8 @@ class SyncService {
       final response = await _dio.get(
         '$_serverUrl/api/sync/pull',
         queryParameters: {
-          if (lastSyncTime != null) 'lastSyncTime': lastSyncTime.toIso8601String(),
+          if (lastSyncTime != null)
+            'lastSyncTime': lastSyncTime.toIso8601String(),
         },
         options: Options(headers: _getHeaders()),
       );

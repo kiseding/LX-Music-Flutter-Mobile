@@ -4,6 +4,7 @@ import 'lyric.dart';
 import '../data/lyric_parser.dart';
 import '../../player/domain/music_item.dart';
 import '../../../core/network/music_source_service.dart';
+import '../../../core/network/outbound_url.dart';
 
 class LyricService {
   final Dio _dio = Dio();
@@ -24,7 +25,7 @@ class LyricService {
     if (music.lyricsUrl != null && music.lyricsUrl!.isNotEmpty) {
       try {
         debugPrint('[LyricService] 尝试从 lyricsUrl 获取: ${music.lyricsUrl}');
-        final response = await _dio.get(music.lyricsUrl!);
+        final response = await _dio.get(normalizeOutboundUrl(music.lyricsUrl!));
         if (response.statusCode == 200 && response.data is String) {
           final lyrics = _parseLyricString(response.data);
           debugPrint('[LyricService] lyricsUrl 获取成功, ${lyrics.lines.length} 行');
@@ -65,7 +66,8 @@ class LyricService {
   Lyrics _parseLyricString(String lyricStr) {
     // 有逐字标签时优先走能保留 words 的解析
     if (LyricParser.hasWordTiming(lyricStr)) {
-      final hasLrcTimeTag = RegExp(r'\[\d{2}:\d{2}[\.\d]*\]').hasMatch(lyricStr);
+      final hasLrcTimeTag =
+          RegExp(r'\[\d{2}:\d{2}[\.\d]*\]').hasMatch(lyricStr);
       if (hasLrcTimeTag) {
         // LRC + LRCX/QRC 字标签：parseLrc 已支持字级
         return LyricParser.parseLrc(lyricStr);
