@@ -586,6 +586,9 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     int? startBlockGeneration,
   }) async {
     if (owner == null) return;
+    if (!resumeAfter) {
+      await _commands.setPlayingPreservingIntent(false);
+    }
     final provenance = PlaybackStartProvenance(
       interruptionGeneration ?? _interruptionGeneration,
       startBlockGeneration ?? _playbackStartBlockGeneration,
@@ -940,192 +943,197 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     int? sourceCommandToken,
     PreservingPauseOwner? preservingPauseOwner,
   }) async {
-    if (index < 0 || index >= _queue.length) return;
-
-    final startProvenance = provenance ?? _captureStartProvenance();
-    final gen = _bumpGeneration();
-    if (!preserveUserIntent) _userWantsPlay = true;
-    final item = _queue[index];
-    final itemId = item.id;
-    final commandToken = sourceCommandToken ??
-        _commands.requestSource(
-          mediaId: itemId,
-          queueIndex: index,
-          position: initialPosition,
-        );
-    int activeItemIndex() {
-      if (_isStale(gen) ||
-          !_commands.ownsSourceRequest(commandToken) ||
-          _activeItemId != itemId ||
-          mediaItem.value?.id != itemId) {
-        return -1;
-      }
-      final relocated =
-          _queue.indexWhere((queueItem) => queueItem.id == itemId);
-      return relocated >= 0 && _currentIndex == relocated ? relocated : -1;
-    }
-
-    _activeItemId = itemId;
-    final cachedUrl = item.extras?['url']?.toString();
-    final cachedQ = item.extras?['requestedQuality']?.toString();
-    final canReuse = shouldReuseCachedPlayUrl(
-      cachedUrl: cachedUrl,
-      cachedRequestedQuality: cachedQ,
-      currentRequestedQuality: preferredQuality,
-    );
-    String? currentUrl = canReuse ? cachedUrl : null;
-
-    _currentIndex = index;
-    mediaItem.add(item);
-    var manualBufferingPublication = bufferingPublication;
-    var sourceInstallAttempted = false;
-    var sourceTransitionFollows = false;
-
     try {
-      String? url = currentUrl;
+      if (index < 0 || index >= _queue.length) return;
 
-      if (url == null || url.isEmpty) {
-        if (urlResolver != null) {
-          // seamless 连播时保持 playing=true，只标 buffering，避免锁屏杀会话
-          manualBufferingPublication = _publishPlaybackState(
-            override: AudioProcessingState.buffering,
-            playingOverride: seamless ? true : null,
+      final startProvenance = provenance ?? _captureStartProvenance();
+      final gen = _bumpGeneration();
+      if (!preserveUserIntent) _userWantsPlay = true;
+      final item = _queue[index];
+      final itemId = item.id;
+      final commandToken = sourceCommandToken ??
+          _commands.requestSource(
+            mediaId: itemId,
+            queueIndex: index,
+            position: initialPosition,
           );
-          // 强制按当前 preferredQuality 重新解析，忽略过期的 extras.url
-          final resolveExtras = item.extras == null
-              ? <String, dynamic>{}
-              : Map<String, dynamic>.from(item.extras!);
-          resolveExtras.remove('url');
-          resolveExtras.remove('remoteUrl');
-          resolveExtras['requestedQuality'] = preferredQuality;
-          url = await urlResolver!(item.id, resolveExtras);
+      int activeItemIndex() {
+        if (_isStale(gen) ||
+            !_commands.ownsSourceRequest(commandToken) ||
+            _activeItemId != itemId ||
+            mediaItem.value?.id != itemId) {
+          return -1;
         }
+        final relocated =
+            _queue.indexWhere((queueItem) => queueItem.id == itemId);
+        return relocated >= 0 && _currentIndex == relocated ? relocated : -1;
       }
 
-      var transactionIndex = activeItemIndex();
-      if (transactionIndex < 0) return;
-      final refreshed = _queue[transactionIndex].extras?['url']?.toString();
-      if ((url == null || url.isEmpty) &&
-          refreshed != null &&
-          refreshed.isNotEmpty &&
-          !refreshed.startsWith('data:')) {
-        url = refreshed;
-      }
+      _activeItemId = itemId;
+      final cachedUrl = item.extras?['url']?.toString();
+      final cachedQ = item.extras?['requestedQuality']?.toString();
+      final canReuse = shouldReuseCachedPlayUrl(
+        cachedUrl: cachedUrl,
+        cachedRequestedQuality: cachedQ,
+        currentRequestedQuality: preferredQuality,
+      );
+      String? currentUrl = canReuse ? cachedUrl : null;
 
-      if (url == null || url.isEmpty) {
-        if (_player.playing) {
-          preservingPauseOwner ??= await _commands.pausePreservingIntent();
-        }
-        transactionIndex = activeItemIndex();
-        if (transactionIndex < 0) return;
-        debugPrint('[AudioHandler] 无法获取播放链接: ${item.title} id=${item.id}');
-        onError?.call('无法解析歌曲 "${item.title}" 的播放地址（源无效地址或本地缓存失败，已尝试降级音质）');
-        if (_queue.length > 1 && _currentIndex == transactionIndex) {
-          await Future.delayed(const Duration(seconds: 5));
-          transactionIndex = activeItemIndex();
-          if (transactionIndex >= 0 && _currentIndex == transactionIndex) {
-            await _skipToNextInternal(provenance: startProvenance);
+      _currentIndex = index;
+      mediaItem.add(item);
+      var manualBufferingPublication = bufferingPublication;
+      var sourceInstallAttempted = false;
+      var sourceTransitionFollows = false;
+
+      try {
+        String? url = currentUrl;
+
+        if (url == null || url.isEmpty) {
+          if (urlResolver != null) {
+            // seamless 连播时保持 playing=true，只标 buffering，避免锁屏杀会话
+            manualBufferingPublication = _publishPlaybackState(
+              override: AudioProcessingState.buffering,
+              playingOverride: seamless ? true : null,
+            );
+            // 强制按当前 preferredQuality 重新解析，忽略过期的 extras.url
+            final resolveExtras = item.extras == null
+                ? <String, dynamic>{}
+                : Map<String, dynamic>.from(item.extras!);
+            resolveExtras.remove('url');
+            resolveExtras.remove('remoteUrl');
+            resolveExtras['requestedQuality'] = preferredQuality;
+            url = await urlResolver!(item.id, resolveExtras);
           }
         }
-        return;
-      }
 
-      final baseExtras =
-          Map<String, dynamic>.from(_queue[transactionIndex].extras ?? {});
-      baseExtras['url'] = url;
-      baseExtras['requestedQuality'] =
-          baseExtras['requestedQuality']?.toString() ?? preferredQuality;
-      // urlResolver 可能已把 actualQuality/remoteUrl 写到 mediaItem，合并回来
-      // 避免被队列 extras 覆盖后播放器只能显示请求音质。
-      final live = mediaItem.value;
-      if (live != null && live.id == itemId && live.extras != null) {
-        final le = live.extras!;
-        final aq = le['actualQuality']?.toString();
-        final remote = le['remoteUrl']?.toString();
-        final rq = le['requestedQuality']?.toString();
-        final plat = le['platform']?.toString();
-        if (aq != null && aq.isNotEmpty) baseExtras['actualQuality'] = aq;
-        if (remote != null && remote.isNotEmpty) {
-          baseExtras['remoteUrl'] = remote;
+        var transactionIndex = activeItemIndex();
+        if (transactionIndex < 0) return;
+        final refreshed = _queue[transactionIndex].extras?['url']?.toString();
+        if ((url == null || url.isEmpty) &&
+            refreshed != null &&
+            refreshed.isNotEmpty &&
+            !refreshed.startsWith('data:')) {
+          url = refreshed;
         }
-        if (rq != null && rq.isNotEmpty) {
-          baseExtras['requestedQuality'] = rq;
-        }
-        if (plat != null && plat.isNotEmpty) baseExtras['platform'] = plat;
-      }
-      final updatedItem = _queue[transactionIndex].copyWith(extras: baseExtras);
-      _queue[transactionIndex] = updatedItem;
-      queue.add(List.from(_queue));
-      mediaItem.add(updatedItem);
-      _activeItemId = itemId;
 
-      // URL 解析在协调器外；提交结果时必须仍拥有源请求。
-      if (_isStale(gen)) return;
-      var recoverAuthoritative = false;
-      transactionIndex = activeItemIndex();
-      if (transactionIndex < 0 || !_commands.ownsSourceRequest(commandToken)) {
-        return;
-      }
-      sourceInstallAttempted = true;
-      final commitResult = await _commands.commitSource(
-        commandToken,
-        audioSourceFor(url, tag: updatedItem),
-      );
-      sourceTransitionFollows = true;
-      if (commitResult is SourceCommitStale) {
-        if (commitResult.nativeInstallApplied && recoverStaleInstall) {
+        if (url == null || url.isEmpty) {
+          if (_player.playing) {
+            preservingPauseOwner ??= await _commands.pausePreservingIntent();
+          }
+          transactionIndex = activeItemIndex();
+          if (transactionIndex < 0) return;
+          debugPrint('[AudioHandler] 无法获取播放链接: ${item.title} id=${item.id}');
+          onError?.call('无法解析歌曲 "${item.title}" 的播放地址（源无效地址或本地缓存失败，已尝试降级音质）');
+          if (_queue.length > 1 && _currentIndex == transactionIndex) {
+            await Future.delayed(const Duration(seconds: 5));
+            transactionIndex = activeItemIndex();
+            if (transactionIndex >= 0 && _currentIndex == transactionIndex) {
+              await _skipToNextInternal(provenance: startProvenance);
+            }
+          }
+          return;
+        }
+
+        final baseExtras =
+            Map<String, dynamic>.from(_queue[transactionIndex].extras ?? {});
+        baseExtras['url'] = url;
+        baseExtras['requestedQuality'] =
+            baseExtras['requestedQuality']?.toString() ?? preferredQuality;
+        // urlResolver 可能已把 actualQuality/remoteUrl 写到 mediaItem，合并回来
+        // 避免被队列 extras 覆盖后播放器只能显示请求音质。
+        final live = mediaItem.value;
+        if (live != null && live.id == itemId && live.extras != null) {
+          final le = live.extras!;
+          final aq = le['actualQuality']?.toString();
+          final remote = le['remoteUrl']?.toString();
+          final rq = le['requestedQuality']?.toString();
+          final plat = le['platform']?.toString();
+          if (aq != null && aq.isNotEmpty) baseExtras['actualQuality'] = aq;
+          if (remote != null && remote.isNotEmpty) {
+            baseExtras['remoteUrl'] = remote;
+          }
+          if (rq != null && rq.isNotEmpty) {
+            baseExtras['requestedQuality'] = rq;
+          }
+          if (plat != null && plat.isNotEmpty) baseExtras['platform'] = plat;
+        }
+        final updatedItem =
+            _queue[transactionIndex].copyWith(extras: baseExtras);
+        _queue[transactionIndex] = updatedItem;
+        queue.add(List.from(_queue));
+        mediaItem.add(updatedItem);
+        _activeItemId = itemId;
+
+        // URL 解析在协调器外；提交结果时必须仍拥有源请求。
+        if (_isStale(gen)) return;
+        var recoverAuthoritative = false;
+        transactionIndex = activeItemIndex();
+        if (transactionIndex < 0 ||
+            !_commands.ownsSourceRequest(commandToken)) {
+          return;
+        }
+        sourceInstallAttempted = true;
+        final commitResult = await _commands.commitSource(
+          commandToken,
+          audioSourceFor(url, tag: updatedItem),
+        );
+        sourceTransitionFollows = true;
+        if (commitResult is SourceCommitStale) {
+          if (commitResult.nativeInstallApplied && recoverStaleInstall) {
+            await _recoverAuthoritativeSource(provenance: startProvenance);
+          }
+          return;
+        }
+        if (commitResult is SourceCommitFailed) {
+          Error.throwWithStackTrace(
+            commitResult.error,
+            commitResult.stackTrace,
+          );
+        }
+        _installedSourceOwnerToken = commandToken;
+        transactionIndex = activeItemIndex();
+        if (transactionIndex < 0) {
+          recoverAuthoritative = recoverStaleInstall && _playGeneration == gen;
+        } else {
+          _installedPlaybackGeneration = gen;
+          _installedMediaId = itemId;
+          _adoptInstalledSourceForInterruption(
+            sourceGeneration: gen,
+            mediaId: itemId,
+          );
+          _publishPlaybackState(
+            playingOverride: _commands.effectivePlaying ? true : null,
+          );
+          if (!_isStale(gen)) _schedulePreload();
+        }
+        if (recoverAuthoritative) {
           await _recoverAuthoritativeSource(provenance: startProvenance);
         }
-        return;
-      }
-      if (commitResult is SourceCommitFailed) {
-        Error.throwWithStackTrace(
-          commitResult.error,
-          commitResult.stackTrace,
-        );
-      }
-      _installedSourceOwnerToken = commandToken;
-      transactionIndex = activeItemIndex();
-      if (transactionIndex < 0) {
-        recoverAuthoritative = recoverStaleInstall && _playGeneration == gen;
-      } else {
-        _installedPlaybackGeneration = gen;
-        _installedMediaId = itemId;
-        _adoptInstalledSourceForInterruption(
-          sourceGeneration: gen,
-          mediaId: itemId,
-        );
-        _publishPlaybackState(
-          playingOverride: _commands.effectivePlaying ? true : null,
-        );
-        if (!_isStale(gen)) _schedulePreload();
-      }
-      if (recoverAuthoritative) {
-        await _recoverAuthoritativeSource(provenance: startProvenance);
-      }
-    } catch (e) {
-      debugPrint('[AudioHandler] 播放失败: $e');
-      var transactionIndex = activeItemIndex();
-      if (transactionIndex >= 0 && _currentIndex == transactionIndex) {
-        onError?.call('播放歌曲 "${item.title}" 失败: $e');
-        if (_queue.length > 1) {
-          transactionIndex = activeItemIndex();
-          if (transactionIndex >= 0 && _currentIndex == transactionIndex) {
-            await _skipToNextInternal(
-              seamless: seamless,
-              provenance: startProvenance,
-            );
+      } catch (e) {
+        debugPrint('[AudioHandler] 播放失败: $e');
+        var transactionIndex = activeItemIndex();
+        if (transactionIndex >= 0 && _currentIndex == transactionIndex) {
+          onError?.call('播放歌曲 "${item.title}" 失败: $e');
+          if (_queue.length > 1) {
+            transactionIndex = activeItemIndex();
+            if (transactionIndex >= 0 && _currentIndex == transactionIndex) {
+              await _skipToNextInternal(
+                seamless: seamless,
+                provenance: startProvenance,
+              );
+            }
           }
+        }
+      } finally {
+        if (!sourceInstallAttempted &&
+            !sourceTransitionFollows &&
+            manualBufferingPublication == _playbackPublicationToken) {
+          _publishPlaybackState();
         }
       }
     } finally {
       if (preservingPauseOwner != null) {
         await _commands.releasePreservingIntent(preservingPauseOwner);
-      }
-      if (!sourceInstallAttempted &&
-          !sourceTransitionFollows &&
-          manualBufferingPublication == _playbackPublicationToken) {
-        _publishPlaybackState();
       }
     }
   }

@@ -161,6 +161,71 @@ void main() {
         const Duration(seconds: 19));
   });
 
+  for (final failure in ['null', 'throw', 'stale']) {
+    test('real scrub $failure seek stays paused until later explicit play',
+        () async {
+      final seekGate = failure == 'stale' ? _Gate() : null;
+      final player = _SeekAudioPlayer(
+        processingState:
+            failure == 'null' ? ProcessingState.loading : ProcessingState.ready,
+        engineDuration: const Duration(minutes: 3),
+        seekError: failure == 'throw' ? StateError('native seek failed') : null,
+        seekGate: seekGate,
+      );
+      final handler = LxAudioHandler(player: player);
+      addTearDown(player.dispose);
+      await handler.setPlaylist([_item('A'), _item('B')]);
+      final sourceGeneration = handler.sourceGeneration;
+      final userIntentGeneration = handler.userIntentGeneration;
+      final owner = await handler.pauseForScrub(
+        sourceGeneration: sourceGeneration,
+        userIntentGeneration: userIntentGeneration,
+        stillOwnsScrub: () => true,
+      );
+      if (failure == 'null') {
+        player.engineProcessingState = ProcessingState.loading;
+      }
+
+      final seek = handler.seekConfirmed(const Duration(seconds: 40));
+      if (seekGate != null) {
+        await seekGate.started.future;
+        final selection = handler.skipToQueueItem(1);
+        seekGate.release.complete();
+        await selection;
+      }
+      expect(await seek, isNull);
+      await handler.releaseAfterScrub(owner, resumeAfter: false);
+
+      expect(player.playing, isFalse);
+      await handler.play();
+      expect(player.playing, isTrue);
+    });
+  }
+
+  test('real confirmed scrub release reconciles playback', () async {
+    final player = _SeekAudioPlayer(
+      processingState: ProcessingState.ready,
+      engineDuration: const Duration(minutes: 3),
+      confirmedPosition: const Duration(seconds: 40),
+    );
+    final handler = LxAudioHandler(player: player);
+    addTearDown(player.dispose);
+    await handler.setPlaylist([_item('A')]);
+    final owner = await handler.pauseForScrub(
+      sourceGeneration: handler.sourceGeneration,
+      userIntentGeneration: handler.userIntentGeneration,
+      stillOwnsScrub: () => true,
+    );
+
+    expect(
+      await handler.seekConfirmed(const Duration(seconds: 40)),
+      const Duration(seconds: 40),
+    );
+    await handler.releaseAfterScrub(owner, resumeAfter: true);
+
+    expect(player.playing, isTrue);
+  });
+
   test('newer source generation wins while seek is in flight', () async {
     final seekGate = _Gate();
     final player = _SeekAudioPlayer(

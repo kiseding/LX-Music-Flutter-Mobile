@@ -238,6 +238,33 @@ void main() {
     expect((player.loadedSource as ProgressiveAudioSource).tag.id, 'A');
   });
 
+  test('queue shortening between halt and load releases transferred owner',
+      () async {
+    MediaItem item(String id) => MediaItem(
+          id: id,
+          title: id,
+          extras: {
+            'url': 'file:///tmp/$id.mp3',
+            'requestedQuality': '320k',
+          },
+        );
+    final first = item('A');
+    await handler.setPlaylist([first, item('B')]);
+    player.gateNextPause();
+
+    final navigation = handler.skipToNext();
+    await player.pauseStarted.future;
+    await handler.updateQueue([first]);
+    player.releasePause.complete();
+    await navigation;
+
+    await handler.skipToQueueItem(0);
+    await handler.play();
+
+    expect(handler.mediaItem.value?.id, 'A');
+    expect(player.playing, isTrue);
+  });
+
   for (final replacementId in [null, 'D']) {
     test(
         'source load aborts when active item is '
