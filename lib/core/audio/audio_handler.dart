@@ -610,17 +610,27 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     bool playAfterLoad = true,
   }) async {
     final intentGeneration = _expressPlaybackIntent(playAfterLoad);
+    final selectedItemId =
+        index >= 0 && index < _queue.length ? _queue[index].id : null;
+    final sourceGeneration = _playGeneration;
     if (!playAfterLoad && _player.playing) {
       await pauseInternal(clearIntent: false);
-      if (_userIntentGeneration != intentGeneration) return;
     }
+    if (selectedItemId == null || _playGeneration != sourceGeneration) return;
+    final selectedIndex =
+        _queue.indexWhere((item) => item.id == selectedItemId);
+    if (selectedIndex < 0) return;
+    final latestIntentGeneration = _userIntentGeneration;
+    final latestPlayAfterLoad = latestIntentGeneration == intentGeneration
+        ? playAfterLoad
+        : _userWantsPlay;
     await _loadQueueItem(
-      index,
+      selectedIndex,
       seamless: seamless,
       preserveUserIntent: true,
       initialPosition: initialPosition,
-      playAfterLoad: playAfterLoad,
-      expectedUserIntentGeneration: intentGeneration,
+      playAfterLoad: latestPlayAfterLoad,
+      expectedUserIntentGeneration: latestIntentGeneration,
     );
   }
 

@@ -301,6 +301,68 @@ void main() {
     expect(player.playing, isFalse);
   });
 
+  test('newer play during explicit false halt keeps selected item', () async {
+    final player = _QualityAudioPlayer();
+    final handler = LxAudioHandler(player: player);
+    addTearDown(player.dispose);
+    await handler.setPlaylist([_item('A'), _item('B')]);
+    final sourceLoads = player.sourceLoadCalls;
+    final pauseGate = player.gateNextPause();
+
+    final selection = handler.skipToQueueItem(1, playAfterLoad: false);
+    await pauseGate.started.future;
+    await handler.play();
+    pauseGate.release.complete();
+    await selection;
+
+    expect(handler.currentQueueIndex, 1);
+    expect(handler.mediaItem.value?.id, 'B');
+    expect((player.loadedSource as ProgressiveAudioSource).tag.id, 'B');
+    expect(player.sourceLoadCalls, sourceLoads + 1);
+    expect(player.playing, isTrue);
+  });
+
+  test('newer pause during explicit false halt keeps selected item', () async {
+    final player = _QualityAudioPlayer();
+    final handler = LxAudioHandler(player: player);
+    addTearDown(player.dispose);
+    await handler.setPlaylist([_item('A'), _item('B')]);
+    final sourceLoads = player.sourceLoadCalls;
+    final pauseGate = player.gateNextPause();
+
+    final selection = handler.skipToQueueItem(1, playAfterLoad: false);
+    await pauseGate.started.future;
+    await handler.pause();
+    pauseGate.release.complete();
+    await selection;
+
+    expect(handler.currentQueueIndex, 1);
+    expect(handler.mediaItem.value?.id, 'B');
+    expect((player.loadedSource as ProgressiveAudioSource).tag.id, 'B');
+    expect(player.sourceLoadCalls, sourceLoads + 1);
+    expect(player.playing, isFalse);
+  });
+
+  test('newer queue selection cancels explicit false selection during halt',
+      () async {
+    final player = _QualityAudioPlayer();
+    final handler = LxAudioHandler(player: player);
+    addTearDown(player.dispose);
+    await handler.setPlaylist([_item('A'), _item('B'), _item('C')]);
+    final pauseGate = player.gateNextPause();
+
+    final staleSelection = handler.skipToQueueItem(1, playAfterLoad: false);
+    await pauseGate.started.future;
+    await handler.skipToQueueItem(2);
+    pauseGate.release.complete();
+    await staleSelection;
+
+    expect(handler.currentQueueIndex, 2);
+    expect(handler.mediaItem.value?.id, 'C');
+    expect((player.loadedSource as ProgressiveAudioSource).tag.id, 'C');
+    expect(player.playing, isTrue);
+  });
+
   test('newer pause during quality halt preserves quality and reloads paused',
       () async {
     final player = _QualityAudioPlayer();
