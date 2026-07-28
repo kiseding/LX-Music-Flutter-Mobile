@@ -236,6 +236,8 @@ abstract interface class ScrubPlayback {
   Duration get position;
   int get sourceGeneration;
   int get userIntentGeneration;
+  int get interruptionGeneration;
+  int get playbackStartBlockGeneration;
 
   Future<void> pauseForScrub({
     required int sourceGeneration,
@@ -243,7 +245,10 @@ abstract interface class ScrubPlayback {
     required bool Function() stillOwnsScrub,
   });
   Future<Duration?> seekConfirmed(Duration position);
-  Future<void> resumeAfterScrub();
+  Future<void> resumeAfterScrub({
+    required int interruptionGeneration,
+    required int startBlockGeneration,
+  });
 }
 
 abstract interface class ScrubPosition {
@@ -263,6 +268,8 @@ class ScrubCoordinator {
     final generation = ++_generation;
     final sourceGeneration = _playback.sourceGeneration;
     final userIntentGeneration = _playback.userIntentGeneration;
+    final interruptionGeneration = _playback.interruptionGeneration;
+    final startBlockGeneration = _playback.playbackStartBlockGeneration;
     _transactions.clear();
     _position.freeze();
 
@@ -276,6 +283,8 @@ class ScrubCoordinator {
     _transactions[generation] = _ScrubTransaction(
       sourceGeneration: sourceGeneration,
       userIntentGeneration: userIntentGeneration,
+      interruptionGeneration: interruptionGeneration,
+      startBlockGeneration: startBlockGeneration,
       pauseFuture: pauseFuture,
     );
     try {
@@ -306,7 +315,10 @@ class ScrubCoordinator {
       confirmed = await _playback.seekConfirmed(position);
       if (generation != _generation) return;
       if (confirmed != null && resumeAfter && transaction.owns(_playback)) {
-        await _playback.resumeAfterScrub();
+        await _playback.resumeAfterScrub(
+          interruptionGeneration: transaction.interruptionGeneration,
+          startBlockGeneration: transaction.startBlockGeneration,
+        );
       }
     } finally {
       if (generation == _generation) {
@@ -324,11 +336,15 @@ class ScrubCoordinator {
 class _ScrubTransaction {
   final int sourceGeneration;
   final int userIntentGeneration;
+  final int interruptionGeneration;
+  final int startBlockGeneration;
   final Future<void> pauseFuture;
 
   const _ScrubTransaction({
     required this.sourceGeneration,
     required this.userIntentGeneration,
+    required this.interruptionGeneration,
+    required this.startBlockGeneration,
     required this.pauseFuture,
   });
 
@@ -357,6 +373,13 @@ class _HandlerScrubPlayback implements ScrubPlayback {
   int get userIntentGeneration => _handler?.userIntentGeneration ?? 0;
 
   @override
+  int get interruptionGeneration => _handler?.interruptionGeneration ?? 0;
+
+  @override
+  int get playbackStartBlockGeneration =>
+      _handler?.playbackStartBlockGeneration ?? 0;
+
+  @override
   Future<void> pauseForScrub({
     required int sourceGeneration,
     required int userIntentGeneration,
@@ -378,7 +401,15 @@ class _HandlerScrubPlayback implements ScrubPlayback {
   }
 
   @override
-  Future<void> resumeAfterScrub() => _handler?.play() ?? Future<void>.value();
+  Future<void> resumeAfterScrub({
+    required int interruptionGeneration,
+    required int startBlockGeneration,
+  }) =>
+      _handler?.resumeAfterScrub(
+        interruptionGeneration: interruptionGeneration,
+        startBlockGeneration: startBlockGeneration,
+      ) ??
+      Future<void>.value();
 }
 
 final scrubCoordinatorProvider = Provider<ScrubCoordinator>((ref) {

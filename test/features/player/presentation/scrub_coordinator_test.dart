@@ -401,6 +401,10 @@ class _FakeScrubPlayback implements ScrubPlayback {
   int sourceGeneration = 1;
   @override
   int userIntentGeneration = 1;
+  @override
+  int interruptionGeneration = 0;
+  @override
+  int playbackStartBlockGeneration = 0;
   Duration? seekResult;
   Object? seekError;
   Object? pauseError;
@@ -446,7 +450,10 @@ class _FakeScrubPlayback implements ScrubPlayback {
   }
 
   @override
-  Future<void> resumeAfterScrub() async {
+  Future<void> resumeAfterScrub({
+    required int interruptionGeneration,
+    required int startBlockGeneration,
+  }) async {
     resumeCalls++;
     playing = true;
   }
@@ -499,6 +506,12 @@ class _RealHandlerScrubPlayback implements ScrubPlayback {
   int get userIntentGeneration => handler.userIntentGeneration;
 
   @override
+  int get interruptionGeneration => handler.interruptionGeneration;
+
+  @override
+  int get playbackStartBlockGeneration => handler.playbackStartBlockGeneration;
+
+  @override
   Future<void> pauseForScrub({
     required int sourceGeneration,
     required int userIntentGeneration,
@@ -515,7 +528,14 @@ class _RealHandlerScrubPlayback implements ScrubPlayback {
       handler.seekConfirmed(position);
 
   @override
-  Future<void> resumeAfterScrub() => handler.play();
+  Future<void> resumeAfterScrub({
+    required int interruptionGeneration,
+    required int startBlockGeneration,
+  }) =>
+      handler.resumeAfterScrub(
+        interruptionGeneration: interruptionGeneration,
+        startBlockGeneration: startBlockGeneration,
+      );
 }
 
 class _CoordinatorAudioPlayer extends AudioPlayer {
