@@ -155,7 +155,11 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                               children: [
                                 const SizedBox(height: 12),
                                 Expanded(
-                                    child: _buildArtwork(currentMusic.artwork)),
+                                  child: _buildArtwork(
+                                    currentMusic.artwork,
+                                    songId: currentMusic.id,
+                                  ),
+                                ),
                                 _buildSongInfo(currentMusic, isFavorite),
                                 _buildCurrentLyricLine(),
                                 _buildProgressSection(
@@ -282,7 +286,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     );
   }
 
-  Widget _buildArtwork(String? artwork) {
+  Widget _buildArtwork(String? artwork, {String? songId}) {
     // 与歌名行同宽：左右 32，对齐歌名左侧到心形右侧区域
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -305,11 +309,44 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
             ),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(22),
-              child: artwork != null && artwork.isNotEmpty
-                  ? ArtworkImage(artwork,
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) => _defaultArtwork())
-                  : _defaultArtwork(),
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 420),
+                reverseDuration: const Duration(milliseconds: 280),
+                switchInCurve: Curves.easeOutCubic,
+                switchOutCurve: Curves.easeInCubic,
+                layoutBuilder: (currentChild, previousChildren) {
+                  return Stack(
+                    fit: StackFit.expand,
+                    alignment: Alignment.center,
+                    children: <Widget>[
+                      ...previousChildren,
+                      if (currentChild != null) currentChild,
+                    ],
+                  );
+                },
+                transitionBuilder: (child, animation) {
+                  final scale = Tween<double>(begin: 0.92, end: 1.0).animate(
+                    CurvedAnimation(
+                      parent: animation,
+                      curve: Curves.easeOutCubic,
+                    ),
+                  );
+                  return FadeTransition(
+                    opacity: animation,
+                    child: ScaleTransition(scale: scale, child: child),
+                  );
+                },
+                child: KeyedSubtree(
+                  key: ValueKey<String>(songId ?? artwork ?? 'empty'),
+                  child: artwork != null && artwork.isNotEmpty
+                      ? ArtworkImage(
+                          artwork,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) => _defaultArtwork(),
+                        )
+                      : _defaultArtwork(),
+                ),
+              ),
             ),
           ),
         );
