@@ -582,13 +582,15 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   Future<void> releaseAfterScrub(
     PreservingPauseOwner? owner, {
     required bool resumeAfter,
+    required int sourceGeneration,
+    required int userIntentGeneration,
     int? interruptionGeneration,
     int? startBlockGeneration,
   }) async {
     if (owner == null) return;
-    if (!resumeAfter) {
-      await _commands.setPlayingPreservingIntent(false);
-    }
+    final stopIfStillOwnsIntent = !resumeAfter &&
+        sourceGeneration == _playGeneration &&
+        userIntentGeneration == _userIntentGeneration;
     final provenance = PlaybackStartProvenance(
       interruptionGeneration ?? _interruptionGeneration,
       startBlockGeneration ?? _playbackStartBlockGeneration,
@@ -596,10 +598,16 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     if (provenance.blockGeneration != _playbackStartBlockGeneration ||
         (!interruptionActive &&
             provenance.interruptionGeneration != _interruptionGeneration)) {
-      await _commands.releasePreservingIntent(owner);
+      await _commands.releasePreservingIntent(
+        owner,
+        stopIfStillOwnsIntent: stopIfStillOwnsIntent,
+      );
       return;
     }
-    await _commands.releasePreservingIntent(owner);
+    await _commands.releasePreservingIntent(
+      owner,
+      stopIfStillOwnsIntent: stopIfStillOwnsIntent,
+    );
   }
 
   void _restoreAuthoritativePlaybackAfterScrubPause({

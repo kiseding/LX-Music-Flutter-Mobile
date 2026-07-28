@@ -731,9 +731,11 @@ void main() {
 
       final reload = handler.applyPreferredQuality('flac');
       await resolveGate.started.future;
+      final scrubSourceGeneration = handler.sourceGeneration;
+      final scrubUserIntentGeneration = handler.userIntentGeneration;
       final scrubOwner = await handler.pauseForScrub(
-        sourceGeneration: handler.sourceGeneration,
-        userIntentGeneration: handler.userIntentGeneration,
+        sourceGeneration: scrubSourceGeneration,
+        userIntentGeneration: scrubUserIntentGeneration,
         stillOwnsScrub: () => true,
       );
       expect(scrubOwner, isNotNull);
@@ -742,9 +744,19 @@ void main() {
         resolveGate.release.complete();
         await reload;
         expect(player.playing, isFalse);
-        await handler.releaseAfterScrub(scrubOwner!, resumeAfter: true);
+        await handler.releaseAfterScrub(
+          scrubOwner!,
+          resumeAfter: true,
+          sourceGeneration: scrubSourceGeneration,
+          userIntentGeneration: scrubUserIntentGeneration,
+        );
       } else {
-        await handler.releaseAfterScrub(scrubOwner!, resumeAfter: true);
+        await handler.releaseAfterScrub(
+          scrubOwner!,
+          resumeAfter: true,
+          sourceGeneration: scrubSourceGeneration,
+          userIntentGeneration: scrubUserIntentGeneration,
+        );
         expect(player.playing, isFalse);
         resolveGate.release.complete();
         await reload;

@@ -390,6 +390,97 @@ void main() {
 
     expect(player.playing, isTrue);
   });
+
+  test('second begin releases fully acquired first owner exactly once',
+      () async {
+    final player = _CoordinatorAudioPlayer();
+    final handler = LxAudioHandler(player: player);
+    addTearDown(player.dispose);
+    await handler.setPlaylist([
+      const MediaItem(
+        id: 'A',
+        title: 'A',
+        extras: {
+          'url': 'file:///tmp/A.mp3',
+          'requestedQuality': '320k',
+        },
+      )
+    ]);
+    await pumpEventQueue();
+    final coordinator = ScrubCoordinator(
+      _RealHandlerScrubPlayback(handler),
+      _FakeScrubPosition(),
+    );
+
+    final firstGeneration = await coordinator.begin();
+    final secondGeneration = await coordinator.begin();
+    await coordinator.finish(
+      firstGeneration,
+      const Duration(seconds: 10),
+      resumeAfter: true,
+    );
+    await coordinator.finish(
+      secondGeneration,
+      const Duration(seconds: 20),
+      resumeAfter: false,
+    );
+    await handler.play();
+
+    expect(player.playing, isTrue);
+  });
+
+  test('multiple rapid begins release superseded pending owners', () async {
+    final player = _CoordinatorAudioPlayer();
+    final handler = LxAudioHandler(player: player);
+    addTearDown(player.dispose);
+    await handler.setPlaylist([
+      const MediaItem(
+        id: 'A',
+        title: 'A',
+        extras: {
+          'url': 'file:///tmp/A.mp3',
+          'requestedQuality': '320k',
+        },
+      )
+    ]);
+    await pumpEventQueue();
+    final coordinator = ScrubCoordinator(
+      _RealHandlerScrubPlayback(handler),
+      _FakeScrubPosition(),
+    );
+
+    final firstGeneration = await coordinator.begin();
+    final secondPauseGate = _Gate();
+    player
+      ..setPlayingState(true)
+      ..nextPauseGate = secondPauseGate;
+    final secondBegin = coordinator.begin();
+    await secondPauseGate.started.future;
+    final thirdBegin = coordinator.begin();
+    secondPauseGate.release.complete();
+    final laterGenerations = await Future.wait([
+      secondBegin,
+      thirdBegin,
+    ]);
+    await coordinator.finish(
+      firstGeneration,
+      const Duration(seconds: 10),
+      resumeAfter: true,
+    );
+    await coordinator.finish(
+      laterGenerations[0],
+      const Duration(seconds: 20),
+      resumeAfter: true,
+    );
+    await coordinator.finish(
+      laterGenerations[1],
+      const Duration(seconds: 30),
+      resumeAfter: false,
+    );
+    await handler.play();
+
+    expect(player.playing, isTrue);
+  });
 }
 
 class _FakeScrubPlayback implements ScrubPlayback {
@@ -454,6 +545,8 @@ class _FakeScrubPlayback implements ScrubPlayback {
   Future<void> releaseAfterScrub(
     PreservingPauseOwner? owner, {
     required bool resumeAfter,
+    required int sourceGeneration,
+    required int userIntentGeneration,
     required int interruptionGeneration,
     required int startBlockGeneration,
   }) async {
@@ -536,25 +629,30 @@ class _RealHandlerScrubPlayback implements ScrubPlayback {
   Future<void> releaseAfterScrub(
     PreservingPauseOwner? owner, {
     required bool resumeAfter,
+    required int sourceGeneration,
+    required int userIntentGeneration,
     required int interruptionGeneration,
     required int startBlockGeneration,
   }) =>
       handler.releaseAfterScrub(
         owner,
         resumeAfter: resumeAfter,
+        sourceGeneration: sourceGeneration,
+        userIntentGeneration: userIntentGeneration,
         interruptionGeneration: interruptionGeneration,
         startBlockGeneration: startBlockGeneration,
       );
 }
 
 class _CoordinatorAudioPlayer extends AudioPlayer {
-  final _Gate oldPauseGate;
-  bool _oldPausePending = true;
+  _Gate? nextPauseGate;
   bool _playing = false;
   Duration _position = Duration.zero;
   AudioSource? _source;
 
-  _CoordinatorAudioPlayer(this.oldPauseGate);
+  _CoordinatorAudioPlayer([this.nextPauseGate]);
+
+  void setPlayingState(bool playing) => _playing = playing;
 
   @override
   bool get playing => _playing;
@@ -588,10 +686,11 @@ class _CoordinatorAudioPlayer extends AudioPlayer {
 
   @override
   Future<void> pause() async {
-    if (_oldPausePending) {
-      _oldPausePending = false;
-      oldPauseGate.started.complete();
-      await oldPauseGate.release.future;
+    final gate = nextPauseGate;
+    nextPauseGate = null;
+    if (gate != null) {
+      gate.started.complete();
+      await gate.release.future;
     }
     _playing = false;
   }

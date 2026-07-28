@@ -31,7 +31,10 @@ final class SourceCommitFailed extends SourceCommitResult {
 }
 
 final class PreservingPauseOwner {
-  PreservingPauseOwner._();
+  final int _intentRevision;
+  final int? _sourceToken;
+
+  PreservingPauseOwner._(this._intentRevision, this._sourceToken);
 }
 
 class PlaybackCommandCoordinator {
@@ -147,14 +150,25 @@ class PlaybackCommandCoordinator {
   }
 
   Future<PreservingPauseOwner> pausePreservingIntent() async {
-    final owner = PreservingPauseOwner._();
+    final owner = PreservingPauseOwner._(
+      _intentRevision,
+      _desiredSource?.token,
+    );
     _preservingPauseOwners.add(owner);
     await _markDirty(awaitApplication: true);
     return owner;
   }
 
-  Future<void> releasePreservingIntent(PreservingPauseOwner owner) {
+  Future<void> releasePreservingIntent(
+    PreservingPauseOwner owner, {
+    bool stopIfStillOwnsIntent = false,
+  }) {
     if (!_preservingPauseOwners.remove(owner)) return settled;
+    if (stopIfStillOwnsIntent &&
+        owner._intentRevision == _intentRevision &&
+        owner._sourceToken == _desiredSource?.token) {
+      _desiredPlaying = false;
+    }
     if (_preservingPauseOwners.isEmpty) _retirePausedPlayLifecycle();
     return _markDirty();
   }

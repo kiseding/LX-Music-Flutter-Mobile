@@ -359,6 +359,8 @@ void main() {
     await handler.releaseAfterScrub(
       owner,
       resumeAfter: true,
+      sourceGeneration: sourceGeneration,
+      userIntentGeneration: intentGeneration,
       interruptionGeneration: interruptionGeneration,
       startBlockGeneration: startBlockGeneration,
     );
@@ -394,6 +396,8 @@ void main() {
     await handler.releaseAfterScrub(
       owner,
       resumeAfter: true,
+      sourceGeneration: sourceGeneration,
+      userIntentGeneration: intentGeneration,
       interruptionGeneration: interruptionGeneration,
       startBlockGeneration: startBlockGeneration,
     );
@@ -947,12 +951,16 @@ class _InterruptionScrubPlayback implements ScrubPlayback {
   Future<void> releaseAfterScrub(
     PreservingPauseOwner? owner, {
     required bool resumeAfter,
+    required int sourceGeneration,
+    required int userIntentGeneration,
     required int interruptionGeneration,
     required int startBlockGeneration,
   }) =>
       handler.releaseAfterScrub(
         owner,
         resumeAfter: resumeAfter,
+        sourceGeneration: sourceGeneration,
+        userIntentGeneration: userIntentGeneration,
         interruptionGeneration: interruptionGeneration,
         startBlockGeneration: startBlockGeneration,
       );

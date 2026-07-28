@@ -194,10 +194,60 @@ void main() {
         await selection;
       }
       expect(await seek, isNull);
-      await handler.releaseAfterScrub(owner, resumeAfter: false);
+      await handler.releaseAfterScrub(
+        owner,
+        resumeAfter: false,
+        sourceGeneration: sourceGeneration,
+        userIntentGeneration: userIntentGeneration,
+      );
 
-      expect(player.playing, isFalse);
+      expect(player.playing, failure == 'stale');
+      if (failure != 'stale') await handler.play();
+      expect(player.playing, isTrue);
+    });
+  }
+
+  for (final outcome in ['superseded', 'source stale', 'error']) {
+    test('newer explicit play survives old scrub $outcome seek release',
+        () async {
+      final seekGate = _Gate();
+      final player = _SeekAudioPlayer(
+        processingState: ProcessingState.ready,
+        engineDuration: const Duration(minutes: 3),
+        seekError: outcome == 'error' ? StateError('native seek failed') : null,
+        seekGate: seekGate,
+      );
+      final handler = LxAudioHandler(player: player);
+      addTearDown(player.dispose);
+      await handler.setPlaylist([_item('A'), _item('B')]);
+      final sourceGeneration = handler.sourceGeneration;
+      final userIntentGeneration = handler.userIntentGeneration;
+      final owner = await handler.pauseForScrub(
+        sourceGeneration: sourceGeneration,
+        userIntentGeneration: userIntentGeneration,
+        stillOwnsScrub: () => true,
+      );
+
+      final seek = handler.seekConfirmed(const Duration(seconds: 40));
+      await seekGate.started.future;
       await handler.play();
+      Future<void>? newerOperation;
+      if (outcome == 'superseded') {
+        newerOperation =
+            handler.seekConfirmed(const Duration(seconds: 45)).then((_) {});
+      } else if (outcome == 'source stale') {
+        newerOperation = handler.skipToQueueItem(1);
+      }
+      seekGate.release.complete();
+      expect(await seek, isNull);
+      await newerOperation;
+      await handler.releaseAfterScrub(
+        owner,
+        resumeAfter: false,
+        sourceGeneration: sourceGeneration,
+        userIntentGeneration: userIntentGeneration,
+      );
+
       expect(player.playing, isTrue);
     });
   }
@@ -211,9 +261,11 @@ void main() {
     final handler = LxAudioHandler(player: player);
     addTearDown(player.dispose);
     await handler.setPlaylist([_item('A')]);
+    final sourceGeneration = handler.sourceGeneration;
+    final userIntentGeneration = handler.userIntentGeneration;
     final owner = await handler.pauseForScrub(
-      sourceGeneration: handler.sourceGeneration,
-      userIntentGeneration: handler.userIntentGeneration,
+      sourceGeneration: sourceGeneration,
+      userIntentGeneration: userIntentGeneration,
       stillOwnsScrub: () => true,
     );
 
@@ -221,7 +273,12 @@ void main() {
       await handler.seekConfirmed(const Duration(seconds: 40)),
       const Duration(seconds: 40),
     );
-    await handler.releaseAfterScrub(owner, resumeAfter: true);
+    await handler.releaseAfterScrub(
+      owner,
+      resumeAfter: true,
+      sourceGeneration: sourceGeneration,
+      userIntentGeneration: userIntentGeneration,
+    );
 
     expect(player.playing, isTrue);
   });
