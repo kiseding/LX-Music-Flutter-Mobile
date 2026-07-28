@@ -229,34 +229,37 @@ class WySource extends MusicPlatform {
   @override
   Future<String?> getMusicUrl(MusicItem music,
       {String quality = '128k'}) async {
-    return _getMusicUrl(music, quality: quality);
+    return _getMusicUrl(music, quality: quality, exact: false);
   }
 
   @override
   Future<String?> getMusicUrlExact(MusicItem music,
       {required String quality}) async {
     if (exactBitrateForQuality(quality) == null) return null;
-    return _getMusicUrl(music, quality: quality);
+    return _getMusicUrl(music, quality: quality, exact: true);
   }
 
   @override
   Future<ExactPlayUrl?> getMusicUrlExactDetailed(MusicItem music,
       {required String quality}) async {
-    return _getMusicUrlDetailed(music, quality: quality);
+    return _getMusicUrlDetailed(music, quality: quality, exact: true);
   }
 
   Future<String?> _getMusicUrl(MusicItem music,
-      {required String quality}) async {
-    return (await _getMusicUrlDetailed(music, quality: quality))?.url;
+      {required String quality, required bool exact}) async {
+    return (await _getMusicUrlDetailed(music, quality: quality, exact: exact))
+        ?.url;
   }
 
   Future<ExactPlayUrl?> _getMusicUrlDetailed(MusicItem music,
-      {required String quality}) async {
+      {required String quality, required bool exact}) async {
     try {
       final id = music.songmid ?? music.id;
       if (id.isEmpty) return null;
 
-      final br = exactBitrateForQuality(quality);
+      final br = exact
+          ? exactBitrateForQuality(quality)
+          : legacyBitrateForQuality(quality);
       if (br == null) return null;
 
       final urlDio =
@@ -299,6 +302,13 @@ class WySource extends MusicPlatform {
         '192k' => 192000,
         '128k' => 128000,
         _ => null,
+      };
+
+  static int legacyBitrateForQuality(String quality) => switch (quality) {
+        'hires' || 'flac24bit' || 'flac' => 999000,
+        '320k' => 320000,
+        '192k' => 192000,
+        _ => 128000,
       };
 
   static String qualityFromBitrate(int bitrate) => switch (bitrate) {

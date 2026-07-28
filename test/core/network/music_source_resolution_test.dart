@@ -270,4 +270,90 @@ void main() {
     expect(result?.actualQuality, '192k');
     expect(result?.requestedQuality, 'flac');
   });
+
+  test('higher-priority source wins equal actual quality across candidates',
+      () async {
+    final calls = <String>[];
+    final service = MusicSourceService(
+      CustomSourceService(),
+      enabledCustomSourceIds: () => ['A', 'B'],
+      customSourceQualityResolver:
+          (sourceId, music, quality, cancelToken) async {
+        calls.add('$sourceId:$quality');
+        if (sourceId == 'B' && quality == 'flac') {
+          return playable(quality, actual: '192k');
+        }
+        if (sourceId == 'A' && quality == '320k') {
+          return playable(quality, actual: '192k');
+        }
+        return null;
+      },
+    );
+
+    final result = await service.resolvePlayableUrl(
+      item,
+      preferredQuality: 'flac',
+    );
+
+    expect(result?.url, 'https://media.example/320k.mp3');
+    expect(result?.actualQuality, '192k');
+    expect(result?.requestedQuality, 'flac');
+    expect(calls, [
+      'A:flac',
+      'B:flac',
+      'A:320k',
+      'B:320k',
+      'A:192k',
+      'B:192k',
+      'A:128k',
+      'B:128k',
+    ]);
+  });
+
+  test('inverse cross-candidate tie still follows source priority', () async {
+    final service = MusicSourceService(
+      CustomSourceService(),
+      enabledCustomSourceIds: () => ['A', 'B'],
+      customSourceQualityResolver:
+          (sourceId, music, quality, cancelToken) async {
+        if (sourceId == 'A' && quality == 'flac') {
+          return playable(quality, actual: '192k');
+        }
+        if (sourceId == 'B' && quality == '320k') {
+          return playable(quality, actual: '192k');
+        }
+        return null;
+      },
+    );
+
+    final result = await service.resolvePlayableUrl(
+      item,
+      preferredQuality: 'flac',
+    );
+
+    expect(result?.url, 'https://media.example/flac.mp3');
+    expect(result?.actualQuality, '192k');
+  });
+
+  test('honest early source success does not query lower-priority source',
+      () async {
+    final calls = <String>[];
+    final service = MusicSourceService(
+      CustomSourceService(),
+      enabledCustomSourceIds: () => ['A', 'B'],
+      customSourceQualityResolver:
+          (sourceId, music, quality, cancelToken) async {
+        calls.add('$sourceId:$quality');
+        return sourceId == 'A' && quality == 'flac' ? playable(quality) : null;
+      },
+    );
+
+    final result = await service.resolvePlayableUrl(
+      item,
+      preferredQuality: 'flac',
+    );
+
+    expect(result?.actualQuality, 'flac');
+    expect(calls, ['A:flac']);
+  });
 }

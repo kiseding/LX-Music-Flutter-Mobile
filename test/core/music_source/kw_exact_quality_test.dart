@@ -33,4 +33,10 @@ void main() {
       '128k',
     );
   });
+
+  test('Kw legacy unknown quality keeps the historical mp3 format', () {
+    expect(KwSource.legacyFormatForQuality('future-quality'), 'mp3');
+    expect(KwSource.legacyFormatForQuality('320k'), 'mp3');
+    expect(KwSource.legacyFormatForQuality('flac'), 'flac');
+  });
 }

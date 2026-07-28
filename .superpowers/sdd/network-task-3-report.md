@@ -88,3 +88,28 @@ Implemented the single quality-resolution coordinator with strict RED/GREEN TDD.
 - Full `flutter test`: 420 passed.
 - Targeted analysis: no issues.
 - `git diff --check`: clean.
+
+## Final Review Fixes
+
+- Provisional custom-source attempts now carry private source-priority and
+  candidate-order indexes alongside `PlayUrlResult`. Ranking compares actual
+  quality first, enabled-source index second, and candidate order third, so an
+  equal-quality result from a higher-priority source wins across candidates
+  without exposing internal metadata in the public result.
+- Cross-candidate tests cover lower-priority-first, higher-priority-first, and
+  honest early-success behavior. The regression test failed with the earlier
+  candidate winning before the private attempt wrapper was introduced.
+- NetEase legacy and exact bitrate mappings are separate. Public legacy
+  `getMusicUrl` maps unknown or future labels to `128000`; exact resolution
+  rejects unsupported labels.
+- QQ and Kuwo legacy unknown-quality mappings were audited against the previous
+  implementation and retained: QQ tries `C400` then `M500`, while Kuwo uses
+  `mp3`. Production legacy requests and compatibility tests share those mapping
+  functions.
+
+## Final Review Verification
+
+- Focused network/music-source/download/audio suite: 299 passed.
+- Full `flutter test`: 427 passed.
+- Targeted analysis: no issues.
+- `git diff --check`: clean.

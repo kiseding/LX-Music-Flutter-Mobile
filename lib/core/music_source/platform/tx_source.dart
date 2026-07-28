@@ -147,7 +147,7 @@ class TxSource extends MusicPlatform {
 
       for (final filename in exact
           ? exactFilenames(songmid, mediaMid, quality)
-          : _txFilenames(songmid, mediaMid, quality)) {
+          : legacyFilenames(songmid, mediaMid, quality)) {
         try {
           final resp = await urlDio.get(
             'https://c.y.qq.com/base/fcgi-bin/fcg_music_express_mobile3.fcg',
@@ -241,7 +241,7 @@ class TxSource extends MusicPlatform {
   @override
   String? exactAttemptKey(String quality) => exactAttemptKeyForQuality(quality);
 
-  static List<String> _txFilenames(
+  static List<String> legacyFilenames(
       String songmid, String mediaMid, String quality) {
     switch (quality) {
       case 'hires':

@@ -18,6 +18,18 @@ typedef CustomSourceQualityResolver = Future<PlayUrlResult?> Function(
   CancelToken? cancelToken,
 );
 
+class _QualityAttempt {
+  final PlayUrlResult result;
+  final int sourceIndex;
+  final int candidateIndex;
+
+  const _QualityAttempt({
+    required this.result,
+    required this.sourceIndex,
+    required this.candidateIndex,
+  });
+}
+
 class MusicSourceService {
   final CustomSourceService _customSourceService;
   final BuiltInSourceManager _builtInSources;
@@ -233,51 +245,67 @@ class MusicSourceService {
             attemptKey: (quality) =>
                 _builtInSources.exactAttemptKey(platform, quality),
           );
-    PlayUrlResult? bestBelow;
+    _QualityAttempt? bestBelow;
     final resolver = hasCustom ? _resolveCustomQuality : _resolveBuiltInQuality;
 
-    for (final quality in qualities) {
+    for (var candidateIndex = 0;
+        candidateIndex < qualities.length;
+        candidateIndex++) {
+      final quality = qualities[candidateIndex];
       _throwIfCancelled(cancelToken);
-      final result = await resolver(music, quality, cancelToken);
+      final attempt = await resolver(music, quality, cancelToken,
+          candidateIndex: candidateIndex);
       _throwIfCancelled(cancelToken);
-      if (result == null || !isPlayableMediaUrl(result.url)) continue;
+      if (attempt == null || !isPlayableMediaUrl(attempt.result.url)) continue;
 
       final normalized = PlayUrlResult(
-        url: result.url,
+        url: attempt.result.url,
         requestedQuality: resolvedQuality,
-        actualQuality: result.actualQuality,
-        platform: result.platform,
+        actualQuality: attempt.result.actualQuality,
+        platform: attempt.result.platform,
+      );
+      final normalizedAttempt = _QualityAttempt(
+        result: normalized,
+        sourceIndex: attempt.sourceIndex,
+        candidateIndex: candidateIndex,
       );
       if (isQualityBelow(normalized.actualQuality, quality)) {
-        bestBelow = _betterProvisional(bestBelow, normalized);
+        bestBelow = _betterProvisional(bestBelow, normalizedAttempt);
         continue;
       }
-      return _betterProvisional(bestBelow, normalized);
+      return _betterProvisional(bestBelow, normalizedAttempt)?.result;
     }
 
     if (bestBelow != null) {
-      debugPrint('[getPlayUrl] 使用偏低但可播结果 actual=${bestBelow.actualQuality}');
-      return bestBelow;
+      debugPrint(
+          '[getPlayUrl] 使用偏低但可播结果 actual=${bestBelow.result.actualQuality}');
+      return bestBelow.result;
     }
     debugPrint('[getPlayUrl] 所有源均失败');
     return null;
   }
 
-  Future<PlayUrlResult?> _resolveCustomQuality(
-    MusicItem music,
-    String quality,
-    CancelToken? cancelToken,
-  ) async {
+  Future<_QualityAttempt?> _resolveCustomQuality(
+      MusicItem music, String quality, CancelToken? cancelToken,
+      {required int candidateIndex}) async {
     if (_customSourceQualityResolver == null &&
         _customQualityResolver != null) {
-      return _customQualityResolver(music, quality, cancelToken);
+      final result = await _customQualityResolver(music, quality, cancelToken);
+      return result == null
+          ? null
+          : _QualityAttempt(
+              result: result,
+              sourceIndex: 0,
+              candidateIndex: candidateIndex,
+            );
     }
     final platform = resolvePlatform(music);
     final musicForScript = music.copyWith(platform: platform);
     final sourceIds = _enabledCustomSourceIds?.call() ??
         _customSourceService.enabledSources.map((source) => source.id).toList();
-    PlayUrlResult? bestBelow;
-    for (final sourceId in sourceIds) {
+    _QualityAttempt? bestBelow;
+    for (var sourceIndex = 0; sourceIndex < sourceIds.length; sourceIndex++) {
+      final sourceId = sourceIds[sourceIndex];
       _throwIfCancelled(cancelToken);
       try {
         if (_customSourceQualityResolver != null) {
@@ -285,8 +313,27 @@ class MusicSourceService {
               sourceId, musicForScript, quality, cancelToken);
           _throwIfCancelled(cancelToken);
           if (result == null || !isPlayableMediaUrl(result.url)) continue;
-          if (!isQualityBelow(result.actualQuality, quality)) return result;
-          bestBelow = _betterProvisional(bestBelow, result);
+          final normalized = PlayUrlResult(
+            url: result.url,
+            requestedQuality: quality,
+            actualQuality: result.actualQuality,
+            platform: result.platform,
+          );
+          if (!isQualityBelow(normalized.actualQuality, quality)) {
+            return _QualityAttempt(
+              result: normalized,
+              sourceIndex: sourceIndex,
+              candidateIndex: candidateIndex,
+            );
+          }
+          bestBelow = _betterProvisional(
+            bestBelow,
+            _QualityAttempt(
+              result: normalized,
+              sourceIndex: sourceIndex,
+              candidateIndex: candidateIndex,
+            ),
+          );
           continue;
         }
         final detailed = await _customSourceService
@@ -303,8 +350,21 @@ class MusicSourceService {
               correctQualityFromUrl(url, quality),
           platform: platform,
         );
-        if (!isQualityBelow(result.actualQuality, quality)) return result;
-        bestBelow = _betterProvisional(bestBelow, result);
+        if (!isQualityBelow(result.actualQuality, quality)) {
+          return _QualityAttempt(
+            result: result,
+            sourceIndex: sourceIndex,
+            candidateIndex: candidateIndex,
+          );
+        }
+        bestBelow = _betterProvisional(
+          bestBelow,
+          _QualityAttempt(
+            result: result,
+            sourceIndex: sourceIndex,
+            candidateIndex: candidateIndex,
+          ),
+        );
       } catch (error) {
         if (error is DioException && CancelToken.isCancel(error)) rethrow;
         debugPrint('[getPlayUrl] 自定义源 $sourceId q=$quality 失败: $error');
@@ -313,13 +373,18 @@ class MusicSourceService {
     return bestBelow;
   }
 
-  Future<PlayUrlResult?> _resolveBuiltInQuality(
-    MusicItem music,
-    String quality,
-    CancelToken? cancelToken,
-  ) async {
+  Future<_QualityAttempt?> _resolveBuiltInQuality(
+      MusicItem music, String quality, CancelToken? cancelToken,
+      {required int candidateIndex}) async {
     if (_builtInQualityResolver != null) {
-      return _builtInQualityResolver(music, quality, cancelToken);
+      final result = await _builtInQualityResolver(music, quality, cancelToken);
+      return result == null
+          ? null
+          : _QualityAttempt(
+              result: result,
+              sourceIndex: 0,
+              candidateIndex: candidateIndex,
+            );
     }
     final platform = resolvePlatform(music);
     if (platform != 'kw' && platform != 'tx' && platform != 'wy') return null;
@@ -330,11 +395,15 @@ class MusicSourceService {
       _throwIfCancelled(cancelToken);
       final url = detailed == null ? null : normalizeOutboundUrl(detailed.url);
       if (!isPlayableMediaUrl(url)) return null;
-      return PlayUrlResult(
-        url: url!,
-        requestedQuality: quality,
-        actualQuality: detailed!.actualQuality,
-        platform: platform,
+      return _QualityAttempt(
+        result: PlayUrlResult(
+          url: url!,
+          requestedQuality: quality,
+          actualQuality: detailed!.actualQuality,
+          platform: platform,
+        ),
+        sourceIndex: 0,
+        candidateIndex: candidateIndex,
       );
     } catch (error) {
       if (error is DioException && CancelToken.isCancel(error)) rethrow;
@@ -347,11 +416,16 @@ class MusicSourceService {
     if (error != null) throw error;
   }
 
-  PlayUrlResult _betterProvisional(
-      PlayUrlResult? current, PlayUrlResult candidate) {
-    if (current == null ||
-        qualityRankIndex(candidate.actualQuality) <
-            qualityRankIndex(current.actualQuality)) {
+  _QualityAttempt? _betterProvisional(
+      _QualityAttempt? current, _QualityAttempt candidate) {
+    if (current == null) return candidate;
+    final actualComparison = qualityRankIndex(candidate.result.actualQuality)
+        .compareTo(qualityRankIndex(current.result.actualQuality));
+    if (actualComparison < 0 ||
+        (actualComparison == 0 &&
+            (candidate.sourceIndex < current.sourceIndex ||
+                (candidate.sourceIndex == current.sourceIndex &&
+                    candidate.candidateIndex < current.candidateIndex)))) {
       return candidate;
     }
     return current;

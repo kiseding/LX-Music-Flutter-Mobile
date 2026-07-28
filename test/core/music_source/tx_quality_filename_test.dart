@@ -31,4 +31,12 @@ void main() {
     expect(TxSource.isExactResponseFilename('128k', 'M500song.mp3'), isTrue);
     expect(TxSource.isExactResponseFilename('128k', 'C400song.m4a'), isTrue);
   });
+
+  test('Tx legacy unknown quality keeps the historical fallback candidates',
+      () {
+    expect(
+      TxSource.legacyFilenames('song', 'media', 'future-quality'),
+      ['C400song.m4a', 'M500song.mp3'],
+    );
+  });
 }

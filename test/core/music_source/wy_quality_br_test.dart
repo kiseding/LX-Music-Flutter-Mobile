@@ -17,4 +17,14 @@ void main() {
     expect(WySource.qualityFromBitrate(192000), '192k');
     expect(WySource.qualityFromBitrate(128000), '128k');
   });
+
+  test('Wy legacy unknown quality keeps the historical 128000 bitrate', () {
+    expect(WySource.legacyBitrateForQuality('future-quality'), 128000);
+    expect(WySource.legacyBitrateForQuality('128k'), 128000);
+    expect(WySource.legacyBitrateForQuality('192k'), 192000);
+  });
+
+  test('Wy exact unknown quality is unsupported', () {
+    expect(WySource.exactBitrateForQuality('future-quality'), isNull);
+  });
 }

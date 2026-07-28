@@ -267,7 +267,7 @@ class KwSource extends MusicPlatform {
             'mid': rid,
             'type': exact
                 ? exactAttemptKeyForQuality(quality)
-                : _qualityToType(quality),
+                : legacyFormatForQuality(quality),
             'httpsStatus': '1',
             'reqId': DateTime.now().millisecondsSinceEpoch.toString(),
           },
@@ -294,8 +294,9 @@ class KwSource extends MusicPlatform {
     }
 
     if (exact && exactAttemptKeyForQuality(quality) == null) return null;
-    final format =
-        exact ? exactAttemptKeyForQuality(quality)! : _qualityToFormat(quality);
+    final format = exact
+        ? exactAttemptKeyForQuality(quality)!
+        : legacyFormatForQuality(quality);
     // 方案2: antiserver 接口（返回纯文本 URL），分别尝试两种 rid 格式
     for (final ridFormat in ['MUSIC_$rid', rid]) {
       try {
@@ -369,18 +370,6 @@ class KwSource extends MusicPlatform {
     return null;
   }
 
-  String _qualityToType(String quality) {
-    switch (quality) {
-      case '320k':
-        return 'mp3';
-      case 'flac':
-      case 'flac24bit':
-        return 'flac';
-      default:
-        return 'mp3';
-    }
-  }
-
   static String? exactAttemptKeyForQuality(String quality) {
     switch (quality) {
       case 'hires':
@@ -407,7 +396,7 @@ class KwSource extends MusicPlatform {
   @override
   String? exactAttemptKey(String quality) => exactAttemptKeyForQuality(quality);
 
-  String _qualityToFormat(String quality) {
+  static String legacyFormatForQuality(String quality) {
     switch (quality) {
       case 'flac':
       case 'flac24bit':
