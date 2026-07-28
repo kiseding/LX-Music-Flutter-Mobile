@@ -135,7 +135,7 @@ class PlaybackCommandCoordinator {
         : const SourceCommitStale();
   }
 
-  Future<void> explicitPlay() {
+  Future<void> recordExplicitPlayIntent() {
     _intentRevision++;
     _desiredPlaying = true;
     _stopDesired = false;
@@ -143,7 +143,7 @@ class PlaybackCommandCoordinator {
     return _markDirty();
   }
 
-  Future<void> explicitPause() {
+  Future<void> recordExplicitPauseIntent() {
     _intentRevision++;
     _desiredPlaying = false;
     return _markDirty();
@@ -173,7 +173,7 @@ class PlaybackCommandCoordinator {
     return _markDirty();
   }
 
-  Future<void> setPlayingPreservingIntent(bool playing) {
+  Future<void> setDesiredPlayingPreservingIntent(bool playing) {
     _desiredPlaying = playing;
     if (playing) {
       _retirePausedPlayLifecycle();

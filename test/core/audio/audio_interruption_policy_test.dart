@@ -269,7 +269,7 @@ void main() {
       run: (handler) => handler.skipToQueueItem(1),
     ),
   ]) {
-    test('explicit ${action.name} during interruption prevents old resume',
+    test('explicit ${action.name} during interruption owns final state',
         () async {
       final player = _InterruptionAudioPlayer();
       final handler = LxAudioHandler(player: player);
@@ -280,11 +280,11 @@ void main() {
       await action.run(handler);
       await handler.endAudioInterruption(mayResume: true);
 
-      expect(player.playing, isFalse);
+      expect(player.playing, action.name == 'selection');
     });
   }
 
-  test('selection crossing final end cannot inherit old resume authority',
+  test('explicit selection crossing final end starts selected source',
       () async {
     final resolveGate = _Gate();
     final player = _InterruptionAudioPlayer();
@@ -307,7 +307,7 @@ void main() {
     await selection;
 
     expect(handler.mediaItem.value?.id, 'B');
-    expect(player.playing, isFalse);
+    expect(player.playing, isTrue);
   });
 
   test('stale preserving pause cannot restart playback while interrupted',
@@ -678,7 +678,7 @@ void main() {
     await handler.beginAudioInterruption();
     await handler.endAudioInterruption(mayResume: false);
     await handler.skipToQueueItem(1);
-    expect(player.playing, isFalse);
+    expect(player.playing, isTrue);
     final pauseCalls = player.pauseCalls;
 
     playGate.release.complete();
@@ -717,6 +717,102 @@ void main() {
     await handler.endAudioInterruption(mayResume: true);
     expect(player.playing, isFalse);
   });
+
+  for (final denial in ['non-resumable interruption', 'becoming noisy']) {
+    for (final navigation in <({
+      String name,
+      int initialIndex,
+      String expectedId,
+      Future<void> Function(LxAudioHandler) run,
+    })>[
+      (
+        name: 'next',
+        initialIndex: 0,
+        expectedId: 'B',
+        run: (handler) => handler.skipToNext(),
+      ),
+      (
+        name: 'previous',
+        initialIndex: 1,
+        expectedId: 'A',
+        run: (handler) => handler.skipToPrevious(),
+      ),
+      (
+        name: 'direct selection',
+        initialIndex: 0,
+        expectedId: 'B',
+        run: (handler) => handler.skipToQueueItem(1),
+      ),
+      (
+        name: 'playlist replacement',
+        initialIndex: 0,
+        expectedId: 'C',
+        run: (handler) => handler.setPlaylist([_item('C'), _item('D')]),
+      ),
+    ]) {
+      test('public ${navigation.name} clears $denial play denial', () async {
+        final player = _InterruptionAudioPlayer();
+        final handler = LxAudioHandler(player: player);
+        addTearDown(player.dispose);
+        await handler.setPlaylist(
+          [_item('A'), _item('B')],
+          initialIndex: navigation.initialIndex,
+        );
+        if (denial == 'non-resumable interruption') {
+          await handler.beginAudioInterruption();
+          await handler.endAudioInterruption(mayResume: false);
+        } else {
+          await handler.handleBecomingNoisy();
+        }
+
+        await navigation.run(handler);
+
+        expect(handler.mediaItem.value?.id, navigation.expectedId);
+        expect(player.playing, isTrue);
+      });
+    }
+  }
+
+  test('automatic completion after non-resumable denial stays blocked',
+      () async {
+    final player = _InterruptionAudioPlayer();
+    final handler = LxAudioHandler(player: player);
+    addTearDown(player.dispose);
+    await handler.setPlaylist([_item('A'), _item('B')]);
+    await handler.beginAudioInterruption();
+    await handler.endAudioInterruption(mayResume: false);
+    final playCalls = player.playCalls;
+
+    handler.debugEmitTrackCompleted();
+    await pumpEventQueue();
+
+    expect(player.playCalls, playCalls);
+    expect(player.playing, isFalse);
+  });
+
+  for (final denial in ['non-resumable interruption', 'becoming noisy']) {
+    test('paused direct selection preserves $denial denial', () async {
+      final player = _InterruptionAudioPlayer();
+      final handler = LxAudioHandler(player: player);
+      addTearDown(player.dispose);
+      await handler.setPlaylist([_item('A'), _item('B')]);
+      if (denial == 'non-resumable interruption') {
+        await handler.beginAudioInterruption();
+        await handler.endAudioInterruption(mayResume: false);
+      } else {
+        await handler.handleBecomingNoisy();
+      }
+
+      await handler.skipToQueueItem(1, playAfterLoad: false);
+
+      expect(handler.mediaItem.value?.id, 'B');
+      expect(player.playing, isFalse);
+      await handler.skipToQueueItem(0);
+
+      expect(handler.mediaItem.value?.id, 'A');
+      expect(player.playing, isTrue);
+    });
+  }
 
   test('queued noisy pause cannot defeat newer explicit play', () async {
     final interruptionPause = _Gate();

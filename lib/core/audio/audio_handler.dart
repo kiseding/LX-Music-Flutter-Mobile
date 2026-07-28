@@ -314,13 +314,13 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
   bool _isStale(int gen) => gen != _playGeneration;
 
-  int _expressPlaybackIntent(bool wantsPlay) {
+  int _recordExplicitPlaybackIntent(bool wantsPlay) {
     _userIntentGeneration++;
     _userWantsPlay = wantsPlay;
     return _userIntentGeneration;
   }
 
-  int _expressPlayIntent() => _expressPlaybackIntent(true);
+  int _recordExplicitPlayIntent() => _recordExplicitPlaybackIntent(true);
 
   Future<void> _stopPlayerSource() => _commands.stop();
 
@@ -440,10 +440,10 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     _userIntentGeneration++;
     _userWantsPlay = true;
     if (_player.processingState == ProcessingState.idle) {
-      unawaited(_commands.explicitPlay());
+      unawaited(_commands.recordExplicitPlayIntent());
       await _commands.recoverIdleSource();
     } else {
-      await _commands.explicitPlay();
+      await _commands.recordExplicitPlayIntent();
     }
     await super.play();
   }
@@ -464,7 +464,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       _userWantsPlay = false;
     }
     final owner = clearIntent ? null : await _commands.pausePreservingIntent();
-    if (clearIntent) await _commands.explicitPause();
+    if (clearIntent) await _commands.recordExplicitPauseIntent();
     await super.pause();
     return owner;
   }
@@ -555,7 +555,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       ++_playbackStartBlockGeneration;
       _interruptionClosing = false;
       _clearInterruptionOwnership();
-      _expressPlaybackIntent(false);
+      _recordExplicitPlaybackIntent(false);
       await _commands.becomingNoisy();
       await super.pause();
     }
@@ -712,8 +712,8 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   @override
   Future<void> skipToNext({bool seamless = false}) async {
     final provenance = _captureStartProvenance();
-    final intentGeneration = _expressPlayIntent();
-    unawaited(_commands.setPlayingPreservingIntent(true));
+    final intentGeneration = _recordExplicitPlayIntent();
+    unawaited(_commands.recordExplicitPlayIntent());
     await _skipToNextInternal(
       seamless: seamless,
       expectedUserIntentGeneration: intentGeneration,
@@ -765,8 +765,8 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   @override
   Future<void> skipToPrevious() async {
     final provenance = _captureStartProvenance();
-    final intentGeneration = _expressPlayIntent();
-    unawaited(_commands.setPlayingPreservingIntent(true));
+    final intentGeneration = _recordExplicitPlayIntent();
+    unawaited(_commands.recordExplicitPlayIntent());
     await _skipToPreviousInternal(
       expectedUserIntentGeneration: intentGeneration,
       provenance: provenance,
@@ -894,14 +894,14 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     bool playAfterLoad = true,
   }) async {
     final provenance = _captureStartProvenance();
-    final intentGeneration = _expressPlaybackIntent(playAfterLoad);
+    final intentGeneration = _recordExplicitPlaybackIntent(playAfterLoad);
     final selectedItemId =
         index >= 0 && index < _queue.length ? _queue[index].id : null;
     final sourceGeneration = _playGeneration;
     if (selectedItemId == null) return;
     unawaited(playAfterLoad
-        ? _commands.setPlayingPreservingIntent(true)
-        : _commands.explicitPause());
+        ? _commands.recordExplicitPlayIntent()
+        : _commands.setDesiredPlayingPreservingIntent(false));
     final sourceCommandToken = _commands.requestSource(
       mediaId: selectedItemId,
       queueIndex: index,
@@ -1167,8 +1167,8 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   Future<void> setPlaylist(List<MediaItem> items,
       {int initialIndex = 0}) async {
     final provenance = _captureStartProvenance();
-    _expressPlayIntent();
-    unawaited(_commands.setPlayingPreservingIntent(true));
+    _recordExplicitPlayIntent();
+    unawaited(_commands.recordExplicitPlayIntent());
     _bumpGeneration();
     _queue
       ..clear()
@@ -1393,7 +1393,9 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       position: reloadIntent.position,
     );
     unawaited(
-      _commands.setPlayingPreservingIntent(reloadIntent.resumeAfterReload),
+      _commands.setDesiredPlayingPreservingIntent(
+        reloadIntent.resumeAfterReload,
+      ),
     );
     var qualityPauseOwner = reloadIntent.resumeAfterReload
         ? await pauseInternal(clearIntent: false)

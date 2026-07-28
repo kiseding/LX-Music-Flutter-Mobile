@@ -24,7 +24,7 @@ void main() {
     );
     await sourceGate.started.future;
     final seek = coordinator.seek(const Duration(seconds: 12));
-    final pause = coordinator.explicitPause();
+    final pause = coordinator.recordExplicitPauseIntent();
 
     expect(player.maxConcurrentMutations, 1);
     sourceGate.release.complete();
@@ -67,10 +67,10 @@ void main() {
     );
     final oldPlay = player.gateNextPlayLifecycle();
 
-    await coordinator.explicitPlay();
+    await coordinator.recordExplicitPlayIntent();
     await oldPlay.started.future;
-    await coordinator.explicitPause();
-    await coordinator.explicitPlay();
+    await coordinator.recordExplicitPauseIntent();
+    await coordinator.recordExplicitPlayIntent();
     final pauses = player.pauseCalls;
 
     oldPlay.release.complete();
@@ -86,7 +86,7 @@ void main() {
     addTearDown(player.dispose);
     await _install(coordinator);
 
-    await coordinator.explicitPlay();
+    await coordinator.recordExplicitPlayIntent();
     expect(player.playCalls, 1);
 
     final owner = await coordinator.pausePreservingIntent();
@@ -101,6 +101,23 @@ void main() {
     expect(player.playCalls, 2);
   });
 
+  test('preserving desired state cannot clear non-resumable denial', () async {
+    final player = _LifecycleAudioPlayer();
+    final coordinator = PlaybackCommandCoordinator(player);
+    addTearDown(player.dispose);
+    await _install(coordinator);
+    await coordinator.recordExplicitPlayIntent();
+    await coordinator.beginInterruption();
+    await coordinator.endInterruption(mayResume: false);
+
+    await coordinator.setDesiredPlayingPreservingIntent(false);
+    await coordinator.setDesiredPlayingPreservingIntent(true);
+
+    expect(player.playing, isFalse);
+    await coordinator.recordExplicitPlayIntent();
+    expect(player.playing, isTrue);
+  });
+
   for (final releaseFirst in ['first', 'second']) {
     test(
         'overlapping preserving owners block until $releaseFirst releases last',
@@ -109,11 +126,11 @@ void main() {
       final coordinator = PlaybackCommandCoordinator(player);
       addTearDown(player.dispose);
       await _install(coordinator);
-      await coordinator.explicitPlay();
+      await coordinator.recordExplicitPlayIntent();
       final first = await coordinator.pausePreservingIntent();
       final second = await coordinator.pausePreservingIntent();
 
-      await coordinator.explicitPlay();
+      await coordinator.recordExplicitPlayIntent();
       await coordinator.releasePreservingIntent(
         releaseFirst == 'first' ? first : second,
       );
@@ -132,11 +149,11 @@ void main() {
     final coordinator = PlaybackCommandCoordinator(player);
     addTearDown(player.dispose);
     await _install(coordinator);
-    await coordinator.explicitPlay();
+    await coordinator.recordExplicitPlayIntent();
     final first = await coordinator.pausePreservingIntent();
     final second = await coordinator.pausePreservingIntent();
 
-    await coordinator.explicitPause();
+    await coordinator.recordExplicitPauseIntent();
     await coordinator.releasePreservingIntent(first);
     await coordinator.releasePreservingIntent(second);
 
@@ -148,7 +165,7 @@ void main() {
     final coordinator = PlaybackCommandCoordinator(player);
     addTearDown(player.dispose);
     await _install(coordinator);
-    await coordinator.explicitPlay();
+    await coordinator.recordExplicitPlayIntent();
     final first = await coordinator.pausePreservingIntent();
     final second = await coordinator.pausePreservingIntent();
 
@@ -165,7 +182,7 @@ void main() {
     final coordinator = PlaybackCommandCoordinator(player);
     addTearDown(player.dispose);
     await _install(coordinator);
-    await coordinator.explicitPlay();
+    await coordinator.recordExplicitPlayIntent();
 
     player.completeNaturally();
     await pumpEventQueue();
@@ -179,7 +196,7 @@ void main() {
     final coordinator = PlaybackCommandCoordinator(player);
     addTearDown(player.dispose);
     await _install(coordinator);
-    await coordinator.explicitPlay();
+    await coordinator.recordExplicitPlayIntent();
 
     await coordinator.stop();
     await pumpEventQueue();
@@ -199,11 +216,11 @@ void main() {
     addTearDown(player.dispose);
     await _install(coordinator);
     final oldPlay = player.gateNextPlayLifecycle();
-    await coordinator.explicitPlay();
+    await coordinator.recordExplicitPlayIntent();
     await oldPlay.started.future;
 
-    await coordinator.explicitPause();
-    await coordinator.explicitPlay();
+    await coordinator.recordExplicitPauseIntent();
+    await coordinator.recordExplicitPlayIntent();
     oldPlay.release.completeError(StateError('stale play'));
     await pumpEventQueue();
 
@@ -223,7 +240,7 @@ void main() {
     );
     addTearDown(player.dispose);
     await _install(coordinator);
-    await coordinator.explicitPlay();
+    await coordinator.recordExplicitPlayIntent();
     coordinator.requestSource(
       mediaId: 'B',
       queueIndex: 1,
@@ -251,7 +268,7 @@ void main() {
     );
     addTearDown(player.dispose);
     await _install(coordinator);
-    await coordinator.explicitPlay();
+    await coordinator.recordExplicitPlayIntent();
     coordinator.requestSource(
       mediaId: 'B',
       queueIndex: 1,
@@ -277,7 +294,7 @@ void main() {
     );
     addTearDown(player.dispose);
     await _install(coordinator);
-    await coordinator.explicitPlay();
+    await coordinator.recordExplicitPlayIntent();
 
     player.failCurrentPlay();
     await pumpEventQueue();
@@ -345,7 +362,7 @@ void main() {
     );
     addTearDown(player.dispose);
     await _install(coordinator);
-    await coordinator.explicitPlay();
+    await coordinator.recordExplicitPlayIntent();
 
     expect(await coordinator.seek(const Duration(seconds: 20)), isFalse);
     await coordinator.beginInterruption();
