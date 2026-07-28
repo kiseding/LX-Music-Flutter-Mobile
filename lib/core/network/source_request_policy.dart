@@ -40,15 +40,22 @@ class SourceTransportResponse {
   final String statusMessage;
   final Map<String, List<String>> headers;
   final Stream<List<int>> body;
-  final void Function()? close;
+  void Function()? _close;
 
-  const SourceTransportResponse({
+  SourceTransportResponse({
     required this.statusCode,
     this.statusMessage = '',
     required this.headers,
     required this.body,
-    this.close,
-  });
+    void Function()? close,
+  }) : _close = close;
+
+  void close() {
+    final close = _close;
+    if (close == null) return;
+    _close = null;
+    close();
+  }
 
   String? singleHeader(String name) {
     final values = headers.entries
@@ -69,13 +76,41 @@ class SourceRequestResponse {
   final String statusMessage;
   final Map<String, List<String>> headers;
   final List<int> bytes;
+  final _SourceRequestLease _lease;
 
-  const SourceRequestResponse({
+  SourceRequestResponse({
     required this.statusCode,
     required this.statusMessage,
     required this.headers,
     required this.bytes,
-  });
+    required void Function() release,
+  }) : _lease = _SourceRequestLease(release);
+
+  void release() => _lease.release();
+}
+
+class _SourceRequestLease {
+  void Function()? _release;
+
+  _SourceRequestLease(this._release);
+
+  void release() {
+    final release = _release;
+    if (release == null) return;
+    _release = null;
+    release();
+  }
+}
+
+Future<T> withSourceResponseLease<T>(
+  SourceRequestResponse response,
+  FutureOr<T> Function(SourceRequestResponse response) operation,
+) async {
+  try {
+    return await operation(response);
+  } finally {
+    response.release();
+  }
 }
 
 class SourceRequestCancellation {
@@ -255,8 +290,10 @@ class SourceRequestSandbox {
   final int maximumRedirects;
   final int maximumInFlightBytes;
   final int maximumConcurrentResponseBodies;
+  final int maximumConcurrentRequests;
   int _inFlightBytes = 0;
   int _activeResponseBodies = 0;
+  int _activeRequests = 0;
 
   SourceRequestSandbox({
     required this.policy,
@@ -264,6 +301,7 @@ class SourceRequestSandbox {
     this.maximumRedirects = 5,
     this.maximumInFlightBytes = 20 * 1024 * 1024,
     this.maximumConcurrentResponseBodies = 4,
+    this.maximumConcurrentRequests = 4,
   });
 
   Future<SourceRequestResponse> request(
@@ -271,83 +309,115 @@ class SourceRequestSandbox {
     Map<String, dynamic> options, {
     SourceRequestCancellation? cancellation,
   }) async {
+    if (_activeRequests >= maximumConcurrentRequests) {
+      throw const SourceRequestPolicyException(
+          'too_many_requests', 'Concurrent request limit exceeded');
+    }
+    _activeRequests++;
+    var permitTransferred = false;
     final cancel = cancellation ?? SourceRequestCancellation();
     var current = uri;
     var currentOptions = Map<String, dynamic>.from(options);
-    for (var redirects = 0;; redirects++) {
-      if (cancel.isCancelled) _throwCancelled();
-      final request = await Future.any([
-        policy.validate(current, currentOptions),
-        cancel.future.then<ValidatedSourceRequest>((reason) =>
-            throw SourceRequestPolicyException('cancelled', reason)),
-      ]);
-      if (cancel.isCancelled) _throwCancelled();
-      final transportFuture = transport(request, cancel);
-      if (cancel.isCancelled) _throwCancelled();
-      final response = await Future.any([
-        transportFuture.timeout(
-          request.timeout,
-          onTimeout: () {
-            cancel.cancel('Source request timed out');
-            throw const SourceRequestPolicyException(
-                'timeout', 'Source request timed out');
-          },
-        ),
-        cancel.future.then<SourceTransportResponse>((reason) =>
-            throw SourceRequestPolicyException('cancelled', reason)),
-      ]);
-      if (cancel.isCancelled) {
-        response.close?.call();
-        _throwCancelled();
-      }
-      final status = response.statusCode;
-      final isRedirect = status == 301 ||
-          status == 302 ||
-          status == 303 ||
-          status == 307 ||
-          status == 308;
-      if (isRedirect) {
-        String? location;
-        try {
-          location = response.singleHeader('location');
-        } catch (_) {
-          response.close?.call();
-          rethrow;
+    try {
+      for (var redirects = 0;; redirects++) {
+        if (cancel.isCancelled) _throwCancelled();
+        final request = await Future.any([
+          policy.validate(current, currentOptions),
+          cancel.future.then<ValidatedSourceRequest>((reason) =>
+              throw SourceRequestPolicyException('cancelled', reason)),
+        ]);
+        if (cancel.isCancelled) _throwCancelled();
+        final transportFuture = transport(request, cancel);
+        transportFuture.then((lateResponse) {
+          if (cancel.isCancelled) lateResponse.close();
+        }, onError: (_) {});
+        if (cancel.isCancelled) _throwCancelled();
+        final response = await Future.any([
+          transportFuture.timeout(
+            request.timeout,
+            onTimeout: () {
+              cancel.cancel('Source request timed out');
+              throw const SourceRequestPolicyException(
+                  'timeout', 'Source request timed out');
+            },
+          ),
+          cancel.future.then<SourceTransportResponse>((reason) =>
+              throw SourceRequestPolicyException('cancelled', reason)),
+        ]);
+        if (cancel.isCancelled) {
+          response.close();
+          _throwCancelled();
         }
-        if (location == null) {
-          final bytes = await _readBody(response, request.timeout, cancel);
-          return SourceRequestResponse(
-            statusCode: response.statusCode,
-            statusMessage: response.statusMessage,
-            headers: response.headers,
-            bytes: bytes,
-          );
+        final status = response.statusCode;
+        final isRedirect = status == 301 ||
+            status == 302 ||
+            status == 303 ||
+            status == 307 ||
+            status == 308;
+        if (isRedirect) {
+          final redirectStatus =
+              status ?? (throw StateError('Redirect status must not be null'));
+          Uri? next;
+          try {
+            final location = response.singleHeader('location');
+            if (location == null) {
+              final bytes = await _readBody(response, request.timeout, cancel);
+              final result = _responseWithLease(response, bytes, cancel);
+              permitTransferred = true;
+              return result;
+            }
+            if (redirects >= maximumRedirects) {
+              throw const SourceRequestPolicyException(
+                  'too_many_redirects', 'Redirect limit exceeded');
+            }
+            next = current.resolve(location);
+            currentOptions = _redirectOptions(
+              request,
+              redirectStatus,
+              crossOrigin: !_sameOrigin(current, next),
+            );
+          } finally {
+            response.close();
+          }
+          current = next;
+          continue;
         }
-        if (redirects >= maximumRedirects) {
-          response.close?.call();
-          throw const SourceRequestPolicyException(
-              'too_many_redirects', 'Redirect limit exceeded');
-        }
-        final next = current.resolve(location);
-        currentOptions = _redirectOptions(
-          request,
-          status!,
-          crossOrigin: !_sameOrigin(current, next),
-        );
-        response.close?.call();
-        current = next;
-        continue;
-      }
 
-      final bytes = await _readBody(response, request.timeout, cancel);
-      if (cancel.isCancelled) _throwCancelled();
-      return SourceRequestResponse(
-        statusCode: response.statusCode,
-        statusMessage: response.statusMessage,
-        headers: response.headers,
-        bytes: bytes,
-      );
+        final bytes = await _readBody(response, request.timeout, cancel);
+        if (cancel.isCancelled) {
+          _inFlightBytes -= bytes.length;
+          _throwCancelled();
+        }
+        final result = _responseWithLease(response, bytes, cancel);
+        permitTransferred = true;
+        return result;
+      }
+    } finally {
+      if (!permitTransferred) _activeRequests--;
     }
+  }
+
+  SourceRequestResponse _responseWithLease(
+    SourceTransportResponse response,
+    List<int> bytes,
+    SourceRequestCancellation cancellation,
+  ) {
+    var released = false;
+    late SourceRequestResponse result;
+    result = SourceRequestResponse(
+      statusCode: response.statusCode,
+      statusMessage: response.statusMessage,
+      headers: response.headers,
+      bytes: bytes,
+      release: () {
+        if (released) return;
+        released = true;
+        _inFlightBytes -= bytes.length;
+        _activeRequests--;
+      },
+    );
+    cancellation.future.then((_) => result.release());
+    return result;
   }
 
   Map<String, dynamic> _redirectOptions(
@@ -405,19 +475,14 @@ class SourceRequestSandbox {
     SourceRequestCancellation cancellation,
   ) async {
     if (_activeResponseBodies >= maximumConcurrentResponseBodies) {
-      response.close?.call();
+      response.close();
       throw const SourceRequestPolicyException('too_many_response_bodies',
           'Concurrent response body limit exceeded');
     }
-    final reservedBytes = policy.maximumResponseBytes;
-    if (reservedBytes > maximumInFlightBytes - _inFlightBytes) {
-      response.close?.call();
-      throw const SourceRequestPolicyException(
-          'response_budget_exceeded', 'In-flight response budget exceeded');
-    }
-    _inFlightBytes += reservedBytes;
     _activeResponseBodies++;
     final bytes = <int>[];
+    var retainedBytes = 0;
+    var transferredBytes = false;
     final done = Completer<List<int>>();
     late StreamSubscription<List<int>> subscription;
     Timer? timer;
@@ -435,6 +500,15 @@ class SourceRequestSandbox {
           unawaited(subscription.cancel());
           return;
         }
+        if (chunk.length > maximumInFlightBytes - _inFlightBytes) {
+          completeError(const SourceRequestPolicyException(
+              'response_budget_exceeded',
+              'In-flight response budget exceeded'));
+          unawaited(subscription.cancel());
+          return;
+        }
+        _inFlightBytes += chunk.length;
+        retainedBytes += chunk.length;
         bytes.addAll(chunk);
       },
       onError: completeError,
@@ -451,17 +525,19 @@ class SourceRequestSandbox {
     cancellation.future.then((reason) {
       completeError(SourceRequestPolicyException('cancelled', reason));
       unawaited(subscription.cancel());
-      response.close?.call();
+      response.close();
     });
 
     try {
-      return await done.future;
+      final result = await done.future;
+      transferredBytes = true;
+      return result;
     } finally {
       timer.cancel();
       await subscription.cancel();
-      response.close?.call();
-      _inFlightBytes -= reservedBytes;
+      response.close();
       _activeResponseBodies--;
+      if (!transferredBytes) _inFlightBytes -= retainedBytes;
     }
   }
 

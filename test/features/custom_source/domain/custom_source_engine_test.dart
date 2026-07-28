@@ -38,8 +38,11 @@ void main() {
     expect(bridge, contains("'bytes':"));
     expect(bridge, contains('lx_request_cancel'));
     expect(bridge, contains('SourceRequestSandbox'));
-    expect(bridge, contains('if (cancellation.isCancelled)'));
-    expect(bridge, contains("cancelToken.cancel('Source request cancelled')"));
+    expect(bridge, contains('await withSourceResponseLease(response'));
+    expect(
+      bridge.indexOf('_httpCancellations.remove(callbackId);'),
+      greaterThan(bridge.indexOf('await withSourceResponseLease(response')),
+    );
     expect(bridge, contains('_supportsAction'));
     expect(bridge, contains('_validateCapabilities'));
     // _callRequestEvent 现在迭代 handler 数组，第一个非空返回即胜出。

@@ -1,16 +1,16 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' show HttpClient, Socket, ZLibCodec;
+import 'dart:io' show ZLibCodec;
 import 'package:flutter/foundation.dart';
 import 'package:flutter_js/flutter_js.dart';
 import 'package:dio/dio.dart';
-import 'package:dio/io.dart';
 import 'package:crypto/crypto.dart';
 import 'package:uuid/uuid.dart';
 import 'package:encrypt/encrypt.dart' as encrypt_lib;
 import 'package:pointycastle/export.dart' as pc;
 import 'lx_source_capabilities.dart';
 import '../../../core/network/source_request_policy.dart';
+import '../../../core/network/source_pinned_transport.dart';
 import '../domain/custom_source.dart';
 import '../../player/domain/music_item.dart';
 
@@ -77,7 +77,7 @@ class CustomSourceEngine {
   }) {
     _requestSandbox = SourceRequestSandbox(
       policy: requestPolicy ?? SourceRequestPolicy(),
-      transport: requestTransport ?? _sendPinnedRequest,
+      transport: requestTransport ?? SourcePinnedTransport().call,
     );
   }
 
@@ -263,61 +263,62 @@ class CustomSourceEngine {
           queryParams: queryParams,
           cancellation: cancellation,
         );
-        _httpCancellations.remove(callbackId);
-
-        final rawBytes = response.bytes;
-        dynamic body = utf8.decode(rawBytes, allowMalformed: true);
-        if (!isBinary) {
-          // 优化 JSON 自动解析逻辑
-          final contentType =
-              _headerValue(response.headers, 'content-type')?.toLowerCase() ??
-                  '';
-          if (options['json'] == true ||
-              contentType.contains('application/json') ||
-              (body is String && body.trim().startsWith('{'))) {
-            if (body is String && body.isNotEmpty) {
-              final String bodyStr = body;
-              try {
-                if (bodyStr.length > 50000) {
-                  final dynamic decoded =
-                      await compute<String, dynamic>(_decodeDynamic, bodyStr);
-                  body = decoded;
-                } else {
-                  body = json.decode(bodyStr);
+        await withSourceResponseLease(response, (response) async {
+          final rawBytes = response.bytes;
+          dynamic body = utf8.decode(rawBytes, allowMalformed: true);
+          if (!isBinary) {
+            // 优化 JSON 自动解析逻辑
+            final contentType =
+                _headerValue(response.headers, 'content-type')?.toLowerCase() ??
+                    '';
+            if (options['json'] == true ||
+                contentType.contains('application/json') ||
+                (body is String && body.trim().startsWith('{'))) {
+              if (body is String && body.isNotEmpty) {
+                final String bodyStr = body;
+                try {
+                  if (bodyStr.length > 50000) {
+                    final dynamic decoded =
+                        await compute<String, dynamic>(_decodeDynamic, bodyStr);
+                    body = decoded;
+                  } else {
+                    body = json.decode(bodyStr);
+                  }
+                } catch (e) {
+                  // 忽略解析错误，保持原始字符串
                 }
-              } catch (e) {
-                // 忽略解析错误，保持原始字符串
               }
             }
           }
-        }
 
-        final Map<String, String> flatHeaders = {};
-        response.headers.forEach((name, values) {
-          flatHeaders[name.toLowerCase()] = values.join(', ');
+          final Map<String, String> flatHeaders = {};
+          response.headers.forEach((name, values) {
+            flatHeaders[name.toLowerCase()] = values.join(', ');
+          });
+
+          debugPrint(
+              '[LX] lx_request HTTP done callbackId=$callbackId status=${response.statusCode} bytes=${rawBytes.length}');
+          _executeJsCallback(
+              callbackId,
+              [
+                null,
+                {
+                  'statusCode': response.statusCode,
+                  'statusMessage': response.statusMessage,
+                  'body': body,
+                  'headers': flatHeaders,
+                  'bytes': rawBytes.length,
+                  'responseRaw': base64Encode(rawBytes),
+                },
+                body,
+              ],
+              url: url);
         });
-
-        debugPrint(
-            '[LX] lx_request HTTP done callbackId=$callbackId status=${response.statusCode} bytes=${rawBytes.length}');
-        _executeJsCallback(
-            callbackId,
-            [
-              null,
-              {
-                'statusCode': response.statusCode,
-                'statusMessage': response.statusMessage,
-                'body': body,
-                'headers': flatHeaders,
-                'bytes': rawBytes.length,
-                'responseRaw': base64Encode(rawBytes),
-              },
-              body,
-            ],
-            url: url);
       } catch (e) {
         debugPrint('[LX] lx_request HTTP FAIL callbackId=$callbackId err=$e');
-        _httpCancellations.remove(callbackId);
         _executeJsCallback(callbackId, [e.toString(), null, null], url: url);
+      } finally {
+        _httpCancellations.remove(callbackId);
       }
     };
     _runtime!.onMessage('lx_request', _handleLxRequest!);
@@ -1615,89 +1616,6 @@ class CustomSourceEngine {
       },
       cancellation: cancellation,
     );
-  }
-
-  static Future<SourceTransportResponse> _sendPinnedRequest(
-    ValidatedSourceRequest request,
-    SourceRequestCancellation cancellation,
-  ) async {
-    if (cancellation.isCancelled) {
-      throw const SourceRequestPolicyException(
-          'cancelled', 'Source request was cancelled');
-    }
-    final cancelToken = CancelToken();
-    if (cancellation.isCancelled) {
-      cancelToken.cancel('Source request cancelled');
-    }
-    cancellation.future.then((reason) => cancelToken.cancel(reason));
-    if (cancellation.isCancelled) {
-      throw const SourceRequestPolicyException(
-          'cancelled', 'Source request was cancelled');
-    }
-    var nextAddress = 0;
-    final dio = Dio();
-    dio.httpClientAdapter = IOHttpClientAdapter(
-      createHttpClient: () {
-        final client = HttpClient();
-        client.connectionFactory = (uri, proxyHost, proxyPort) {
-          if (proxyHost != null) {
-            throw const SourceRequestPolicyException(
-              'proxy_blocked',
-              'Proxy connections are not allowed',
-            );
-          }
-          final address =
-              request.addresses[nextAddress % request.addresses.length];
-          nextAddress++;
-          return Socket.startConnect(address, uri.port);
-        };
-        return client;
-      },
-    );
-    try {
-      if (cancellation.isCancelled) {
-        cancelToken.cancel('Source request cancelled');
-      }
-      final response = await dio.request<dynamic>(
-        request.uri.toString(),
-        data: request.body,
-        options: Options(
-          method: request.method,
-          headers: request.headers,
-          responseType: ResponseType.stream,
-          followRedirects: false,
-          maxRedirects: 0,
-          validateStatus: (_) => true,
-          sendTimeout: request.timeout,
-          receiveTimeout: request.timeout,
-        ),
-        cancelToken: cancelToken,
-      );
-      final responseBody = response.data as ResponseBody;
-      final body = (() async* {
-        try {
-          await for (final chunk in responseBody.stream) {
-            yield chunk;
-          }
-        } finally {
-          dio.close(force: true);
-        }
-      })();
-      final responseHeaders = <String, List<String>>{};
-      response.headers.forEach((name, values) {
-        responseHeaders[name] = List.unmodifiable(values);
-      });
-      return SourceTransportResponse(
-        statusCode: response.statusCode,
-        statusMessage: response.statusMessage ?? '',
-        headers: responseHeaders,
-        body: body,
-        close: () => dio.close(force: true),
-      );
-    } catch (_) {
-      dio.close(force: true);
-      rethrow;
-    }
   }
 
   String? _headerValue(Map<String, List<String>> headers, String name) {

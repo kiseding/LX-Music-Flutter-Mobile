@@ -2,55 +2,56 @@
 
 ## Status
 
-Implemented the Task 2 request sandbox and resolved all three Important and
-both Minor review findings.
+Implemented the final Network Task 2 admission, response ownership, redirect
+cleanup, and pinned-transport testability findings using strict TDD.
 
 ## Resolutions
 
-- Redirects track origin and implement explicit 301, 302, 303, 307, and 308
-  method/body semantics. Body-preserving redirects reject `FormData` and stream
-  bodies with `redirect_body_not_replayable`.
-- Cross-origin redirects retain only `Accept`, `Accept-Language`, and
-  `User-Agent`. Caller custom headers such as `X-Api-Key` are never forwarded.
-  Content-Type is regenerated only when a replayable body is retained.
-- Redirect `Location` is accepted only as one field value. Multiple values fail
-  with `ambiguous_redirect`; non-redirect statuses do not interpret Location.
-- IPv4 and IPv6 use explicit special-purpose deny-prefix tables under a
-  conservative globally-routable policy. Tests cover the first and last address
-  of every denied prefix plus known public controls.
-- Validation races cancellation, rechecks after every await, and checks
-  immediately before transport invocation. Cancellation during DNS and
-  pre-cancelled disposal paths make zero transport calls.
-- The production pinned transport checks cancellation before constructing Dio
-  and synchronously cancels its token before `dio.request` when necessary.
-- Per-response byte limits are checked before appending a chunk. Each response
-  body reserves its maximum allowance before stream subscription under a
-  default 20 MiB aggregate budget and four-body concurrency cap; both are
-  injectable and released in `finally`.
-- DNS pinning, HTTPS hostname/SNI validation, callback compatibility, one Dart
-  base64 encoding, and the JavaScript `rawData = responseRaw` alias remain.
+- `SourceRequestSandbox` now admits at most four requests by default before DNS
+  starts. The injectable `maximumConcurrentRequests` limit fails excess work
+  immediately with `too_many_requests`; permits span DNS, redirects, transport,
+  body reads, and callback handoff.
+- `SourceRequestResponse` owns an idempotent release lease. Successful requests
+  transfer their request permit and retained actual-byte accounting to that
+  lease. Cancellation, timeout, transport errors, body errors, and callback
+  failures release ownership on every path.
+- Aggregate response accounting is incremental and checks capacity before each
+  chunk append. Retained bytes remain charged after the sandbox returns and
+  until callback serialization finishes or cancellation/disposal releases the
+  response.
+- `CustomSourceEngine` wraps UTF-8/JSON/base64 conversion and
+  `_executeJsCallback` in `withSourceResponseLease`; the cancellation entry stays
+  registered until that work exits. The callback API, one Dart base64 encoding,
+  and JavaScript `rawData = responseRaw` alias are unchanged.
+- Redirect setup now closes each response exactly once in `finally`, including
+  malformed URI, ambiguous Location, redirect-limit, and one-shot FormData or
+  stream replay failures. `SourceTransportResponse.close()` is idempotent.
+- Production pinning moved into the testable `SourcePinnedTransport`. Injected
+  Dio construction/execution/close and socket-start seams verify pre-cancel does
+  not construct Dio, cancellation force-closes, proxies are rejected, and only
+  validated numeric addresses are dialed.
+- Dio still receives the original HTTPS URI. Host header generation, TLS SNI,
+  and certificate hostname verification therefore remain bound to the original
+  source hostname; no bad-certificate callback was introduced.
 
 ## TDD Evidence
 
-Each finding was reproduced by a failing focused test before its production
-change. Red runs covered redirect status behavior and header leakage, one-shot
-body replay, omitted IP ranges, DNS cancellation, aggregate reservation,
-concurrency release, and ambiguous Location handling.
+Failing tests were observed before each implementation change for global
+pre-DNS admission, lease transfer and idempotent release, actual-byte callback
+retention, error/cancellation release, late transport response closure,
+exact-once redirect cleanup, and each pinned-transport seam.
 
 ## Verification
 
-- Focused: `flutter test test/core/network/source_request_policy_test.dart test/features/custom_source/domain/custom_source_engine_test.dart test/features/custom_source/domain/custom_source_host_regression_test.dart`
-  - Result: 46 passed.
-- Targeted analysis: `flutter analyze lib/core/network/source_request_policy.dart lib/features/custom_source/domain/custom_source_engine.dart test/core/network/source_request_policy_test.dart test/features/custom_source/domain/custom_source_engine_test.dart`
-  - Result: no issues.
-- Full suite: `flutter test`
-  - Result: 372 passed.
+- Focused network/custom-source suite: 59 passed.
+- Full `flutter test`: 385 passed.
+- Targeted analysis: no issues.
+- `git diff --check`: clean.
 
 ## Concerns
 
-- Sources relying on HTTP, private/special-purpose addresses, URL credentials,
-  proxies, cross-origin custom headers, or replaying one-shot redirect bodies
-  are intentionally rejected.
-- The default per-response cap remains 10 MiB. With the default 20 MiB aggregate
-  reservation, at most two maximum-sized bodies can read concurrently even
-  though the separate response-body concurrency cap is four.
+- Admission and byte-budget rejection are intentionally fail-fast rather than
+  queued. Sources issuing more than four overlapping requests must retry later.
+- Response consumers outside `CustomSourceEngine` must call `release()` or use
+  `withSourceResponseLease`; cancellation is a fallback release path, not a
+  substitute for explicit ownership completion.

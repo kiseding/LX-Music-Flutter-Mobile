@@ -642,6 +642,38 @@ void main() {
       unawaited(body.close());
     });
 
+    test(
+        'cancellation closes a transport response that arrives after race loss',
+        () async {
+      final transportResult = Completer<SourceTransportResponse>();
+      final cancellation = SourceRequestCancellation();
+      var closes = 0;
+      final sandbox = SourceRequestSandbox(
+        policy: policyWith({
+          'example.com': ['93.184.216.34'],
+        }),
+        transport: (request, cancellation) => transportResult.future,
+      );
+
+      final result = sandbox.request(
+        Uri.parse('https://example.com'),
+        {},
+        cancellation: cancellation,
+      );
+      await Future<void>.delayed(Duration.zero);
+      cancellation.cancel('disposed');
+      await expectLater(result, throwsA(isA<SourceRequestPolicyException>()));
+
+      transportResult.complete(SourceTransportResponse(
+        statusCode: 200,
+        headers: const {},
+        body: const Stream.empty(),
+        close: () => closes++,
+      ));
+      await Future<void>.delayed(Duration.zero);
+      expect(closes, 1);
+    });
+
     test('cancellation during DNS never invokes transport', () async {
       final dnsStarted = Completer<void>();
       final dnsResult = Completer<List<InternetAddress>>();
@@ -845,6 +877,7 @@ void main() {
       );
 
       final first = sandbox.request(Uri.parse('https://example.com/one'), {});
+      firstBody.add([1, 2, 3]);
       await Future<void>.delayed(Duration.zero);
       final second = sandbox.request(Uri.parse('https://example.com/two'), {});
 
@@ -858,13 +891,15 @@ void main() {
           ),
         ),
       );
-      expect(secondListened, isFalse);
+      expect(secondListened, isTrue);
       await firstBody.close();
-      expect(await first, isA<SourceRequestResponse>());
+      final firstResponse = await first;
+      firstResponse.release();
 
       final afterRelease =
           await sandbox.request(Uri.parse('https://example.com/three'), {});
       expect(afterRelease.bytes, [1, 2, 3, 4, 5]);
+      afterRelease.release();
     });
 
     test('rejects excess concurrent response bodies and releases the slot',
@@ -905,6 +940,319 @@ void main() {
         await sandbox.request(Uri.parse('https://example.com/three'), {}),
         isA<SourceRequestResponse>(),
       );
+    });
+
+    test('acquires request admission before DNS and transfers it to response',
+        () async {
+      var resolverCalls = 0;
+      final sandbox = SourceRequestSandbox(
+        policy: SourceRequestPolicy(
+            resolve: (host) async {
+              resolverCalls++;
+              return [publicAddress];
+            },
+            maximumResponseBytes: 8),
+        maximumConcurrentRequests: 1,
+        transport: (request, cancellation) async => SourceTransportResponse(
+          statusCode: 200,
+          headers: const {},
+          body: Stream.value([1, 2, 3]),
+        ),
+      );
+
+      final first =
+          await sandbox.request(Uri.parse('https://example.com/one'), {});
+      expect(resolverCalls, 1);
+      await expectLater(
+        sandbox.request(Uri.parse('https://example.com/two'), {}),
+        throwsA(
+          isA<SourceRequestPolicyException>()
+              .having((error) => error.code, 'code', 'too_many_requests'),
+        ),
+      );
+      expect(resolverCalls, 1);
+
+      first.release();
+      first.release();
+      final second =
+          await sandbox.request(Uri.parse('https://example.com/two'), {});
+      expect(resolverCalls, 2);
+      second.release();
+    });
+
+    test('holds actual response bytes until release', () async {
+      var calls = 0;
+      final sandbox = SourceRequestSandbox(
+        policy: policyWith({
+          'example.com': ['93.184.216.34'],
+        }, maximumResponseBytes: 5),
+        maximumConcurrentRequests: 3,
+        maximumInFlightBytes: 5,
+        transport: (request, cancellation) async {
+          calls++;
+          return SourceTransportResponse(
+            statusCode: 200,
+            headers: const {},
+            body: Stream.value(calls == 1 ? [1, 2, 3] : [4, 5, 6]),
+          );
+        },
+      );
+
+      final first =
+          await sandbox.request(Uri.parse('https://example.com/one'), {});
+      await expectLater(
+        sandbox.request(Uri.parse('https://example.com/two'), {}),
+        throwsA(
+          isA<SourceRequestPolicyException>().having(
+            (error) => error.code,
+            'code',
+            'response_budget_exceeded',
+          ),
+        ),
+      );
+
+      first.release();
+      final afterRelease =
+          await sandbox.request(Uri.parse('https://example.com/three'), {});
+      expect(afterRelease.bytes, [4, 5, 6]);
+      afterRelease.release();
+    });
+
+    test('request errors release admission', () async {
+      var fail = true;
+      final sandbox = SourceRequestSandbox(
+        policy: policyWith({
+          'example.com': ['93.184.216.34'],
+        }),
+        maximumConcurrentRequests: 1,
+        transport: (request, cancellation) async {
+          if (fail) throw StateError('transport failed');
+          return SourceTransportResponse(
+            statusCode: 200,
+            headers: const {},
+            body: const Stream.empty(),
+          );
+        },
+      );
+
+      await expectLater(
+        sandbox.request(Uri.parse('https://example.com/fail'), {}),
+        throwsStateError,
+      );
+      fail = false;
+      final response =
+          await sandbox.request(Uri.parse('https://example.com/ok'), {});
+      response.release();
+    });
+
+    test('cancellation after body completion releases bytes and admission',
+        () async {
+      final cancellation = SourceRequestCancellation();
+      var calls = 0;
+      final sandbox = SourceRequestSandbox(
+        policy: policyWith({
+          'example.com': ['93.184.216.34'],
+        }, maximumResponseBytes: 1),
+        maximumConcurrentRequests: 1,
+        maximumInFlightBytes: 1,
+        transport: (request, sourceCancellation) async {
+          calls++;
+          if (calls == 1) {
+            late StreamController<List<int>> controller;
+            controller = StreamController<List<int>>(
+                sync: true,
+                onListen: () {
+                  controller.add([1]);
+                  controller.close();
+                  cancellation.cancel('disposed');
+                });
+            return SourceTransportResponse(
+              statusCode: 200,
+              headers: const {},
+              body: controller.stream,
+            );
+          }
+          return SourceTransportResponse(
+            statusCode: 200,
+            headers: const {},
+            body: Stream.value([2]),
+          );
+        },
+      );
+
+      await expectLater(
+        sandbox.request(
+          Uri.parse('https://example.com/one'),
+          {},
+          cancellation: cancellation,
+        ),
+        throwsA(isA<SourceRequestPolicyException>()),
+      );
+      final next =
+          await sandbox.request(Uri.parse('https://example.com/two'), {});
+      expect(next.bytes, [2]);
+      next.release();
+    });
+
+    test('callback gate holds permits and bytes until callback finishes',
+        () async {
+      final callbackGate = Completer<void>();
+      var calls = 0;
+      final sandbox = SourceRequestSandbox(
+        policy: policyWith({
+          'example.com': ['93.184.216.34'],
+        }, maximumResponseBytes: 1),
+        maximumConcurrentRequests: 2,
+        maximumInFlightBytes: 2,
+        transport: (request, cancellation) async {
+          calls++;
+          return SourceTransportResponse(
+            statusCode: 200,
+            headers: const {},
+            body: Stream.value([calls]),
+          );
+        },
+      );
+      final first =
+          await sandbox.request(Uri.parse('https://example.com/one'), {});
+      final second =
+          await sandbox.request(Uri.parse('https://example.com/two'), {});
+      final firstDelivery = withSourceResponseLease(
+        first,
+        (_) => callbackGate.future,
+      );
+      final secondDelivery = withSourceResponseLease(
+        second,
+        (_) => callbackGate.future,
+      );
+
+      await expectLater(
+        sandbox.request(Uri.parse('https://example.com/three'), {}),
+        throwsA(
+          isA<SourceRequestPolicyException>()
+              .having((error) => error.code, 'code', 'too_many_requests'),
+        ),
+      );
+      callbackGate.complete();
+      await Future.wait([firstDelivery, secondDelivery]);
+
+      final third =
+          await sandbox.request(Uri.parse('https://example.com/three'), {});
+      third.release();
+    });
+
+    test('cancellation after response handoff releases its lease', () async {
+      final cancellation = SourceRequestCancellation();
+      final sandbox = SourceRequestSandbox(
+        policy: policyWith({
+          'example.com': ['93.184.216.34'],
+        }, maximumResponseBytes: 1),
+        maximumConcurrentRequests: 1,
+        maximumInFlightBytes: 1,
+        transport: (request, sourceCancellation) async =>
+            SourceTransportResponse(
+          statusCode: 200,
+          headers: const {},
+          body: Stream.value([1]),
+        ),
+      );
+
+      await sandbox.request(
+        Uri.parse('https://example.com/one'),
+        {},
+        cancellation: cancellation,
+      );
+      cancellation.cancel('disposed');
+      await Future<void>.delayed(Duration.zero);
+
+      final next =
+          await sandbox.request(Uri.parse('https://example.com/two'), {});
+      next.release();
+    });
+
+    test('redirect setup failures close response exactly once', () async {
+      for (final testCase in <({String name, String location, dynamic body})>[
+        (name: 'malformed location', location: 'http://[', body: 'body'),
+        (
+          name: 'FormData',
+          location: '/next',
+          body: FormData.fromMap({'a': 'b'}),
+        ),
+        (
+          name: 'stream',
+          location: '/next',
+          body: Stream.value([1]),
+        ),
+      ]) {
+        var closes = 0;
+        final sandbox = SourceRequestSandbox(
+          policy: policyWith({
+            'example.com': ['93.184.216.34'],
+          }),
+          transport: (request, cancellation) async => SourceTransportResponse(
+            statusCode: 307,
+            headers: {
+              'location': [testCase.location]
+            },
+            body: const Stream.empty(),
+            close: () => closes++,
+          ),
+        );
+
+        await expectLater(
+          sandbox.request(
+            Uri.parse('https://example.com/start'),
+            {'method': 'POST', 'body': testCase.body},
+          ),
+          throwsA(anything),
+          reason: testCase.name,
+        );
+        expect(closes, 1, reason: testCase.name);
+      }
+    });
+
+    test('ambiguous redirect closes response exactly once', () async {
+      var closes = 0;
+      final sandbox = SourceRequestSandbox(
+        policy: policyWith({
+          'example.com': ['93.184.216.34'],
+        }),
+        transport: (request, cancellation) async => SourceTransportResponse(
+          statusCode: 302,
+          headers: {
+            'location': ['/one', '/two']
+          },
+          body: const Stream.empty(),
+          close: () => closes++,
+        ),
+      );
+
+      await expectLater(
+        sandbox.request(Uri.parse('https://example.com/start'), {}),
+        throwsA(isA<SourceRequestPolicyException>()),
+      );
+      expect(closes, 1);
+    });
+
+    test('redirect without Location closes response exactly once', () async {
+      var closes = 0;
+      final sandbox = SourceRequestSandbox(
+        policy: policyWith({
+          'example.com': ['93.184.216.34'],
+        }),
+        transport: (request, cancellation) async => SourceTransportResponse(
+          statusCode: 302,
+          headers: const {},
+          body: Stream.value([1]),
+          close: () => closes++,
+        ),
+      );
+
+      final response =
+          await sandbox.request(Uri.parse('https://example.com/start'), {});
+      response.release();
+
+      expect(closes, 1);
     });
   });
 }
