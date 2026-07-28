@@ -37,7 +37,7 @@ void main() {
       handler.indexOf('Future<void> play() async'),
       handler.indexOf('/// 供测试：模拟当前曲播放完成'),
     );
-    expect(play, contains('_startPlayer();'));
+    expect(play, contains('_startPlayer(provenance: provenance);'));
     expect(play, isNot(contains('await _player.play()')));
   });
 

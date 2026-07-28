@@ -308,7 +308,7 @@ void main() {
     expect(validation, greaterThanOrEqualTo(0));
     expect(
       validation,
-      lessThan(transaction.indexOf('_startPlayer(stillOwnsStart:')),
+      lessThan(transaction.indexOf('_startPlayer(')),
     );
     expect(validation, lessThan(transaction.indexOf('_schedulePreload();')));
   });
@@ -584,6 +584,34 @@ void main() {
     expect(player.playing, isTrue);
     expect((player.loadedSource as ProgressiveAudioSource).tag.id, 'A');
     expect(handler.mediaItem.value?.id, 'A');
+  });
+
+  test('recovery stop cannot forget a completed interruption cycle', () async {
+    MediaItem item(String id) => MediaItem(
+          id: id,
+          title: id,
+          extras: {
+            'url': 'file:///tmp/$id.mp3',
+            'requestedQuality': '320k',
+          },
+        );
+    await handler.updateQueue([item('A'), item('B')]);
+    final staleInstall = player.queueSourceLoadGate();
+    final staleLoad = handler.skipToQueueItem(0);
+    await staleInstall.started.future;
+    await handler.updateQueue([item('B')]);
+    final recoveryStop = player.gateNextStop();
+    staleInstall.release.complete();
+    await recoveryStop.started.future;
+
+    await handler.beginAudioInterruption();
+    await handler.endAudioInterruption(mayResume: false);
+    recoveryStop.release.complete();
+    await staleLoad;
+    await pumpEventQueue();
+
+    expect(handler.mediaItem.value?.id, 'B');
+    expect(player.playing, isFalse);
   });
 }
 

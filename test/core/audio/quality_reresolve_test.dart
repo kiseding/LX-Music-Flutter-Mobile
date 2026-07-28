@@ -510,6 +510,34 @@ void main() {
     expect(player.playing, isTrue);
   });
 
+  test('quality pause cannot forget a completed interruption cycle', () async {
+    final player = _QualityAudioPlayer();
+    final handler = LxAudioHandler(player: player);
+    addTearDown(player.dispose);
+    handler.urlResolver = (id, [extras]) async =>
+        'file:///tmp/$id-${extras?['requestedQuality']}.mp3';
+    await handler.setPlaylist([_item('A')]);
+    await pumpEventQueue();
+    player.setEngineState(
+      position: const Duration(seconds: 42),
+      duration: const Duration(minutes: 3),
+      playing: true,
+    );
+    final pauseGate = player.gateNextPause();
+    final playCalls = player.playCalls;
+
+    final reload = handler.applyPreferredQuality('flac');
+    await pauseGate.started.future;
+    await handler.beginAudioInterruption();
+    await handler.endAudioInterruption(mayResume: false);
+    pauseGate.release.complete();
+    await reload;
+    await pumpEventQueue();
+
+    expect(player.playCalls, playCalls);
+    expect(player.playing, isFalse);
+  });
+
   test('interruption during quality resolution defers reload start', () async {
     final player = _QualityAudioPlayer();
     final handler = LxAudioHandler(player: player);
