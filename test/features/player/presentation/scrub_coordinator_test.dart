@@ -179,6 +179,97 @@ void main() {
     expect(playback.resumeCalls, 0);
   });
 
+  test('source change between begin and finish prevents seek and resume',
+      () async {
+    final playback = _FakeScrubPlayback(
+      playing: true,
+      position: const Duration(seconds: 10),
+      seekResult: const Duration(seconds: 40),
+    );
+    final position = _FakeScrubPosition();
+    final coordinator = ScrubCoordinator(playback, position);
+
+    final generation = await coordinator.begin();
+    playback.sourceGeneration++;
+    playback.position = const Duration(seconds: 3);
+    await coordinator.finish(
+      generation,
+      const Duration(seconds: 40),
+      resumeAfter: true,
+    );
+
+    expect(playback.seekCalls, 0);
+    expect(playback.resumeCalls, 0);
+    expect(position.unfreezes, [const Duration(seconds: 3)]);
+  });
+
+  for (final action in <({String name, void Function(_FakeScrubPlayback) run})>[
+    (name: 'pause', run: (playback) => playback.userPause()),
+    (name: 'play', run: (playback) => playback.userPlay()),
+  ]) {
+    test('explicit ${action.name} between begin and finish prevents seek',
+        () async {
+      final playback = _FakeScrubPlayback(
+        playing: true,
+        position: const Duration(seconds: 10),
+        seekResult: const Duration(seconds: 40),
+      );
+      final position = _FakeScrubPosition();
+      final coordinator = ScrubCoordinator(playback, position);
+
+      final generation = await coordinator.begin();
+      action.run(playback);
+      await coordinator.finish(
+        generation,
+        const Duration(seconds: 40),
+        resumeAfter: true,
+      );
+
+      expect(playback.seekCalls, 0);
+      expect(playback.resumeCalls, 0);
+      expect(position.unfreezes, [const Duration(seconds: 10)]);
+      expect(playback.playing, action.name == 'play');
+    });
+  }
+
+  for (final change in <({String name, void Function(_FakeScrubPlayback) run})>[
+    (
+      name: 'source',
+      run: (playback) {
+        playback.sourceGeneration++;
+        playback.position = const Duration(seconds: 3);
+      },
+    ),
+    (name: 'intent', run: (playback) => playback.userPause()),
+  ]) {
+    test('${change.name} change while begin pause is gated prevents seek',
+        () async {
+      final pauseGate = _Gate();
+      final playback = _FakeScrubPlayback(
+        playing: true,
+        position: const Duration(seconds: 10),
+        seekResult: const Duration(seconds: 40),
+      )..pauseGate = pauseGate;
+      final position = _FakeScrubPosition();
+      final coordinator = ScrubCoordinator(playback, position);
+
+      final begin = coordinator.begin();
+      await pauseGate.started.future;
+      change.run(playback);
+      pauseGate.release.complete();
+      final generation = await begin;
+      await coordinator.finish(
+        generation,
+        const Duration(seconds: 40),
+        resumeAfter: true,
+      );
+
+      expect(playback.seekCalls, 0);
+      expect(playback.resumeCalls, 0);
+      expect(position.unfreezes, [playback.position]);
+    });
+  }
+
   for (final action in <({String name, void Function(_FakeScrubPlayback) run})>[
     (name: 'pause', run: (playback) => playback.userPause()),
     (name: 'play', run: (playback) => playback.userPlay()),
@@ -272,6 +363,7 @@ class _FakeScrubPlayback implements ScrubPlayback {
   _Gate? seekGate;
   _Gate? pauseGate;
   int pauseCalls = 0;
+  int seekCalls = 0;
   int resumeCalls = 0;
 
   _FakeScrubPlayback({
@@ -313,6 +405,7 @@ class _FakeScrubPlayback implements ScrubPlayback {
 
   @override
   Future<Duration?> seekConfirmed(Duration requested) async {
+    seekCalls++;
     final gate = seekGate;
     if (gate != null) {
       gate.started.complete();

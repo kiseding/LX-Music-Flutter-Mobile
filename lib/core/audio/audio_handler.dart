@@ -333,6 +333,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   int _publishPlaybackState({
     AudioProcessingState? override,
     bool? playingOverride,
+    Duration? positionOverride,
   }) {
     final playing = playingOverride ?? _player.playing;
     final publicationToken = ++_playbackPublicationToken;
@@ -351,7 +352,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       processingState:
           override ?? audioProcessingState(_player.processingState),
       playing: playing,
-      updatePosition: _player.position,
+      updatePosition: positionOverride ?? _player.position,
       bufferedPosition: _player.bufferedPosition,
       speed: _player.speed,
       queueIndex: currentQueueIndex,
@@ -457,7 +458,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       if (confirmedDuration != null && confirmed > confirmedDuration) {
         confirmed = confirmedDuration;
       }
-      _publishPlaybackState();
+      _publishPlaybackState(positionOverride: confirmed);
       return confirmed;
     });
   }

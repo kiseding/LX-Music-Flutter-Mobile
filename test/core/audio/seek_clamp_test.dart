@@ -92,6 +92,39 @@ void main() {
     );
   });
 
+  for (final confirmation in <({
+    String name,
+    Duration enginePosition,
+    Duration expected,
+  })>[
+    (
+      name: 'negative',
+      enginePosition: const Duration(seconds: -4),
+      expected: Duration.zero,
+    ),
+    (
+      name: 'beyond duration',
+      enginePosition: const Duration(minutes: 4),
+      expected: const Duration(minutes: 3),
+    ),
+  ]) {
+    test('${confirmation.name} engine confirmation publishes clamped position',
+        () async {
+      final player = _SeekAudioPlayer(
+        processingState: ProcessingState.ready,
+        engineDuration: const Duration(minutes: 3),
+        confirmedPosition: confirmation.enginePosition,
+      );
+      final handler = LxAudioHandler(player: player);
+      addTearDown(player.dispose);
+
+      final confirmed = await handler.seekConfirmed(const Duration(minutes: 2));
+
+      expect(confirmed, confirmation.expected);
+      expect(handler.playbackState.value.updatePosition, confirmed);
+    });
+  }
+
   test('loading seek failure returns null without publishing target', () async {
     final player = _SeekAudioPlayer(
       processingState: ProcessingState.loading,

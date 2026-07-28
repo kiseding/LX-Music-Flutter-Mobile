@@ -240,22 +240,31 @@ class ScrubCoordinator {
   final ScrubPlayback _playback;
   final ScrubPosition _position;
   int _generation = 0;
-  Future<void> _pauseFuture = Future<void>.value();
+  final Map<int, _ScrubTransaction> _transactions = {};
 
   ScrubCoordinator(this._playback, this._position);
 
   Future<int> begin() async {
     final generation = ++_generation;
+    final sourceGeneration = _playback.sourceGeneration;
+    final userIntentGeneration = _playback.userIntentGeneration;
+    _transactions.clear();
     _position.freeze();
 
-    _pauseFuture =
+    final pauseFuture =
         _playback.playing ? _playback.pauseForScrub() : Future<void>.value();
+    _transactions[generation] = _ScrubTransaction(
+      sourceGeneration: sourceGeneration,
+      userIntentGeneration: userIntentGeneration,
+      pauseFuture: pauseFuture,
+    );
     try {
-      await _pauseFuture;
+      await pauseFuture;
     } catch (_) {
       if (generation == _generation) {
         _position.unfreeze(_playback.position);
       }
+      _transactions.remove(generation);
       rethrow;
     }
     return generation;
@@ -267,32 +276,45 @@ class ScrubCoordinator {
     required bool resumeAfter,
   }) async {
     if (generation != _generation) return;
-    int? sourceGeneration;
-    int? userIntentGeneration;
+    final transaction = _transactions[generation];
+    if (transaction == null) return;
     Duration? confirmed;
     try {
-      await _pauseFuture;
+      await transaction.pauseFuture;
       if (generation != _generation) return;
-      sourceGeneration = _playback.sourceGeneration;
-      userIntentGeneration = _playback.userIntentGeneration;
+      if (!transaction.owns(_playback)) return;
       confirmed = await _playback.seekConfirmed(position);
       if (generation != _generation) return;
-      if (confirmed != null &&
-          resumeAfter &&
-          sourceGeneration == _playback.sourceGeneration &&
-          userIntentGeneration == _playback.userIntentGeneration) {
+      if (confirmed != null && resumeAfter && transaction.owns(_playback)) {
         await _playback.resumeAfterScrub();
       }
     } finally {
       if (generation == _generation) {
-        final actual = sourceGeneration != null &&
-                sourceGeneration == _playback.sourceGeneration
-            ? confirmed ?? _playback.position
-            : _playback.position;
+        final actual =
+            transaction.sourceGeneration == _playback.sourceGeneration
+                ? confirmed ?? _playback.position
+                : _playback.position;
         _position.unfreeze(actual);
       }
+      _transactions.remove(generation);
     }
   }
+}
+
+class _ScrubTransaction {
+  final int sourceGeneration;
+  final int userIntentGeneration;
+  final Future<void> pauseFuture;
+
+  const _ScrubTransaction({
+    required this.sourceGeneration,
+    required this.userIntentGeneration,
+    required this.pauseFuture,
+  });
+
+  bool owns(ScrubPlayback playback) =>
+      sourceGeneration == playback.sourceGeneration &&
+      userIntentGeneration == playback.userIntentGeneration;
 }
 
 class _HandlerScrubPlayback implements ScrubPlayback {
