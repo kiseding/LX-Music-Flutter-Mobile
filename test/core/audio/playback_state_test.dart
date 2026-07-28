@@ -262,6 +262,84 @@ void main() {
     expect(handler.playbackState.value.playing, isTrue);
     expect(handler.playbackState.value.controls, contains(MediaControl.pause));
   });
+
+  test('authoritative play failure reconciles forced playing state', () async {
+    final player = _PlaybackStateAudioPlayer()
+      ..sourceInstallProcessingState = ProcessingState.ready;
+    final playFailure = player.gateNextPlayFailure();
+    final handler = LxAudioHandler(player: player);
+    addTearDown(player.dispose);
+    handler.urlResolver = (id, [extras]) async => 'file:///tmp/$id.mp3';
+
+    await handler.setPlaylist([const MediaItem(id: 'A', title: 'A')]);
+    await playFailure.started.future;
+    expect(handler.playbackState.value.playing, isTrue);
+
+    playFailure.release.complete();
+    await pumpEventQueue();
+
+    expect(player.playing, isFalse);
+    expect(handler.playbackState.value.playing, isFalse);
+    expect(
+      handler.playbackState.value.processingState,
+      AudioProcessingState.ready,
+    );
+    expect(handler.playbackState.value.controls, contains(MediaControl.play));
+  });
+
+  test('stale play failure cannot overwrite newer source state', () async {
+    final player = _PlaybackStateAudioPlayer()
+      ..sourceInstallProcessingState = ProcessingState.ready;
+    final stalePlayFailure = player.gateNextPlayFailure();
+    final handler = LxAudioHandler(player: player);
+    addTearDown(player.dispose);
+    handler.urlResolver = (id, [extras]) async => 'file:///tmp/$id.mp3';
+
+    await handler.setPlaylist([const MediaItem(id: 'A', title: 'A')]);
+    await stalePlayFailure.started.future;
+    await handler.setPlaylist([const MediaItem(id: 'B', title: 'B')]);
+    expect(handler.mediaItem.value?.id, 'B');
+    expect(handler.playbackState.value.playing, isTrue);
+
+    stalePlayFailure.release.complete();
+    await pumpEventQueue();
+
+    expect(handler.mediaItem.value?.id, 'B');
+    expect(handler.playbackState.value.playing, isTrue);
+    expect(handler.playbackState.value.controls, contains(MediaControl.pause));
+  });
+
+  test('cached source install failure clears navigation buffering', () async {
+    final player = _PlaybackStateAudioPlayer()
+      ..sourceInstallProcessingState = ProcessingState.ready;
+    final handler = LxAudioHandler(player: player);
+    addTearDown(player.dispose);
+    const items = [
+      MediaItem(
+        id: 'A',
+        title: 'A',
+        extras: {'url': 'file:///tmp/A.mp3', 'requestedQuality': '320k'},
+      ),
+      MediaItem(
+        id: 'B',
+        title: 'B',
+        extras: {'url': 'file:///tmp/B.mp3', 'requestedQuality': '320k'},
+      ),
+    ];
+    await handler.setPlaylist(items);
+    player.failNextSourceInstall = true;
+
+    await handler.skipToNext();
+
+    expect(handler.currentQueueIndex, 1);
+    expect(player.processingState, ProcessingState.ready);
+    expect(player.playing, isFalse);
+    expect(
+      handler.playbackState.value.processingState,
+      AudioProcessingState.ready,
+    );
+    expect(handler.playbackState.value.playing, isFalse);
+  });
 }
 
 class _PlaybackStateAudioPlayer extends AudioPlayer {
@@ -275,6 +353,14 @@ class _PlaybackStateAudioPlayer extends AudioPlayer {
   int playCalls = 0;
   int sourceLoadCalls = 0;
   ProcessingState? sourceInstallProcessingState;
+  bool failNextSourceInstall = false;
+  final _playFailureGates = <_PlayFailureGate>[];
+
+  _PlayFailureGate gateNextPlayFailure() {
+    final gate = _PlayFailureGate();
+    _playFailureGates.add(gate);
+    return gate;
+  }
 
   void emit({
     required ProcessingState processingState,
@@ -334,6 +420,10 @@ class _PlaybackStateAudioPlayer extends AudioPlayer {
     Duration? initialPosition,
   }) async {
     sourceLoadCalls++;
+    if (failNextSourceInstall) {
+      failNextSourceInstall = false;
+      throw StateError('source install');
+    }
     final state = sourceInstallProcessingState;
     if (state != null) {
       _event = PlaybackEvent(
@@ -347,6 +437,14 @@ class _PlaybackStateAudioPlayer extends AudioPlayer {
   @override
   Future<void> play() async {
     playCalls++;
+    final failureGate =
+        _playFailureGates.isEmpty ? null : _playFailureGates.removeAt(0);
+    if (failureGate != null) {
+      failureGate.started.complete();
+      await failureGate.release.future;
+      _playing = false;
+      throw StateError('play');
+    }
     _playing = true;
   }
 
@@ -362,4 +460,9 @@ class _PlaybackStateAudioPlayer extends AudioPlayer {
     await _processingStates.close();
     await super.dispose();
   }
+}
+
+class _PlayFailureGate {
+  final started = Completer<void>();
+  final release = Completer<void>();
 }

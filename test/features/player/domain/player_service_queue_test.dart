@@ -306,7 +306,10 @@ void main() {
     );
     final validation = transaction.indexOf('activeItemIndex()');
     expect(validation, greaterThanOrEqualTo(0));
-    expect(validation, lessThan(transaction.indexOf('_startPlayer();')));
+    expect(
+      validation,
+      lessThan(transaction.indexOf('_startPlayer(stillOwnsStart:')),
+    );
     expect(validation, lessThan(transaction.indexOf('_schedulePreload();')));
   });
 

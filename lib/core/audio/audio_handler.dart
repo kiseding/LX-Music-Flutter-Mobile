@@ -227,9 +227,12 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         await _player.stop();
       });
 
-  void _startPlayer() {
+  void _startPlayer({bool Function()? stillOwnsStart}) {
     unawaited(_player.play().catchError((Object e, StackTrace stack) {
       debugPrint('[AudioHandler] play() 失败: $e');
+      if (stillOwnsStart?.call() ?? false) {
+        _publishPlaybackState();
+      }
     }));
   }
 
@@ -448,14 +451,13 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
     // 用户点「下一首」：立刻停当前曲，避免听感重叠。
     // 自动连播（seamless）：不要 pause/playing:false，否则锁屏下 iOS 会杀会话。
-    if (!seamless) {
-      await _haltCurrentPlayback();
-    }
+    final bufferingPublication = seamless ? null : await _haltCurrentPlayback();
     if (seamless) _userWantsPlay = true;
     await _loadQueueItem(
       nextIndex,
       seamless: seamless,
       preserveUserIntent: true,
+      bufferingPublication: bufferingPublication,
     );
   }
 
@@ -480,12 +482,16 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       loop: loop,
     );
     if (prevIndex < 0) return;
-    await _haltCurrentPlayback();
-    await _loadQueueItem(prevIndex, preserveUserIntent: true);
+    final bufferingPublication = await _haltCurrentPlayback();
+    await _loadQueueItem(
+      prevIndex,
+      preserveUserIntent: true,
+      bufferingPublication: bufferingPublication,
+    );
   }
 
   /// 立刻停止当前输出并广播暂停态，提升手动切歌手感。
-  Future<void> _haltCurrentPlayback() async {
+  Future<int> _haltCurrentPlayback() async {
     _bumpGeneration();
     try {
       if (_player.playing) {
@@ -494,7 +500,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     } catch (e) {
       debugPrint('[AudioHandler] halt pause failed: $e');
     }
-    _publishPlaybackState(override: AudioProcessingState.buffering);
+    return _publishPlaybackState(override: AudioProcessingState.buffering);
   }
 
   Future<int> _preloadCount() async {
@@ -575,6 +581,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     bool seamless = false,
     bool preserveUserIntent = false,
     bool recoverStaleInstall = true,
+    int? bufferingPublication,
   }) async {
     if (index < 0 || index >= _queue.length) return;
 
@@ -605,7 +612,8 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
     _currentIndex = index;
     mediaItem.add(item);
-    int? manualBufferingPublication;
+    var manualBufferingPublication = bufferingPublication;
+    var sourceInstallAttempted = false;
     var sourceTransitionFollows = false;
 
     try {
@@ -694,10 +702,20 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         if (transactionIndex < 0) return;
         final installToken = ++_sourceInstallToken;
         _installedSourceOwnerToken = installToken;
-        await _player.setAudioSource(
-          audioSourceFor(url!, tag: updatedItem),
-          initialPosition: Duration.zero,
-        );
+        sourceInstallAttempted = true;
+        try {
+          await _player.setAudioSource(
+            audioSourceFor(url!, tag: updatedItem),
+            initialPosition: Duration.zero,
+          );
+        } catch (_) {
+          if (_installedSourceOwnerToken == installToken &&
+              activeItemIndex() >= 0 &&
+              manualBufferingPublication == _playbackPublicationToken) {
+            _publishPlaybackState();
+          }
+          rethrow;
+        }
         sourceTransitionFollows = true;
         if (_installedSourceOwnerToken != installToken) return;
         transactionIndex = activeItemIndex();
@@ -719,7 +737,23 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         }
         // completed 后 engine playing 可能为 false，以当前用户意图决定是否续播。
         if (_userWantsPlay) {
-          _startPlayer();
+          final startIndex = transactionIndex;
+          final startIntentGeneration = _userIntentGeneration;
+          bool stillOwnsStart() =>
+              _installedSourceOwnerToken == installToken &&
+              _installedPlaybackGeneration == gen &&
+              _playGeneration == gen &&
+              _installedMediaId == itemId &&
+              _activeItemId == itemId &&
+              mediaItem.value?.id == itemId &&
+              _currentIndex == startIndex &&
+              startIndex >= 0 &&
+              startIndex < _queue.length &&
+              _queue[startIndex].id == itemId &&
+              _userIntentGeneration == startIntentGeneration &&
+              _userWantsPlay;
+
+          _startPlayer(stillOwnsStart: stillOwnsStart);
           if (_installedSourceOwnerToken != installToken ||
               activeItemIndex() < 0 ||
               !_userWantsPlay) {
@@ -744,7 +778,8 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         }
       }
     } finally {
-      if (!sourceTransitionFollows &&
+      if (!sourceInstallAttempted &&
+          !sourceTransitionFollows &&
           manualBufferingPublication == _playbackPublicationToken) {
         _publishPlaybackState();
       }
@@ -838,9 +873,10 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       final wasPlaying = _player.playing;
       final wantedPlay = _userWantsPlay;
       final intentGeneration = _userIntentGeneration;
+      int? bufferingPublication;
       if (removedCurrent && _activeItemId != targetId) return;
       if (removedCurrent && wasPlaying) {
-        await _haltCurrentPlayback();
+        bufferingPublication = await _haltCurrentPlayback();
         index = _queue.indexWhere((item) => item.id == targetId);
         if (index < 0 ||
             this.mediaItem.value?.id != targetId ||
@@ -866,7 +902,11 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       if (removedCurrent) {
         final replacementId = _queue[replacementIndex].id;
         queue.add(List.unmodifiable(_queue));
-        await _loadQueueItem(replacementIndex, preserveUserIntent: true);
+        await _loadQueueItem(
+          replacementIndex,
+          preserveUserIntent: true,
+          bufferingPublication: bufferingPublication,
+        );
         var relocatedReplacement =
             _queue.indexWhere((item) => item.id == replacementId);
         if (relocatedReplacement < 0 ||
