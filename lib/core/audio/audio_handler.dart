@@ -5,6 +5,8 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:just_audio/just_audio.dart';
 
+import 'playback_command_coordinator.dart';
+
 late AudioHandler audioHandler;
 
 // 定义一个函数签名，用于动态获取 URL（extras 为该曲目元数据，避免预加载时误用当前曲）
@@ -244,6 +246,7 @@ class PlaybackStartProvenance {
 
 class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   final AudioPlayer _player;
+  late final PlaybackCommandCoordinator _commands;
   final AudioInterruptionPolicy _interruptionPolicy = AudioInterruptionPolicy();
   final List<MediaItem> _queue = [];
   int _currentIndex = 0;
@@ -253,9 +256,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   int _seekGeneration = 0;
   bool _userWantsPlay = true;
   int _userIntentGeneration = 0;
-  int _sourceInstallToken = 0;
   int _installedSourceOwnerToken = 0;
-  Future<void> _sourceMutationTail = Future<void>.value();
   int _installedPlaybackGeneration = -1;
   String? _installedMediaId;
   int _lastHandledCompletionGeneration = -1;
@@ -266,7 +267,6 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   int _interruptionGeneration = 0;
   int _playbackStartBlockGeneration = 0;
   bool _interruptionClosing = false;
-  Future<void> _interruptionOperationTail = Future<void>.value();
   int? _interruptionSourceGeneration;
   int? _interruptionUserIntentGeneration;
   String? _interruptionMediaId;
@@ -281,6 +281,13 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   void Function(String message)? onError;
 
   LxAudioHandler({AudioPlayer? player}) : _player = player ?? AudioPlayer() {
+    _commands = PlaybackCommandCoordinator(
+      _player,
+      onStateChanged: _publishPlaybackState,
+      onError: (operation, error, _) {
+        debugPrint('[AudioHandler] $operation failed: $error');
+      },
+    );
     _publishPlaybackState();
     _init();
   }
@@ -315,87 +322,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
   int _expressPlayIntent() => _expressPlaybackIntent(true);
 
-  Future<T> _withSourceMutation<T>(Future<T> Function() operation) async {
-    final previous = _sourceMutationTail;
-    final release = Completer<void>();
-    _sourceMutationTail = release.future;
-    await previous;
-    try {
-      return await operation();
-    } finally {
-      release.complete();
-    }
-  }
-
-  Future<void> _enqueueInterruptionOperation(
-    Future<void> Function() operation,
-  ) async {
-    final previous = _interruptionOperationTail;
-    final release = Completer<void>();
-    _interruptionOperationTail = release.future;
-    await previous;
-    try {
-      await operation();
-    } finally {
-      release.complete();
-    }
-  }
-
-  Future<void> _stopPlayerSource() => _withSourceMutation(() async {
-        _installedSourceOwnerToken = ++_sourceInstallToken;
-        await _player.stop();
-      });
-
-  bool _startPlayer({
-    PlaybackStartProvenance? provenance,
-    bool Function()? stillOwnsStart,
-  }) {
-    if (interruptionActive || !(stillOwnsStart?.call() ?? true)) return false;
-    final startProvenance = provenance ?? _captureStartProvenance();
-    final sourceOwnerToken = _installedSourceOwnerToken;
-    final sourceGeneration = _installedPlaybackGeneration;
-    final sourceMediaId = _installedMediaId;
-    final sourceIndex = _currentIndex;
-    bool stillOwnsInstalledSource() =>
-        sourceOwnerToken == _installedSourceOwnerToken &&
-        sourceGeneration == _installedPlaybackGeneration &&
-        sourceGeneration == _playGeneration &&
-        sourceMediaId == _installedMediaId &&
-        sourceMediaId == _activeItemId &&
-        sourceMediaId == mediaItem.value?.id &&
-        sourceIndex == _currentIndex &&
-        sourceIndex >= 0 &&
-        sourceIndex < _queue.length &&
-        _queue[sourceIndex].id == sourceMediaId;
-    unawaited(() async {
-      try {
-        await _player.play();
-      } catch (e) {
-        debugPrint('[AudioHandler] play() 失败: $e');
-        if (stillOwnsStart?.call() ?? false) {
-          _publishPlaybackState();
-        }
-        return;
-      }
-      final stillOwnsInterruption = _mayStartAfterInterruption(
-        provenance: startProvenance,
-      );
-      final stillOwnsPlayback = stillOwnsStart?.call() ?? true;
-      final mayPauseSharedPlayer = stillOwnsInstalledSource();
-      if ((!stillOwnsInterruption || (!stillOwnsPlayback && !_userWantsPlay)) &&
-          mayPauseSharedPlayer) {
-        try {
-          await _player.pause();
-        } catch (e) {
-          debugPrint('[AudioHandler] stale play pause failed: $e');
-        }
-        _publishPlaybackState();
-      } else if (!stillOwnsPlayback || !stillOwnsInterruption) {
-        _publishPlaybackState();
-      }
-    }());
-    return true;
-  }
+  Future<void> _stopPlayerSource() => _commands.stop();
 
   bool _mayStartAfterInterruption({
     required PlaybackStartProvenance provenance,
@@ -508,19 +435,13 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
   @override
   Future<void> play() async {
-    final provenance = _captureStartProvenance();
     _userIntentGeneration++;
     _userWantsPlay = true;
-    // 如果播放器处于空闲/错误状态，先重置再播放
     if (_player.processingState == ProcessingState.idle) {
-      await _stopPlayerSource();
-      if (_player.currentIndex != null) {
-        await _player.seek(Duration.zero, index: _player.currentIndex);
-      }
-    }
-    // just_audio 的 Future 要到暂停/停止/播完才完成，不能在这里等待。
-    if (_mayStartAfterInterruption(provenance: provenance)) {
-      _startPlayer(provenance: provenance);
+      unawaited(_commands.explicitPlay());
+      await _commands.recoverIdleSource();
+    } else {
+      await _commands.explicitPlay();
     }
     await super.play();
   }
@@ -540,11 +461,9 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       _userIntentGeneration++;
       _userWantsPlay = false;
     }
-    try {
-      await _player.pause();
-    } catch (e) {
-      debugPrint('[AudioHandler] pause() 失败: $e');
-    }
+    await (clearIntent
+        ? _commands.explicitPause()
+        : _commands.pausePreservingIntent());
     await super.pause();
   }
 
@@ -554,11 +473,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     required bool Function() stillOwnsScrub,
   }) async {
     final provenance = _captureStartProvenance();
-    try {
-      await _player.pause();
-    } catch (e) {
-      debugPrint('[AudioHandler] scrub pause failed: $e');
-    }
+    await _commands.pausePreservingIntent();
     await super.pause();
 
     final stale = sourceGeneration != _playGeneration ||
@@ -585,22 +500,14 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     final sourceGeneration = _interruptionSourceGeneration;
     final userIntentGeneration = _interruptionUserIntentGeneration;
 
-    await _enqueueInterruptionOperation(() async {
-      if (action != InterruptionAction.pausePreservingIntent ||
-          interruptionGeneration != _interruptionGeneration ||
-          !interruptionActive ||
-          sourceGeneration == null ||
-          userIntentGeneration == null) {
-        return;
-      }
-      await pauseForScrub(
-        sourceGeneration: sourceGeneration,
-        userIntentGeneration: userIntentGeneration,
-        stillOwnsScrub: () =>
-            interruptionGeneration == _interruptionGeneration &&
-            interruptionActive,
-      );
-    });
+    await _commands.beginInterruption();
+    if (action == InterruptionAction.pausePreservingIntent &&
+        interruptionGeneration == _interruptionGeneration &&
+        interruptionActive &&
+        sourceGeneration != null &&
+        userIntentGeneration != null) {
+      await super.pause();
+    }
   }
 
   Future<void> endAudioInterruption({required bool mayResume}) async {
@@ -613,27 +520,24 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     if (previousDepth == 0) return;
     final finalEnd = interruptionDepth == 0;
     if (finalEnd) _interruptionClosing = true;
-    await _enqueueInterruptionOperation(() async {
-      if (interruptionGeneration != _interruptionGeneration) {
-        return;
+    final ownsPlayback = _interruptionSourceGeneration == _playGeneration &&
+        _interruptionUserIntentGeneration == _userIntentGeneration &&
+        _interruptionMediaId == _activeItemId &&
+        _userWantsPlay;
+    await _commands.endInterruption(
+      mayResume: mayResume && (!finalEnd || ownsPlayback),
+    );
+    if (interruptionGeneration != _interruptionGeneration) return;
+    if (!finalEnd || _interruptionPolicy.active) return;
+    _interruptionClosing = false;
+    if (action == InterruptionAction.resume && ownsPlayback) {
+      if (_player.processingState == ProcessingState.completed) {
+        _onTrackCompleted();
       }
-      if (!finalEnd || _interruptionPolicy.active) return;
-      _interruptionClosing = false;
-      final ownsPlayback = _interruptionSourceGeneration == _playGeneration &&
-          _interruptionUserIntentGeneration == _userIntentGeneration &&
-          _interruptionMediaId == _activeItemId &&
-          _userWantsPlay;
-      if (action == InterruptionAction.resume && ownsPlayback) {
-        if (_player.processingState == ProcessingState.completed) {
-          _onTrackCompleted();
-        } else {
-          _restoreAuthoritativePlaybackAfterScrubPause();
-        }
-      } else {
-        ++_playbackStartBlockGeneration;
-      }
-      _clearInterruptionOwnership();
-    });
+    } else if (action != InterruptionAction.resume) {
+      ++_playbackStartBlockGeneration;
+    }
+    _clearInterruptionOwnership();
   }
 
   Future<void> handleBecomingNoisy() async {
@@ -643,31 +547,9 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       ++_playbackStartBlockGeneration;
       _interruptionClosing = false;
       _clearInterruptionOwnership();
-      final noisyIntentGeneration = _expressPlaybackIntent(false);
-      final noisySourceGeneration = _playGeneration;
-      final noisySourceOwnerToken = _installedSourceOwnerToken;
-      final noisyMediaId = _activeItemId;
-      final noisyIndex = _currentIndex;
-      await _enqueueInterruptionOperation(() async {
-        bool ownsNoisyPause() =>
-            noisyIntentGeneration == _userIntentGeneration &&
-            noisySourceGeneration == _playGeneration &&
-            noisySourceOwnerToken == _installedSourceOwnerToken &&
-            noisyMediaId == _activeItemId &&
-            noisyMediaId == _installedMediaId &&
-            noisyMediaId == mediaItem.value?.id &&
-            noisyIndex == _currentIndex;
-        if (!ownsNoisyPause()) {
-          if (_userWantsPlay) {
-            _restoreAuthoritativePlaybackAfterScrubPause();
-          }
-          return;
-        }
-        await pauseInternal(clearIntent: false);
-        if (!ownsNoisyPause() && _userWantsPlay) {
-          _restoreAuthoritativePlaybackAfterScrubPause();
-        }
-      });
+      _expressPlaybackIntent(false);
+      await _commands.becomingNoisy();
+      await super.pause();
     }
   }
 
@@ -701,7 +583,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     )) {
       return;
     }
-    _restoreAuthoritativePlaybackAfterScrubPause();
+    await _commands.explicitPlay();
   }
 
   void _restoreAuthoritativePlaybackAfterScrubPause({
@@ -731,11 +613,9 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         _queue[index].id == itemId;
 
     if (!stillOwnsRestore()) return;
-    final started = _startPlayer(
-      provenance: startProvenance,
-      stillOwnsStart: stillOwnsRestore,
-    );
-    if (started && stillOwnsRestore()) {
+    final started = stillOwnsRestore();
+    if (started) {
+      unawaited(_commands.explicitPlay());
       _publishPlaybackState(playingOverride: true);
     }
   }
@@ -749,57 +629,48 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     final sourceGeneration = _playGeneration;
     final seekGeneration = ++_seekGeneration;
 
-    return _withSourceMutation(() async {
-      bool ownsSeek() =>
-          sourceGeneration == _playGeneration &&
-          seekGeneration == _seekGeneration;
-      if (!ownsSeek()) return null;
+    bool ownsSeek() =>
+        sourceGeneration == _playGeneration &&
+        seekGeneration == _seekGeneration;
+    if (!ownsSeek()) return null;
 
-      final dur = _player.duration;
-      var target = position;
+    final dur = _player.duration;
+    var target = position;
+    if (target.isNegative) target = Duration.zero;
+    if (dur != null && dur > Duration.zero && target > dur) {
+      target = dur - const Duration(milliseconds: 80);
       if (target.isNegative) target = Duration.zero;
-      if (dur != null && dur > Duration.zero && target > dur) {
-        target = dur - const Duration(milliseconds: 80);
-        if (target.isNegative) target = Duration.zero;
-      }
+    }
 
-      // just_audio ignores seeks while loading. Wait only for source readiness,
-      // never for the position to settle.
-      for (var i = 0; i < 50 && ownsSeek(); i++) {
-        final ps = _player.processingState;
-        if (ps == ProcessingState.ready ||
-            ps == ProcessingState.buffering ||
-            ps == ProcessingState.completed) {
-          break;
-        }
-        await Future<void>.delayed(const Duration(milliseconds: 40));
-      }
+    // just_audio ignores seeks while loading. Wait only for source readiness,
+    // never for the position to settle.
+    for (var i = 0; i < 50 && ownsSeek(); i++) {
       final ps = _player.processingState;
-      if (!ownsSeek() ||
-          ps == ProcessingState.loading ||
-          ps == ProcessingState.idle) {
-        debugPrint('[AudioHandler] seek skipped: still $ps');
-        return null;
+      if (ps == ProcessingState.ready ||
+          ps == ProcessingState.buffering ||
+          ps == ProcessingState.completed) {
+        break;
       }
+      await Future<void>.delayed(const Duration(milliseconds: 40));
+    }
+    final ps = _player.processingState;
+    if (!ownsSeek() ||
+        ps == ProcessingState.loading ||
+        ps == ProcessingState.idle) {
+      debugPrint('[AudioHandler] seek skipped: still $ps');
+      return null;
+    }
 
-      try {
-        await _player.seek(target);
-      } catch (e) {
-        debugPrint('[AudioHandler] seek failed: $e');
-        if (ownsSeek()) _publishPlaybackState();
-        return null;
-      }
-      if (!ownsSeek()) return null;
+    if (!await _commands.seek(target) || !ownsSeek()) return null;
 
-      var confirmed = _player.position;
-      if (confirmed.isNegative) confirmed = Duration.zero;
-      final confirmedDuration = _player.duration;
-      if (confirmedDuration != null && confirmed > confirmedDuration) {
-        confirmed = confirmedDuration;
-      }
-      _publishPlaybackState(positionOverride: confirmed);
-      return confirmed;
-    });
+    var confirmed = _player.position;
+    if (confirmed.isNegative) confirmed = Duration.zero;
+    final confirmedDuration = _player.duration;
+    if (confirmedDuration != null && confirmed > confirmedDuration) {
+      confirmed = confirmedDuration;
+    }
+    _publishPlaybackState(positionOverride: confirmed);
+    return confirmed;
   }
 
   @override
@@ -819,6 +690,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   Future<void> skipToNext({bool seamless = false}) async {
     final provenance = _captureStartProvenance();
     final intentGeneration = _expressPlayIntent();
+    unawaited(_commands.explicitPlay());
     await _skipToNextInternal(
       seamless: seamless,
       expectedUserIntentGeneration: intentGeneration,
@@ -845,6 +717,11 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       loop: loop,
     );
     if (nextIndex < 0) return;
+    final sourceCommandToken = _commands.requestSource(
+      mediaId: _queue[nextIndex].id,
+      queueIndex: nextIndex,
+      position: Duration.zero,
+    );
 
     // 用户点「下一首」：立刻停当前曲，避免听感重叠。
     // 自动连播（seamless）：不要 pause/playing:false，否则锁屏下 iOS 会杀会话。
@@ -857,6 +734,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       bufferingPublication: bufferingPublication,
       expectedUserIntentGeneration: expectedUserIntentGeneration,
       provenance: provenance,
+      sourceCommandToken: sourceCommandToken,
     );
   }
 
@@ -864,6 +742,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   Future<void> skipToPrevious() async {
     final provenance = _captureStartProvenance();
     final intentGeneration = _expressPlayIntent();
+    unawaited(_commands.explicitPlay());
     await _skipToPreviousInternal(
       expectedUserIntentGeneration: intentGeneration,
       provenance: provenance,
@@ -888,6 +767,11 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       loop: loop,
     );
     if (prevIndex < 0) return;
+    final sourceCommandToken = _commands.requestSource(
+      mediaId: _queue[prevIndex].id,
+      queueIndex: prevIndex,
+      position: Duration.zero,
+    );
     final bufferingPublication = await _haltCurrentPlayback();
     await _loadQueueItem(
       prevIndex,
@@ -895,19 +779,14 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       bufferingPublication: bufferingPublication,
       expectedUserIntentGeneration: expectedUserIntentGeneration,
       provenance: provenance,
+      sourceCommandToken: sourceCommandToken,
     );
   }
 
   /// 立刻停止当前输出并广播暂停态，提升手动切歌手感。
   Future<int> _haltCurrentPlayback() async {
     _bumpGeneration();
-    try {
-      if (_player.playing) {
-        await _player.pause();
-      }
-    } catch (e) {
-      debugPrint('[AudioHandler] halt pause failed: $e');
-    }
+    await _commands.pausePreservingIntent();
     return _publishPlaybackState(override: AudioProcessingState.buffering);
   }
 
@@ -991,10 +870,18 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     final selectedItemId =
         index >= 0 && index < _queue.length ? _queue[index].id : null;
     final sourceGeneration = _playGeneration;
+    if (selectedItemId == null) return;
+    unawaited(
+        playAfterLoad ? _commands.explicitPlay() : _commands.explicitPause());
+    final sourceCommandToken = _commands.requestSource(
+      mediaId: selectedItemId,
+      queueIndex: index,
+      position: initialPosition,
+    );
     if (!playAfterLoad && _player.playing) {
       await pauseInternal(clearIntent: false);
     }
-    if (selectedItemId == null || _playGeneration != sourceGeneration) return;
+    if (_playGeneration != sourceGeneration) return;
     final selectedIndex =
         _queue.indexWhere((item) => item.id == selectedItemId);
     if (selectedIndex < 0) return;
@@ -1010,6 +897,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       playAfterLoad: latestPlayAfterLoad,
       expectedUserIntentGeneration: latestIntentGeneration,
       provenance: provenance,
+      sourceCommandToken: sourceCommandToken,
     );
   }
 
@@ -1023,6 +911,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     bool? playAfterLoad,
     int? expectedUserIntentGeneration,
     PlaybackStartProvenance? provenance,
+    int? sourceCommandToken,
   }) async {
     if (index < 0 || index >= _queue.length) return;
 
@@ -1031,11 +920,15 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     if (!preserveUserIntent) _userWantsPlay = true;
     final item = _queue[index];
     final itemId = item.id;
-    bool ownsExpectedUserIntent() =>
-        expectedUserIntentGeneration == null ||
-        expectedUserIntentGeneration == _userIntentGeneration;
+    final commandToken = sourceCommandToken ??
+        _commands.requestSource(
+          mediaId: itemId,
+          queueIndex: index,
+          position: initialPosition,
+        );
     int activeItemIndex() {
       if (_isStale(gen) ||
+          !_commands.ownsSourceRequest(commandToken) ||
           _activeItemId != itemId ||
           mediaItem.value?.id != itemId) {
         return -1;
@@ -1094,7 +987,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
       if (url == null || url.isEmpty) {
         if (_player.playing) {
-          await _player.pause();
+          await _commands.pausePreservingIntent();
         }
         transactionIndex = activeItemIndex();
         if (transactionIndex < 0) return;
@@ -1139,38 +1032,30 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       mediaItem.add(updatedItem);
       _activeItemId = itemId;
 
-      // URL 解析在锁外；共享 player source 的安装和恢复停止串行执行。
+      // URL 解析在协调器外；提交结果时必须仍拥有源请求。
       if (_isStale(gen)) return;
       var recoverAuthoritative = false;
-      await _withSourceMutation(() async {
-        transactionIndex = activeItemIndex();
-        if (transactionIndex < 0) return;
-        final installToken = ++_sourceInstallToken;
-        _installedSourceOwnerToken = installToken;
-        sourceInstallAttempted = true;
-        try {
-          await _player.setAudioSource(
-            audioSourceFor(url!, tag: updatedItem),
-            initialPosition: initialPosition,
-          );
-        } catch (_) {
-          if (_installedSourceOwnerToken == installToken &&
-              activeItemIndex() >= 0 &&
-              manualBufferingPublication == _playbackPublicationToken) {
-            _publishPlaybackState();
-          }
-          rethrow;
+      transactionIndex = activeItemIndex();
+      if (transactionIndex < 0 || !_commands.ownsSourceRequest(commandToken)) {
+        return;
+      }
+      sourceInstallAttempted = true;
+      final installed = await _commands.commitSource(
+        commandToken,
+        audioSourceFor(url, tag: updatedItem),
+      );
+      sourceTransitionFollows = true;
+      if (!installed) {
+        if (recoverStaleInstall && _activeItemId != itemId) {
+          await _recoverAuthoritativeSource(provenance: startProvenance);
         }
-        sourceTransitionFollows = true;
-        if (_installedSourceOwnerToken != installToken) return;
-        transactionIndex = activeItemIndex();
-        if (transactionIndex < 0) {
-          await _player.stop();
-          recoverAuthoritative = recoverStaleInstall &&
-              _installedSourceOwnerToken == installToken &&
-              _playGeneration == gen;
-          return;
-        }
+        return;
+      }
+      _installedSourceOwnerToken = commandToken;
+      transactionIndex = activeItemIndex();
+      if (transactionIndex < 0) {
+        recoverAuthoritative = recoverStaleInstall && _playGeneration == gen;
+      } else {
         _installedPlaybackGeneration = gen;
         _installedMediaId = itemId;
         _adoptInstalledSourceForInterruption(
@@ -1178,52 +1063,10 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
           mediaId: itemId,
         );
         _publishPlaybackState(
-          playingOverride:
-              seamless && _userWantsPlay && !interruptionActive ? true : null,
+          playingOverride: _commands.effectivePlaying ? true : null,
         );
-        if (_installedSourceOwnerToken != installToken ||
-            activeItemIndex() < 0) {
-          return;
-        }
-        // completed 后 engine playing 可能为 false，以当前用户意图决定是否续播。
-        final shouldPlay =
-            ownsExpectedUserIntent() && (playAfterLoad ?? _userWantsPlay);
-        if (shouldPlay) {
-          final startIndex = transactionIndex;
-          final startIntentGeneration = _userIntentGeneration;
-          bool stillOwnsStart() =>
-              _mayStartAfterInterruption(
-                provenance: startProvenance,
-              ) &&
-              _installedSourceOwnerToken == installToken &&
-              _installedPlaybackGeneration == gen &&
-              _playGeneration == gen &&
-              _installedMediaId == itemId &&
-              _activeItemId == itemId &&
-              mediaItem.value?.id == itemId &&
-              _currentIndex == startIndex &&
-              startIndex >= 0 &&
-              startIndex < _queue.length &&
-              _queue[startIndex].id == itemId &&
-              _userIntentGeneration == startIntentGeneration &&
-              ownsExpectedUserIntent() &&
-              (playAfterLoad != null || _userWantsPlay);
-
-          final started = _startPlayer(
-            provenance: startProvenance,
-            stillOwnsStart: stillOwnsStart,
-          );
-          if (!started ||
-              _installedSourceOwnerToken != installToken ||
-              activeItemIndex() < 0 ||
-              _userIntentGeneration != startIntentGeneration ||
-              (playAfterLoad == null && !_userWantsPlay)) {
-            return;
-          }
-          _publishPlaybackState(playingOverride: true);
-        }
         if (!_isStale(gen)) _schedulePreload();
-      });
+      }
       if (recoverAuthoritative) {
         await _recoverAuthoritativeSource(provenance: startProvenance);
       }
@@ -1274,6 +1117,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       {int initialIndex = 0}) async {
     final provenance = _captureStartProvenance();
     _expressPlayIntent();
+    unawaited(_commands.explicitPlay());
     _bumpGeneration();
     _queue
       ..clear()
@@ -1317,6 +1161,14 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         : _queue.indexWhere((item) => item.id == currentId);
     _currentIndex = retained >= 0 ? retained : 0;
     _activeItemId = _queue[_currentIndex].id;
+    if (retained < 0) {
+      _bumpGeneration();
+      _commands.requestSource(
+        mediaId: _activeItemId!,
+        queueIndex: _currentIndex,
+        position: Duration.zero,
+      );
+    }
     this.queue.add(List.unmodifiable(_queue));
     mediaItem.add(_queue[_currentIndex]);
     _publishPlaybackState();
@@ -1326,15 +1178,6 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   Future<void> addQueueItem(MediaItem mediaItem) async {
     _queue.add(mediaItem);
     queue.add(List.from(_queue));
-
-    await _withSourceMutation(() async {
-      if (_player.audioSource is ConcatenatingAudioSource) {
-        final source = _player.audioSource as ConcatenatingAudioSource;
-        final url = mediaItem.extras?['url']?.toString() ?? '';
-        await source.add(
-            audioSourceFor(url.startsWith('data:') ? '' : url, tag: mediaItem));
-      }
-    });
   }
 
   @override
@@ -1353,11 +1196,12 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       if (removedCurrent && wasPlaying) {
         bufferingPublication = await _haltCurrentPlayback();
         index = _queue.indexWhere((item) => item.id == targetId);
-        if (index < 0 ||
-            this.mediaItem.value?.id != targetId ||
-            _activeItemId != targetId) {
+        if (index < 0) {
           return;
         }
+        _currentIndex = index;
+        _activeItemId = targetId;
+        this.mediaItem.add(_queue[index]);
       }
       _queue.removeAt(index);
 
@@ -1376,12 +1220,18 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       final replacementIndex = index.clamp(0, _queue.length - 1);
       if (removedCurrent) {
         final replacementId = _queue[replacementIndex].id;
+        final sourceCommandToken = _commands.requestSource(
+          mediaId: replacementId,
+          queueIndex: replacementIndex,
+          position: Duration.zero,
+        );
         queue.add(List.unmodifiable(_queue));
         await _loadQueueItem(
           replacementIndex,
           preserveUserIntent: true,
           bufferingPublication: bufferingPublication,
           provenance: provenance,
+          sourceCommandToken: sourceCommandToken,
         );
         var relocatedReplacement =
             _queue.indexWhere((item) => item.id == replacementId);
@@ -1414,15 +1264,6 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       queue.add(List.unmodifiable(_queue));
       this.mediaItem.add(currentItem);
       _publishPlaybackState();
-
-      await _withSourceMutation(() async {
-        if (_player.audioSource is ConcatenatingAudioSource) {
-          final source = _player.audioSource as ConcatenatingAudioSource;
-          if (index < source.length) {
-            await source.removeAt(index);
-          }
-        }
-      });
     }
   }
 
@@ -1431,7 +1272,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     _repeatMode = repeatMode;
     _publishPlaybackState();
     // Single-source repeat is explicit so every replay emits one completion.
-    await _player.setLoopMode(LoopMode.off);
+    await _commands.setLoopMode(LoopMode.off);
   }
 
   @override
@@ -1439,7 +1280,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     final enabled = shuffleMode == AudioServiceShuffleMode.all;
     _shuffleMode = shuffleMode;
     _publishPlaybackState();
-    await _player.setShuffleModeEnabled(enabled);
+    await _commands.setShuffleModeEnabled(enabled);
   }
 
   /// 合并 extras 到队列中指定 id 的项（不切换当前曲）。
@@ -1482,14 +1323,24 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     queue.add(List.from(_queue));
     final sourceGeneration = _playGeneration;
     final initialIntentGeneration = _userIntentGeneration;
+    final initialIndex = reloadItemId == null
+        ? -1
+        : _queue.indexWhere((item) => item.id == reloadItemId);
+    if (initialIndex < 0 || _currentIndex != initialIndex) return;
+    final sourceCommandToken = _commands.requestSource(
+      mediaId: reloadItemId!,
+      queueIndex: initialIndex,
+      position: reloadIntent.position,
+    );
+    unawaited(
+      _commands.setPlayingPreservingIntent(reloadIntent.resumeAfterReload),
+    );
     if (reloadIntent.resumeAfterReload) {
       await pauseInternal(clearIntent: false);
     }
     if (_playGeneration != sourceGeneration) return;
 
-    final idx = reloadItemId == null
-        ? -1
-        : _queue.indexWhere((item) => item.id == reloadItemId);
+    final idx = _queue.indexWhere((item) => item.id == reloadItemId);
     if (idx < 0 ||
         _currentIndex != idx ||
         mediaItem.value?.id != reloadItemId ||
@@ -1507,6 +1358,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       playAfterLoad: playAfterLoad,
       expectedUserIntentGeneration: intentGeneration,
       provenance: provenance,
+      sourceCommandToken: sourceCommandToken,
     );
   }
 }

@@ -298,19 +298,15 @@ void main() {
   });
 
   test('post-load identity check guards play and preload', () {
-    final source = File('lib/core/audio/audio_handler.dart').readAsStringSync();
+    final source = File('lib/core/audio/playback_command_coordinator.dart')
+        .readAsStringSync();
     final transaction = source.substring(
       source.indexOf('await _player.setAudioSource('),
-      source.indexOf(
-          '} catch (e) {', source.indexOf('await _player.setAudioSource(')),
+      source.indexOf('_desiredSeek != null'),
     );
-    final validation = transaction.indexOf('activeItemIndex()');
+    final validation = transaction.indexOf('_installedSourceToken');
     expect(validation, greaterThanOrEqualTo(0));
-    expect(
-      validation,
-      lessThan(transaction.indexOf('_startPlayer(')),
-    );
-    expect(validation, lessThan(transaction.indexOf('_schedulePreload();')));
+    expect(source, contains('ownsSourceRequest'));
   });
 
   for (final replacementId in [null, 'D']) {
@@ -521,8 +517,7 @@ void main() {
     expect(handler.mediaItem.value?.id, 'A');
   });
 
-  test('newer install waits for stale recovery stop and remains current',
-      () async {
+  test('newer install waits for stale install and remains current', () async {
     MediaItem item(String id) => MediaItem(
           id: id,
           title: id,
@@ -536,23 +531,23 @@ void main() {
     final staleLoad = handler.skipToQueueItem(0);
     await staleInstall.started.future;
     await handler.updateQueue([item('B')]);
-    final recoveryStop = player.gateNextStop();
+    final recoveryInstall = player.queueSourceLoadGate();
     staleInstall.release.complete();
-    await recoveryStop.started.future;
+    await recoveryInstall.started.future;
 
     final newerLoad = handler.skipToQueueItem(0);
-    expect(player.sourceLoadCalls, 1);
-    recoveryStop.release.complete();
+    expect(player.sourceLoadCalls, 2);
+    recoveryInstall.release.complete();
     await staleLoad;
     await newerLoad;
 
-    expect(player.sourceLoadCalls, 2);
+    expect(player.sourceLoadCalls, 3);
     expect(player.playing, isTrue);
     expect((player.loadedSource as ProgressiveAudioSource).tag.id, 'B');
     expect(handler.mediaItem.value?.id, 'B');
   });
 
-  test('bounded non-recovering stale stop releases source gate', () async {
+  test('bounded non-recovering stale install releases source gate', () async {
     MediaItem item(String id) => MediaItem(
           id: id,
           title: id,
@@ -570,13 +565,9 @@ void main() {
     staleInstall.release.complete();
     await recoveryInstall.started.future;
     await handler.updateQueue([item('A')]);
-    final boundedStop = player.gateNextStop();
     recoveryInstall.release.complete();
-    await boundedStop.started.future;
 
     final newerLoad = handler.skipToQueueItem(0);
-    expect(player.sourceLoadCalls, 2);
-    boundedStop.release.complete();
     await staleLoad;
     await newerLoad;
 
@@ -586,7 +577,8 @@ void main() {
     expect(handler.mediaItem.value?.id, 'A');
   });
 
-  test('recovery stop cannot forget a completed interruption cycle', () async {
+  test('recovery install cannot forget a completed interruption cycle',
+      () async {
     MediaItem item(String id) => MediaItem(
           id: id,
           title: id,
@@ -600,13 +592,13 @@ void main() {
     final staleLoad = handler.skipToQueueItem(0);
     await staleInstall.started.future;
     await handler.updateQueue([item('B')]);
-    final recoveryStop = player.gateNextStop();
+    final recoveryInstall = player.queueSourceLoadGate();
     staleInstall.release.complete();
-    await recoveryStop.started.future;
+    await recoveryInstall.started.future;
 
     await handler.beginAudioInterruption();
     await handler.endAudioInterruption(mayResume: false);
-    recoveryStop.release.complete();
+    recoveryInstall.release.complete();
     await staleLoad;
     await pumpEventQueue();
 

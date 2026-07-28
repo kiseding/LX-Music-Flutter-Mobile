@@ -340,7 +340,25 @@ git commit -m "fix: publish only confirmed scrub positions"
 - Modify: `lib/features/player/presentation/player_screen.dart`
 
 **Interfaces:**
-- Produces: `AudioInterruptionPolicy` with `onBegin`, `onEnd`, `onBecomingNoisy`; handler-derived play mode provider.
+- Produces: `AudioInterruptionPolicy` with `onBegin`, `onEnd`, `onBecomingNoisy`; handler-derived play mode provider; one serialized playback-command coordinator for all shared `AudioPlayer` mutations.
+
+**Approved architecture amendment (2026-07-28):** Generation checks spread across independent native futures produced repeated ownership races during review. Add `lib/core/audio/playback_command_coordinator.dart`, record user intent and interruption blocking synchronously, keep URL/network resolution outside the command queue, and route `play`, `pause`, `stop`, `seek`, `setAudioSource`, `setLoopMode`, and `setShuffleModeEnabled` through one coordinator. Native completions re-enter the coordinator with a command token and are side-effect free when stale. A final reconcile step applies the latest desired source, position, playing, loop, and shuffle state; it defers playback while interruption depth is nonzero, resumes pending or installed sources after a fully resumable cycle, and suppresses automatic resume after any nested non-resumable end until newer explicit play.
+
+### Task 6A: Unified Serialized Playback Commands
+
+**Files:**
+- Create: `lib/core/audio/playback_command_coordinator.dart`
+- Create: `test/core/audio/playback_command_coordinator_test.dart`
+- Modify: `lib/core/audio/audio_handler.dart`
+- Modify: interruption, quality, scrub, playback-state, lock-screen, seek, and queue tests.
+
+**TDD sequence:**
+
+1. Add completer-gated coordinator tests for no overlapping awaited native mutation, ordered loop/shuffle, and stale play lifecycle completion.
+2. Implement desired source, intent, interruption, noisy, loop, and shuffle state plus one serialized reconcile drain.
+3. Add RED handler tests for resumable/non-resumable interruption cycles before URL resolution and source installation, and explicit play authority transfer to an older paused selection.
+4. Migrate every handler native mutation to coordinator desired-state methods, retaining generations only for queue and resolver authority.
+5. Re-run the prior interruption/scrub/quality/completion/removal/recovery matrix, then full audio/queue and full Flutter verification.
 
 - [ ] **Step 1: Add failing interruption-policy tests**
 

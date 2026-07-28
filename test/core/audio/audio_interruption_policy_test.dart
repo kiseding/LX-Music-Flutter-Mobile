@@ -498,7 +498,7 @@ void main() {
 
   test('play idle recovery cannot forget a completed interruption cycle',
       () async {
-    final stopGate = _Gate();
+    final sourceGate = _Gate();
     final player = _InterruptionAudioPlayer();
     final handler = LxAudioHandler(player: player);
     addTearDown(player.dispose);
@@ -507,14 +507,14 @@ void main() {
     await handler.pause();
     player
       ..setProcessingState(ProcessingState.idle)
-      ..gateNextStop(stopGate);
+      ..gateNextSourceInstall(sourceGate);
     final playCalls = player.playCalls;
 
     final play = handler.play();
-    await stopGate.started.future;
+    await sourceGate.started.future;
     await handler.beginAudioInterruption();
     await handler.endAudioInterruption(mayResume: false);
-    stopGate.release.complete();
+    sourceGate.release.complete();
     await play;
     await pumpEventQueue();
 
@@ -545,8 +545,7 @@ void main() {
     expect(player.playing, isFalse);
   });
 
-  test('paused selection cannot adopt fresh play after completed cycle',
-      () async {
+  test('explicit play transfers authority to older paused selection', () async {
     final pauseGate = _Gate();
     final player = _InterruptionAudioPlayer();
     final handler = LxAudioHandler(player: player);
@@ -557,15 +556,18 @@ void main() {
 
     final selection = handler.skipToQueueItem(1, playAfterLoad: false);
     await pauseGate.started.future;
-    await handler.beginAudioInterruption();
-    await handler.endAudioInterruption(mayResume: false);
-    await handler.play();
+    final begin = handler.beginAudioInterruption();
+    final end = handler.endAudioInterruption(mayResume: false);
+    final play = handler.play();
     pauseGate.release.complete();
+    await begin;
+    await end;
+    await play;
     await selection;
     await pumpEventQueue();
 
     expect(handler.mediaItem.value?.id, 'B');
-    expect(player.playing, isFalse);
+    expect(player.playing, isTrue);
   });
 
   test('play completing after interruption pause cannot restart output',
@@ -764,6 +766,7 @@ class _InterruptionAudioPlayer extends AudioPlayer {
   Duration _position = Duration.zero;
   final List<_Gate> _pauseGates = [];
   final List<_Gate> _playGates = [];
+  final List<_Gate> _sourceGates = [];
   _Gate? _seekGate;
   _Gate? _stopGate;
   int pauseCalls = 0;
@@ -772,6 +775,8 @@ class _InterruptionAudioPlayer extends AudioPlayer {
   void gateNextPause(_Gate gate) => _pauseGates.add(gate);
 
   void gateNextPlay(_Gate gate) => _playGates.add(gate);
+
+  void gateNextSourceInstall(_Gate gate) => _sourceGates.add(gate);
 
   void gateNextSeek(_Gate gate) => _seekGate = gate;
 
@@ -804,6 +809,11 @@ class _InterruptionAudioPlayer extends AudioPlayer {
     int? initialIndex,
     Duration? initialPosition,
   }) async {
+    final gate = _sourceGates.isEmpty ? null : _sourceGates.removeAt(0);
+    if (gate != null) {
+      gate.started.complete();
+      await gate.release.future;
+    }
     _source = source;
     _processingState = ProcessingState.ready;
     return null;

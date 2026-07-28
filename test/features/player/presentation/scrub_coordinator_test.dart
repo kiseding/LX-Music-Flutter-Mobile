@@ -377,15 +377,14 @@ void main() {
 
     final oldBegin = coordinator.begin();
     await oldPauseGate.started.future;
-    final newerGeneration = await coordinator.begin();
+    final newerBegin = coordinator.begin();
+    oldPauseGate.release.complete();
+    final newerGeneration = await newerBegin;
     await coordinator.finish(
       newerGeneration,
       const Duration(seconds: 30),
       resumeAfter: true,
     );
-    expect(player.playing, isTrue);
-
-    oldPauseGate.release.complete();
     await oldBegin;
 
     expect(player.playing, isTrue);

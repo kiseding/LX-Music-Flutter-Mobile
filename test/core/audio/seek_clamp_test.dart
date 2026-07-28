@@ -37,7 +37,7 @@ void main() {
       handler.indexOf('Future<void> play() async'),
       handler.indexOf('/// 供测试：模拟当前曲播放完成'),
     );
-    expect(play, contains('_startPlayer(provenance: provenance);'));
+    expect(play, contains('_commands.explicitPlay()'));
     expect(play, isNot(contains('await _player.play()')));
   });
 
@@ -253,8 +253,9 @@ void main() {
       stillOwnsScrub: () => true,
     );
     await pauseGate.started.future;
-    await handler.skipToQueueItem(1);
+    final selection = handler.skipToQueueItem(1);
     pauseGate.release.complete();
+    await selection;
     await scrubPause;
 
     expect(handler.mediaItem.value?.id, 'B');
