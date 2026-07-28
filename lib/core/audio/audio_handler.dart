@@ -115,6 +115,20 @@ String playQualityToken(AudioQualityToken token) {
   }
 }
 
+/// FLAC/无损 seek 解码更慢；给更长 settle 窗口，但只 seek 一次。
+Duration seekBudgetForQuality(String? quality) {
+  final q = (quality ?? '').toLowerCase();
+  if (q.contains('flac') ||
+      q.contains('hires') ||
+      q.contains('ape') ||
+      q.contains('wav') ||
+      q.contains('alac') ||
+      q.contains('dsd')) {
+    return const Duration(milliseconds: 1200);
+  }
+  return const Duration(milliseconds: 500);
+}
+
 class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   final AudioPlayer _player = AudioPlayer();
   final List<MediaItem> _queue = [];
@@ -358,14 +372,18 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     _broadcastState(_player.playbackEvent);
   }
 
-  /// 以屏幕显示时间为准，在 [budget] 内把引擎 position 拉到目标附近。
-  /// 返回引擎最终确认的位置（可能仍略有偏差）。
+  /// 以屏幕显示时间为准：只 seek 一次，再在 [budget] 内等待引擎 position 对齐。
+  /// FLAC 上反复 seek 会打断解码，造成「进度已到、声音还在旧位置」。
   Future<Duration> seekToDisplay(
     Duration displayPosition, {
-    Duration budget = const Duration(milliseconds: 500),
+    Duration? budget,
     Duration tolerance = const Duration(milliseconds: 120),
   }) async {
-    final deadline = DateTime.now().add(budget);
+    final quality = mediaItem.value?.extras?['actualQuality']?.toString() ??
+        mediaItem.value?.extras?['requestedQuality']?.toString() ??
+        preferredQuality;
+    final settleBudget = budget ?? seekBudgetForQuality(quality);
+    final deadline = DateTime.now().add(settleBudget);
     var target = displayPosition;
     if (target.isNegative) target = Duration.zero;
 
@@ -373,12 +391,15 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
     while (DateTime.now().isBefore(deadline)) {
       final p = _player.position;
-      if ((p - target).inMilliseconds.abs() <= tolerance.inMilliseconds) {
+      final near =
+          (p - target).inMilliseconds.abs() <= tolerance.inMilliseconds;
+      final ready = _player.processingState == ProcessingState.ready ||
+          _player.processingState == ProcessingState.buffering ||
+          _player.processingState == ProcessingState.completed;
+      if (near && ready) {
         _broadcastState(_player.playbackEvent);
         return p;
       }
-      // 引擎还没跟上屏幕：再 seek 一次拉回显示时间
-      await seek(target);
       await Future<void>.delayed(const Duration(milliseconds: 25));
     }
 

@@ -244,7 +244,7 @@ class ScrubCoordinator {
     await _pauseFuture;
     if (generation != _generation) return;
 
-    // 屏幕显示时间是权威：先钉在目标，再把引擎往屏幕拉
+    // 屏幕显示时间是权威：先钉在目标，再把引擎往屏幕拉（只 seek 一次）
     final posNotifier = _ref.read(playerPositionProvider.notifier);
     posNotifier.unfreeze(position);
     posNotifier.freeze();
@@ -252,21 +252,21 @@ class ScrubCoordinator {
     final h =
         audioHandler is LxAudioHandler ? audioHandler as LxAudioHandler : null;
     if (h != null) {
-      await h.seekToDisplay(position);
+      final quality = h.mediaItem.value?.extras?['actualQuality']?.toString() ??
+          h.mediaItem.value?.extras?['requestedQuality']?.toString() ??
+          h.preferredQuality;
+      await h.seekToDisplay(
+        position,
+        budget: seekBudgetForQuality(quality),
+      );
     } else {
       await _ref.read(playerServiceProvider).seek(position);
     }
     if (generation != _generation) return;
 
+    // FLAC：起播后再 seek 会打断解码，声音落后 UI；只 play 一次。
     if (resumeAfter && h != null) {
       await h.play();
-      // 起播后再拉一次，抵消 iOS 起播瞬间的位置漂移
-      if (generation == _generation) {
-        await h.seekToDisplay(
-          position,
-          budget: const Duration(milliseconds: 200),
-        );
-      }
     }
 
     if (generation != _generation) return;

@@ -18,17 +18,34 @@ void main() {
     expect(handler, isNot(contains('await _player.play()')));
   });
 
-  test('handler can pull engine position to display time within 500ms', () {
+  test('seekToDisplay seeks once then waits instead of re-seeking in a loop',
+      () {
     final handler = File(
       'lib/core/audio/audio_handler.dart',
     ).readAsStringSync();
-    expect(handler, contains('Future<Duration> seekToDisplay('));
-    expect(handler, contains('milliseconds: 500'));
-    expect(handler, contains('inMilliseconds.abs()'));
+    final method = handler.substring(
+      handler.indexOf('Future<Duration> seekToDisplay('),
+      handler.indexOf('Future<void> stop() async'),
+    );
+
+    // Exactly one engine seek for alignment (await seek(...)).
+    expect('await seek('.allMatches(method).length, 1);
+    expect(method, contains('ProcessingState.ready'));
+    expect(method, contains('milliseconds: 25'));
+    // Must not call seek again inside the wait loop.
+    expect(method, isNot(contains('// 引擎还没跟上屏幕：再 seek 一次')));
   });
 
-  test('scrub treats screen time as authority and aligns engine within budget',
-      () {
+  test('lossless formats get a longer seek settle budget', () {
+    final handler = File(
+      'lib/core/audio/audio_handler.dart',
+    ).readAsStringSync();
+    expect(handler, contains('Duration seekBudgetForQuality('));
+    expect(handler, contains('flac'));
+    expect(handler, contains('milliseconds: 1200'));
+  });
+
+  test('scrub does not re-seek after play which restarts flac decode', () {
     final provider = File(
       'lib/features/player/presentation/player_provider.dart',
     ).readAsStringSync();
@@ -37,18 +54,15 @@ void main() {
       provider.indexOf('final scrubCoordinatorProvider'),
     );
 
-    expect(scrub, contains('seekToDisplay(position'));
-    expect(scrub, contains('unfreeze(position)'));
-    // 屏幕时间先钉住，再把引擎往屏幕拉；最终仍 unfreeze 到屏幕目标
-    expect(
-      scrub.indexOf('unfreeze(position)'),
-      lessThan(scrub.indexOf('seekToDisplay(position')),
-    );
-    expect(
-      scrub.lastIndexOf('unfreeze(position)'),
-      greaterThan(scrub.indexOf('seekToDisplay(position')),
-    );
+    expect(scrub, contains('seekToDisplay('));
+    expect(scrub, contains('seekBudgetForQuality'));
     expect(scrub, contains('await h.play()'));
+    // Post-play second seekToDisplay is the FLAC desync trigger.
+    expect(
+      scrub.split('seekToDisplay(').length - 1,
+      1,
+      reason: 'only one seekToDisplay per scrub finish',
+    );
   });
 
   test('full and mini player use the shared scrub transaction', () {
