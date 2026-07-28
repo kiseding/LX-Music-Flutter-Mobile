@@ -134,7 +134,7 @@ String playQualityToken(AudioQualityToken token) {
 }
 
 class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
-  final AudioPlayer _player = AudioPlayer();
+  final AudioPlayer _player;
   final List<MediaItem> _queue = [];
   int _currentIndex = 0;
 
@@ -156,7 +156,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   // 注入错误回调
   void Function(String message)? onError;
 
-  LxAudioHandler() {
+  LxAudioHandler({AudioPlayer? player}) : _player = player ?? AudioPlayer() {
     // 初始化 playbackState，避免 value 访问时抛异常
     playbackState.add(PlaybackState(
       controls: [
@@ -717,6 +717,11 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     if (index != -1) {
       final currentId = this.mediaItem.value?.id;
       final removedCurrent = currentId == mediaItem.id;
+      final wasPlaying = _player.playing;
+      final wantedPlay = _userWantsPlay;
+      if (removedCurrent && wasPlaying) {
+        await _haltCurrentPlayback();
+      }
       _queue.removeAt(index);
 
       if (_queue.isEmpty) {
@@ -731,11 +736,20 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       final retainedIndex = currentId == null
           ? -1
           : _queue.indexWhere((item) => item.id == currentId);
-      _currentIndex = removedCurrent
-          ? index.clamp(0, _queue.length - 1)
-          : retainedIndex >= 0
-              ? retainedIndex
-              : _currentIndex.clamp(0, _queue.length - 1);
+      final replacementIndex = index.clamp(0, _queue.length - 1);
+      if (removedCurrent) {
+        queue.add(List.unmodifiable(_queue));
+        await skipToQueueItem(replacementIndex);
+        if (!wasPlaying) {
+          await pauseInternal(clearIntent: false);
+        }
+        _userWantsPlay = wantedPlay;
+        return;
+      }
+
+      _currentIndex = retainedIndex >= 0
+          ? retainedIndex
+          : _currentIndex.clamp(0, _queue.length - 1);
       final currentItem = _queue[_currentIndex];
       _activeItemId = currentItem.id;
       queue.add(List.unmodifiable(_queue));
