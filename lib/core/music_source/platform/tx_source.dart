@@ -3,7 +3,6 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import '../../../features/player/domain/music_item.dart';
 import 'music_platform.dart';
-import 'source_utils.dart';
 
 class TxSource extends MusicPlatform {
   @override
@@ -110,6 +109,30 @@ class TxSource extends MusicPlatform {
   @override
   Future<String?> getMusicUrl(MusicItem music,
       {String quality = '128k'}) async {
+    return _getMusicUrl(music, quality: quality, exact: false);
+  }
+
+  @override
+  Future<String?> getMusicUrlExact(MusicItem music,
+      {required String quality}) async {
+    return _getMusicUrl(music, quality: quality, exact: true);
+  }
+
+  @override
+  Future<ExactPlayUrl?> getMusicUrlExactDetailed(MusicItem music,
+      {required String quality}) async {
+    final url = await getMusicUrlExact(music, quality: quality);
+    if (url == null) return null;
+    final actual = switch (exactAttemptKeyForQuality(quality)) {
+      'F000' => 'flac',
+      'M800' => '320k',
+      _ => '128k',
+    };
+    return ExactPlayUrl(url: url, actualQuality: actual);
+  }
+
+  Future<String?> _getMusicUrl(MusicItem music,
+      {required String quality, required bool exact}) async {
     try {
       final songmid = music.songmid ?? music.id;
       if (songmid.isEmpty) return null;
@@ -122,8 +145,9 @@ class TxSource extends MusicPlatform {
       final urlDio =
           createDioForService(headers: {'Referer': 'https://y.qq.com/'});
 
-      // 按音质尝试文件名前缀；高音质失败时由外层 qualityChain 降级再调本方法
-      for (final filename in _txFilenames(songmid, mediaMid, quality)) {
+      for (final filename in exact
+          ? exactFilenames(songmid, mediaMid, quality)
+          : _txFilenames(songmid, mediaMid, quality)) {
         try {
           final resp = await urlDio.get(
             'https://c.y.qq.com/base/fcgi-bin/fcg_music_express_mobile3.fcg',
@@ -157,6 +181,7 @@ class TxSource extends MusicPlatform {
             }
           }
           if (vkey == null || vkey.isEmpty) continue;
+          if (exact && !isExactResponseFilename(quality, outName)) continue;
           return 'https://dl.stream.qqmusic.qq.com/$outName?vkey=$vkey&guid=$guid&uin=0&fromtag=66';
         } catch (_) {
           continue;
@@ -169,6 +194,53 @@ class TxSource extends MusicPlatform {
   }
 
   /// QQ 文件名前缀：F000 flac / M800 320k / M500 128k mp3 / C400 m4a
+  static List<String> exactFilenames(
+      String songmid, String mediaMid, String quality) {
+    switch (quality) {
+      case 'hires':
+      case 'flac24bit':
+      case 'flac':
+        return [
+          'F000$mediaMid.flac',
+          if (mediaMid != songmid) 'F000$songmid.flac'
+        ];
+      case '320k':
+        return ['M800$songmid.mp3'];
+      case '128k':
+        return ['M500$songmid.mp3', 'C400$songmid.m4a'];
+      default:
+        return [];
+    }
+  }
+
+  static String? exactAttemptKeyForQuality(String quality) {
+    switch (quality) {
+      case 'hires':
+      case 'flac24bit':
+      case 'flac':
+        return 'F000';
+      case '320k':
+        return 'M800';
+      case '128k':
+        return 'M500/C400';
+      default:
+        return null;
+    }
+  }
+
+  static bool isExactResponseFilename(String quality, String filename) {
+    final key = exactAttemptKeyForQuality(quality);
+    if (key == 'F000') return filename.startsWith('F000');
+    if (key == 'M800') return filename.startsWith('M800');
+    if (key == 'M500/C400') {
+      return filename.startsWith('M500') || filename.startsWith('C400');
+    }
+    return false;
+  }
+
+  @override
+  String? exactAttemptKey(String quality) => exactAttemptKeyForQuality(quality);
+
   static List<String> _txFilenames(
       String songmid, String mediaMid, String quality) {
     switch (quality) {

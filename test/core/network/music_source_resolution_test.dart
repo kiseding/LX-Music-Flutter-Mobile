@@ -156,4 +156,118 @@ void main() {
     );
     expect(calls, ['flac']);
   });
+
+  test('later custom source exact result beats earlier provisional result',
+      () async {
+    final calls = <String>[];
+    final service = MusicSourceService(
+      CustomSourceService(),
+      enabledCustomSourceIds: () => ['A', 'B'],
+      customSourceQualityResolver:
+          (sourceId, music, quality, cancelToken) async {
+        calls.add('$sourceId:$quality');
+        return sourceId == 'A'
+            ? playable(quality, actual: '128k')
+            : playable(quality);
+      },
+    );
+
+    final result = await service.resolvePlayableUrl(
+      item,
+      preferredQuality: 'flac',
+    );
+
+    expect(calls, ['A:flac', 'B:flac']);
+    expect(result?.actualQuality, 'flac');
+    expect(result?.requestedQuality, 'flac');
+  });
+
+  test('best provisional result improves by actual quality across sources',
+      () async {
+    final service = MusicSourceService(
+      CustomSourceService(),
+      enabledCustomSourceIds: () => ['A', 'B'],
+      customSourceQualityResolver:
+          (sourceId, music, quality, cancelToken) async {
+        if (quality != 'flac') return null;
+        return sourceId == 'A'
+            ? playable(quality, actual: '128k')
+            : playable(quality, actual: '192k');
+      },
+    );
+
+    final result = await service.resolvePlayableUrl(
+      item,
+      preferredQuality: 'flac',
+    );
+
+    expect(result?.actualQuality, '192k');
+    expect(result?.requestedQuality, 'flac');
+  });
+
+  test('equal provisional quality keeps earlier source priority', () async {
+    final service = MusicSourceService(
+      CustomSourceService(),
+      enabledCustomSourceIds: () => ['A', 'B'],
+      customSourceQualityResolver:
+          (sourceId, music, quality, cancelToken) async {
+        if (quality != 'flac') return null;
+        return PlayUrlResult(
+          url: 'https://media.example/$sourceId.mp3',
+          requestedQuality: quality,
+          actualQuality: '128k',
+          platform: 'tx',
+        );
+      },
+    );
+
+    final result = await service.resolvePlayableUrl(
+      item,
+      preferredQuality: 'flac',
+    );
+
+    expect(result?.url, 'https://media.example/A.mp3');
+  });
+
+  test('higher provisional actual quality beats later exact candidate',
+      () async {
+    final service = MusicSourceService(
+      CustomSourceService(),
+      hasEnabledCustomSources: () => true,
+      customQualityResolver: (music, quality, cancelToken) async {
+        if (quality == 'hires') return playable(quality, actual: 'flac');
+        if (quality == '320k') return playable(quality);
+        return null;
+      },
+    );
+
+    final result = await service.resolvePlayableUrl(
+      item,
+      preferredQuality: 'hires',
+    );
+
+    expect(result?.actualQuality, 'flac');
+    expect(result?.requestedQuality, 'hires');
+  });
+
+  test('progressively better downgrade replaces lower provisional result',
+      () async {
+    final service = MusicSourceService(
+      CustomSourceService(),
+      hasEnabledCustomSources: () => true,
+      customQualityResolver: (music, quality, cancelToken) async {
+        if (quality == 'flac') return playable(quality, actual: '128k');
+        if (quality == '320k') return playable(quality, actual: '192k');
+        return null;
+      },
+    );
+
+    final result = await service.resolvePlayableUrl(
+      item,
+      preferredQuality: 'flac',
+    );
+
+    expect(result?.actualQuality, '192k');
+    expect(result?.requestedQuality, 'flac');
+  });
 }

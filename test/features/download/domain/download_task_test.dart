@@ -7,6 +7,7 @@ import 'package:lx_music_flutter/core/network/music_source_service.dart';
 import 'package:lx_music_flutter/core/network/play_url_result.dart';
 import 'package:lx_music_flutter/features/download/domain/download_service.dart';
 import 'package:lx_music_flutter/features/download/domain/download_task.dart';
+import 'package:lx_music_flutter/features/player/domain/music_item.dart';
 
 void main() {
   test('safeDownloadBaseName strips path separators', () {
@@ -207,5 +208,160 @@ void main() {
       throwsA(isA<DioException>()),
     );
     expect(resolveCalls, 1);
+  });
+
+  test('fresh-link retry rejects pre-cancellation before resolve', () async {
+    final token = CancelToken()..cancel('paused');
+    var resolveCalls = 0;
+
+    await expectLater(
+      downloadWithFreshLinkRetry(
+        cancelToken: token,
+        resolve: () async {
+          resolveCalls++;
+          return null;
+        },
+        download: (_) async {},
+      ),
+      throwsA(
+          isA<DioException>().having(CancelToken.isCancel, 'cancelled', true)),
+    );
+    expect(resolveCalls, 0);
+  });
+
+  test('cancellation after expired response prevents fresh re-resolve',
+      () async {
+    final token = CancelToken();
+    var resolveCalls = 0;
+
+    await expectLater(
+      downloadWithFreshLinkRetry(
+        cancelToken: token,
+        resolve: () async {
+          resolveCalls++;
+          return const PlayUrlResult(
+            url: 'https://media.example/expired.mp3',
+            requestedQuality: '320k',
+            actualQuality: '320k',
+            platform: 'tx',
+          );
+        },
+        download: (_) async {
+          token.cancel('paused');
+          throw DioException(
+            requestOptions: RequestOptions(path: '/expired'),
+            response: Response(
+              requestOptions: RequestOptions(path: '/expired'),
+              statusCode: 403,
+            ),
+          );
+        },
+      ),
+      throwsA(
+          isA<DioException>().having(CancelToken.isCancel, 'cancelled', true)),
+    );
+    expect(resolveCalls, 1);
+  });
+
+  test('fresh resolver rejects pre-cancellation instead of returning null',
+      () async {
+    final token = CancelToken()..cancel('paused');
+    var serviceCalls = 0;
+
+    await expectLater(
+      resolveFreshPlayableUrl(
+        music: MusicItem(
+          id: 'm1',
+          name: 'Song',
+          singer: 'Singer',
+          platform: 'tx',
+          source: 'tx',
+        ),
+        quality: '320k',
+        cancelToken: token,
+        resolve: (music, quality, cancelToken) async {
+          serviceCalls++;
+          return null;
+        },
+      ),
+      throwsA(
+          isA<DioException>().having(CancelToken.isCancel, 'cancelled', true)),
+    );
+    expect(serviceCalls, 0);
+  });
+
+  test('fresh resolver cancellation wins over simultaneous resolver error',
+      () async {
+    final token = CancelToken();
+
+    await expectLater(
+      resolveFreshPlayableUrl(
+        music: MusicItem(
+          id: 'm1',
+          name: 'Song',
+          singer: 'Singer',
+          platform: 'tx',
+          source: 'tx',
+        ),
+        quality: '320k',
+        cancelToken: token,
+        resolve: (music, quality, cancelToken) async {
+          token.cancel('paused');
+          throw StateError('resolver failed');
+        },
+      ),
+      throwsA(
+          isA<DioException>().having(CancelToken.isCancel, 'cancelled', true)),
+    );
+  });
+
+  test('download cancellation wins over simultaneous non-expired HTTP error',
+      () async {
+    final token = CancelToken();
+
+    await expectLater(
+      downloadWithFreshLinkRetry(
+        cancelToken: token,
+        resolve: () async => const PlayUrlResult(
+          url: 'https://media.example/song.mp3',
+          requestedQuality: '320k',
+          actualQuality: '320k',
+          platform: 'tx',
+        ),
+        download: (_) async {
+          token.cancel('paused');
+          throw DioException(
+            requestOptions: RequestOptions(path: '/failed'),
+            response: Response(
+              requestOptions: RequestOptions(path: '/failed'),
+              statusCode: 500,
+            ),
+          );
+        },
+      ),
+      throwsA(
+          isA<DioException>().having(CancelToken.isCancel, 'cancelled', true)),
+    );
+  });
+
+  test('cancelled status is preserved and never replaced with failed', () {
+    expect(
+      downloadFailureStatus(DownloadStatus.paused, cancelled: true),
+      DownloadStatus.paused,
+    );
+  });
+
+  test('cancelled active download becomes paused rather than failed', () {
+    expect(
+      downloadFailureStatus(DownloadStatus.downloading, cancelled: true),
+      DownloadStatus.paused,
+    );
+  });
+
+  test('ordinary active download failure becomes failed', () {
+    expect(
+      downloadFailureStatus(DownloadStatus.downloading, cancelled: false),
+      DownloadStatus.failed,
+    );
   });
 }

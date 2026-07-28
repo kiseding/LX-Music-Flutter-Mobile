@@ -9,8 +9,7 @@ import 'wbd_crypto.dart';
 const kuwoSearchBaseUrl = 'https://search.kuwo.cn';
 const kuwoArtworkEndpoint = 'https://artistpicserver.kuwo.cn/pic.web';
 const kuwoAntiServerEndpoint = 'https://antiserver.kuwo.cn/anti.s';
-const kuwoPlayInfoEndpoint =
-    'https://www.kuwo.cn/api/v1/www/music/playInfo';
+const kuwoPlayInfoEndpoint = 'https://www.kuwo.cn/api/v1/www/music/playInfo';
 const kuwoLegacyPlayEndpoint = 'https://www.kuwo.cn/url';
 const kuwoLyricEndpoint = 'https://newlyric.kuwo.cn/newlyric.lrc';
 const kuwoPlaylistEndpoint = 'https://nplserver.kuwo.cn/pl.svc';
@@ -222,6 +221,31 @@ class KwSource extends MusicPlatform {
   @override
   Future<String?> getMusicUrl(MusicItem music,
       {String quality = '128k'}) async {
+    return _getMusicUrl(music, quality: quality, exact: false);
+  }
+
+  @override
+  Future<String?> getMusicUrlExact(MusicItem music,
+      {required String quality}) async {
+    return _getMusicUrl(music, quality: quality, exact: true);
+  }
+
+  @override
+  Future<ExactPlayUrl?> getMusicUrlExactDetailed(MusicItem music,
+      {required String quality}) async {
+    final key = exactAttemptKeyForQuality(quality);
+    if (key == null) return null;
+    final url = await getMusicUrlExact(music, quality: quality);
+    return url == null
+        ? null
+        : ExactPlayUrl(
+            url: url,
+            actualQuality: actualQualityForExactUrl(key, url),
+          );
+  }
+
+  Future<String?> _getMusicUrl(MusicItem music,
+      {required String quality, required bool exact}) async {
     final rid = music.songmid ?? music.id;
     debugPrint('[KW] getMusicUrl: rid=$rid, quality=$quality');
 
@@ -241,7 +265,9 @@ class KwSource extends MusicPlatform {
           kuwoPlayInfoEndpoint,
           queryParameters: {
             'mid': rid,
-            'type': _qualityToType(quality),
+            'type': exact
+                ? exactAttemptKeyForQuality(quality)
+                : _qualityToType(quality),
             'httpsStatus': '1',
             'reqId': DateTime.now().millisecondsSinceEpoch.toString(),
           },
@@ -267,6 +293,9 @@ class KwSource extends MusicPlatform {
       debugPrint('[KW] playInfo 接口失败: $e');
     }
 
+    if (exact && exactAttemptKeyForQuality(quality) == null) return null;
+    final format =
+        exact ? exactAttemptKeyForQuality(quality)! : _qualityToFormat(quality);
     // 方案2: antiserver 接口（返回纯文本 URL），分别尝试两种 rid 格式
     for (final ridFormat in ['MUSIC_$rid', rid]) {
       try {
@@ -280,7 +309,7 @@ class KwSource extends MusicPlatform {
               queryParameters: {
                 'type': 'convert_url',
                 'rid': ridFormat,
-                'format': _qualityToFormat(quality),
+                'format': format,
                 'response': 'url',
               },
               options: Options(responseType: ResponseType.plain),
@@ -315,7 +344,7 @@ class KwSource extends MusicPlatform {
         final response = await urlDio.get(
           kuwoLegacyPlayEndpoint,
           queryParameters: {
-            'format': _qualityToFormat(quality),
+            'format': format,
             'rid': ridFormat,
             'response': 'url',
             'type': 'convert_url3',
@@ -351,6 +380,32 @@ class KwSource extends MusicPlatform {
         return 'mp3';
     }
   }
+
+  static String? exactAttemptKeyForQuality(String quality) {
+    switch (quality) {
+      case 'hires':
+      case 'flac24bit':
+      case 'flac':
+        return 'flac';
+      case '320k':
+      case '192k':
+      case '128k':
+        return 'mp3';
+      default:
+        return null;
+    }
+  }
+
+  static String actualQualityForAttemptKey(String key) =>
+      key == 'flac' ? 'flac' : '128k';
+
+  static String actualQualityForExactUrl(String key, String url) {
+    if (key == 'flac' && url.toLowerCase().contains('.flac')) return 'flac';
+    return '128k';
+  }
+
+  @override
+  String? exactAttemptKey(String quality) => exactAttemptKeyForQuality(quality);
 
   String _qualityToFormat(String quality) {
     switch (quality) {

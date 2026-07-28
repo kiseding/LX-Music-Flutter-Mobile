@@ -229,16 +229,35 @@ class WySource extends MusicPlatform {
   @override
   Future<String?> getMusicUrl(MusicItem music,
       {String quality = '128k'}) async {
+    return _getMusicUrl(music, quality: quality);
+  }
+
+  @override
+  Future<String?> getMusicUrlExact(MusicItem music,
+      {required String quality}) async {
+    if (exactBitrateForQuality(quality) == null) return null;
+    return _getMusicUrl(music, quality: quality);
+  }
+
+  @override
+  Future<ExactPlayUrl?> getMusicUrlExactDetailed(MusicItem music,
+      {required String quality}) async {
+    return _getMusicUrlDetailed(music, quality: quality);
+  }
+
+  Future<String?> _getMusicUrl(MusicItem music,
+      {required String quality}) async {
+    return (await _getMusicUrlDetailed(music, quality: quality))?.url;
+  }
+
+  Future<ExactPlayUrl?> _getMusicUrlDetailed(MusicItem music,
+      {required String quality}) async {
     try {
       final id = music.songmid ?? music.id;
       if (id.isEmpty) return null;
 
-      final br = switch (quality) {
-        'hires' || 'flac24bit' || 'flac' => 999000,
-        '320k' => 320000,
-        '192k' => 192000,
-        _ => 128000,
-      };
+      final br = exactBitrateForQuality(quality);
+      if (br == null) return null;
 
       final urlDio =
           createDioForService(headers: {'Referer': 'https://music.163.com/'});
@@ -260,13 +279,38 @@ class WySource extends MusicPlatform {
 
       final first = data[0] as Map;
       final url = first['url'] as String?;
-      if (url != null && url.isNotEmpty) return url;
+      if (url != null && url.isNotEmpty) {
+        final responseBitrate = int.tryParse(first['br']?.toString() ?? '');
+        return ExactPlayUrl(
+          url: url,
+          actualQuality: qualityFromBitrate(responseBitrate ?? br),
+        );
+      }
 
       return null;
     } catch (e) {
       return null;
     }
   }
+
+  static int? exactBitrateForQuality(String quality) => switch (quality) {
+        'hires' || 'flac24bit' || 'flac' => 999000,
+        '320k' => 320000,
+        '192k' => 192000,
+        '128k' => 128000,
+        _ => null,
+      };
+
+  static String qualityFromBitrate(int bitrate) => switch (bitrate) {
+        >= 900000 => 'flac',
+        >= 280000 => '320k',
+        >= 160000 => '192k',
+        _ => '128k',
+      };
+
+  @override
+  String? exactAttemptKey(String quality) =>
+      exactBitrateForQuality(quality)?.toString();
 
   // ==================== 歌词 ====================
 

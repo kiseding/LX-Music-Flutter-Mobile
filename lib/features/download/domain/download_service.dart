@@ -15,16 +15,22 @@ import '../../player/domain/music_item.dart';
 import 'download_task.dart';
 
 Future<PlayUrlResult?> downloadWithFreshLinkRetry({
+  CancelToken? cancelToken,
   required Future<PlayUrlResult?> Function() resolve,
   required Future<void> Function(PlayUrlResult result) download,
 }) async {
   for (var attempt = 0; attempt < 2; attempt++) {
+    throwIfDownloadCancelled(cancelToken);
     final result = await resolve();
+    throwIfDownloadCancelled(cancelToken);
     if (result == null) return null;
     try {
+      throwIfDownloadCancelled(cancelToken);
       await download(result);
+      throwIfDownloadCancelled(cancelToken);
       return result;
     } on DioException catch (error) {
+      throwIfDownloadCancelled(cancelToken);
       final status = error.response?.statusCode;
       final expired = status == 401 ||
           status == 403 ||
@@ -32,9 +38,42 @@ Future<PlayUrlResult?> downloadWithFreshLinkRetry({
           status == 410 ||
           status == 416;
       if (!expired || attempt == 1) rethrow;
+      throwIfDownloadCancelled(cancelToken);
     }
   }
   return null;
+}
+
+void throwIfDownloadCancelled(CancelToken? cancelToken) {
+  final error = cancelToken?.cancelError;
+  if (error != null) throw error;
+}
+
+Future<PlayUrlResult?> resolveFreshPlayableUrl({
+  required MusicItem music,
+  required String quality,
+  required Future<PlayUrlResult?> Function(
+          MusicItem music, String quality, CancelToken? cancelToken)
+      resolve,
+  CancelToken? cancelToken,
+}) async {
+  throwIfDownloadCancelled(cancelToken);
+  PlayUrlResult? result;
+  try {
+    result = await resolve(music, quality, cancelToken);
+  } catch (_) {
+    throwIfDownloadCancelled(cancelToken);
+    rethrow;
+  }
+  throwIfDownloadCancelled(cancelToken);
+  return result != null && isPlayableMediaUrl(result.url) ? result : null;
+}
+
+DownloadStatus downloadFailureStatus(DownloadStatus current,
+    {required bool cancelled}) {
+  if (current == DownloadStatus.paused) return current;
+  if (cancelled) return DownloadStatus.paused;
+  return DownloadStatus.failed;
 }
 
 class DownloadService {
@@ -187,6 +226,7 @@ class DownloadService {
           : latest.quality!;
       var completedOk = false;
       final resolved = await downloadWithFreshLinkRetry(
+        cancelToken: cancelToken,
         resolve: () => _resolveFreshUrl(
           music,
           preferred,
@@ -290,7 +330,9 @@ class DownloadService {
         }
       }
 
-      if (!completedOk) {
+      if (!completedOk &&
+          _taskById(task.id)?.status != DownloadStatus.paused &&
+          !cancelToken.isCancelled) {
         _updateTask(
           task.id,
           status: DownloadStatus.failed,
@@ -313,11 +355,18 @@ class DownloadService {
       );
     } catch (e) {
       await _safeDelete(partPath);
-      _updateTask(
-        task.id,
-        status: DownloadStatus.failed,
-        errorMsg: e.toString(),
-      );
+      final current = _taskById(task.id)?.status;
+      if (current != null) {
+        final status = downloadFailureStatus(
+          current,
+          cancelled: cancelToken.isCancelled,
+        );
+        _updateTask(
+          task.id,
+          status: status,
+          errorMsg: status == DownloadStatus.failed ? e.toString() : '',
+        );
+      }
     } finally {
       _cancelTokens.remove(task.id);
       _currentDownloading = (_currentDownloading - 1).clamp(0, _maxConcurrent);
@@ -332,7 +381,7 @@ class DownloadService {
     CancelToken? cancelToken,
   }) async {
     if (_musicSourceService == null) return null;
-    if (cancelToken?.isCancelled == true) return null;
+    throwIfDownloadCancelled(cancelToken);
     // 仅 file:// 本地路径可直用
     final existing = music.url;
     if (existing != null &&
@@ -359,16 +408,18 @@ class DownloadService {
         hash: music.hash,
         meta: music.meta,
       );
-      final result = await _musicSourceService!
-          .resolvePlayableUrl(
-            clean,
-            preferredQuality: quality,
-            cancelToken: cancelToken,
-          )
-          .timeout(const Duration(seconds: 25));
-      if (result != null && isPlayableMediaUrl(result.url)) {
-        return result;
-      }
+      return await resolveFreshPlayableUrl(
+        music: clean,
+        quality: quality,
+        cancelToken: cancelToken,
+        resolve: (music, quality, token) => _musicSourceService!
+            .resolvePlayableUrl(
+              music,
+              preferredQuality: quality,
+              cancelToken: token,
+            )
+            .timeout(const Duration(seconds: 25)),
+      );
     } on DioException catch (e) {
       if (CancelToken.isCancel(e)) rethrow;
       debugPrint('[DownloadService] resolve q=$quality failed: $e');
