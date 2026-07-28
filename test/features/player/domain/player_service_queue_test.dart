@@ -211,11 +211,47 @@ void main() {
       expect(player.playing, !paused);
     });
   }
+
+  test('current removal relocates target after suspended pause', () async {
+    MediaItem item(String id) => MediaItem(
+          id: id,
+          title: id,
+          extras: {
+            'url': 'file:///tmp/$id.mp3',
+            'requestedQuality': '320k',
+          },
+        );
+    final current = item('B');
+    await handler.updateQueue([item('A'), current, item('C')]);
+    await handler.skipToQueueItem(1);
+    player.gateNextPause();
+
+    final removal = handler.removeQueueItem(current);
+    await player.pauseStarted.future;
+    await handler.updateQueue([current, item('A'), item('C')]);
+    player.releasePause.complete();
+    await removal;
+
+    expect(handler.queueItems.map((item) => item.id), ['A', 'C']);
+    expect(handler.currentQueueIndex, 0);
+    expect(handler.mediaItem.value?.id, 'A');
+    expect((player.loadedSource as ProgressiveAudioSource).tag.id, 'A');
+  });
 }
 
 class _RecordingAudioPlayer extends AudioPlayer {
   AudioSource? loadedSource;
   bool _playing = false;
+  Completer<void>? _pauseStarted;
+  Completer<void>? _releasePause;
+
+  Completer<void> get pauseStarted => _pauseStarted!;
+  Completer<void> get releasePause => _releasePause!;
+
+  void gateNextPause() {
+    _pauseStarted = Completer<void>();
+    _releasePause = Completer<void>();
+  }
 
   @override
   AudioSource? get audioSource => loadedSource;
@@ -242,6 +278,14 @@ class _RecordingAudioPlayer extends AudioPlayer {
   @override
   Future<void> pause() async {
     _playing = false;
+    final started = _pauseStarted;
+    final release = _releasePause;
+    if (started != null && release != null) {
+      started.complete();
+      await release.future;
+      _pauseStarted = null;
+      _releasePause = null;
+    }
   }
 
   @override

@@ -713,14 +713,22 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
   @override
   Future<void> removeQueueItem(MediaItem mediaItem) async {
-    final index = _queue.indexWhere((item) => item.id == mediaItem.id);
+    final targetId = mediaItem.id;
+    var index = _queue.indexWhere((item) => item.id == targetId);
     if (index != -1) {
       final currentId = this.mediaItem.value?.id;
-      final removedCurrent = currentId == mediaItem.id;
+      final removedCurrent = currentId == targetId;
       final wasPlaying = _player.playing;
       final wantedPlay = _userWantsPlay;
+      if (removedCurrent && _activeItemId != targetId) return;
       if (removedCurrent && wasPlaying) {
         await _haltCurrentPlayback();
+        index = _queue.indexWhere((item) => item.id == targetId);
+        if (index < 0 ||
+            this.mediaItem.value?.id != targetId ||
+            _activeItemId != targetId) {
+          return;
+        }
       }
       _queue.removeAt(index);
 
@@ -738,10 +746,25 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
           : _queue.indexWhere((item) => item.id == currentId);
       final replacementIndex = index.clamp(0, _queue.length - 1);
       if (removedCurrent) {
+        final replacementId = _queue[replacementIndex].id;
         queue.add(List.unmodifiable(_queue));
         await skipToQueueItem(replacementIndex);
+        var relocatedReplacement =
+            _queue.indexWhere((item) => item.id == replacementId);
+        if (relocatedReplacement < 0 ||
+            this.mediaItem.value?.id != replacementId ||
+            _activeItemId != replacementId) {
+          return;
+        }
         if (!wasPlaying) {
           await pauseInternal(clearIntent: false);
+          relocatedReplacement =
+              _queue.indexWhere((item) => item.id == replacementId);
+          if (relocatedReplacement < 0 ||
+              this.mediaItem.value?.id != replacementId ||
+              _activeItemId != replacementId) {
+            return;
+          }
         }
         _userWantsPlay = wantedPlay;
         return;
