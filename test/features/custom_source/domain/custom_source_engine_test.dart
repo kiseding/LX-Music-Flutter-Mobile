@@ -39,6 +39,9 @@ void main() {
     expect(bridge, contains('lx_request_cancel'));
     expect(bridge, contains('SourceRequestSandbox'));
     expect(bridge, contains('await withSourceResponseLease(response'));
+    expect(bridge, contains('if (!response.isCancelled)'));
+    expect(bridge, contains('SourceRequestCancellation? requestCancellation;'));
+    expect(bridge, contains('if (requestCancellation?.isCancelled != true)'));
     expect(
       bridge.indexOf('_httpCancellations.remove(callbackId);'),
       greaterThan(bridge.indexOf('await withSourceResponseLease(response')),

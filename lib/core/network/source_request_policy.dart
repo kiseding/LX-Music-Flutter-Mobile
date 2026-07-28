@@ -84,32 +84,71 @@ class SourceRequestResponse {
     required this.headers,
     required this.bytes,
     required void Function() release,
-  }) : _lease = _SourceRequestLease(release);
+    required SourceRequestCancellation cancellation,
+  }) : _lease = _SourceRequestLease(release, cancellation);
 
   void release() => _lease.release();
+  bool get isCancelled => _lease.isCancelled;
+
+  bool _beginDelivery() => _lease.beginDelivery();
+  void _finishDelivery() => _lease.finishDelivery();
 }
+
+enum _SourceRequestLeaseState { pending, delivering, released }
 
 class _SourceRequestLease {
   void Function()? _release;
+  final SourceRequestCancellation _cancellation;
+  _SourceRequestLeaseState _state = _SourceRequestLeaseState.pending;
+  bool _cancelled = false;
 
-  _SourceRequestLease(this._release);
+  _SourceRequestLease(this._release, this._cancellation) {
+    _cancellation.future.then((_) => _cancel());
+  }
+
+  bool get isCancelled {
+    if (_cancellation.isCancelled) _cancel();
+    return _cancelled;
+  }
+
+  bool beginDelivery() {
+    if (_cancellation.isCancelled) _cancel();
+    if (_state != _SourceRequestLeaseState.pending || _cancelled) return false;
+    _state = _SourceRequestLeaseState.delivering;
+    return true;
+  }
+
+  void finishDelivery() {
+    if (_state == _SourceRequestLeaseState.delivering) _releaseNow();
+  }
 
   void release() {
+    if (_state == _SourceRequestLeaseState.pending) _releaseNow();
+  }
+
+  void _cancel() {
+    _cancelled = true;
+    if (_state == _SourceRequestLeaseState.pending) _releaseNow();
+  }
+
+  void _releaseNow() {
+    if (_state == _SourceRequestLeaseState.released) return;
+    _state = _SourceRequestLeaseState.released;
     final release = _release;
-    if (release == null) return;
     _release = null;
-    release();
+    release?.call();
   }
 }
 
-Future<T> withSourceResponseLease<T>(
+Future<T?> withSourceResponseLease<T>(
   SourceRequestResponse response,
   FutureOr<T> Function(SourceRequestResponse response) operation,
 ) async {
+  if (!response._beginDelivery()) return null;
   try {
     return await operation(response);
   } finally {
-    response.release();
+    response._finishDelivery();
   }
 }
 
@@ -409,6 +448,7 @@ class SourceRequestSandbox {
       statusMessage: response.statusMessage,
       headers: response.headers,
       bytes: bytes,
+      cancellation: cancellation,
       release: () {
         if (released) return;
         released = true;
@@ -416,7 +456,6 @@ class SourceRequestSandbox {
         _activeRequests--;
       },
     );
-    cancellation.future.then((_) => result.release());
     return result;
   }
 

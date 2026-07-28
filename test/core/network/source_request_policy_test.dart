@@ -1170,6 +1170,119 @@ void main() {
       next.release();
     });
 
+    test('cancellation before delivery releases and skips delivery', () async {
+      final cancellation = SourceRequestCancellation();
+      var deliveries = 0;
+      final sandbox = SourceRequestSandbox(
+        policy: policyWith({
+          'example.com': ['93.184.216.34'],
+        }, maximumResponseBytes: 1),
+        maximumConcurrentRequests: 1,
+        maximumInFlightBytes: 1,
+        transport: (request, sourceCancellation) async =>
+            SourceTransportResponse(
+          statusCode: 200,
+          headers: const {},
+          body: Stream.value([1]),
+        ),
+      );
+      final response = await sandbox.request(
+        Uri.parse('https://example.com/one'),
+        {},
+        cancellation: cancellation,
+      );
+
+      cancellation.cancel('disposed');
+      await withSourceResponseLease(response, (_) async {
+        deliveries++;
+      });
+
+      expect(deliveries, 0);
+      final next =
+          await sandbox.request(Uri.parse('https://example.com/two'), {});
+      next.release();
+    });
+
+    test('cancellation during delivery retains ownership until gate exits',
+        () async {
+      final cancellation = SourceRequestCancellation();
+      final entered = Completer<void>();
+      final gate = Completer<void>();
+      var processed = false;
+      var callbacks = 0;
+      final sandbox = SourceRequestSandbox(
+        policy: policyWith({
+          'example.com': ['93.184.216.34'],
+        }, maximumResponseBytes: 1),
+        maximumConcurrentRequests: 1,
+        maximumInFlightBytes: 1,
+        transport: (request, sourceCancellation) async =>
+            SourceTransportResponse(
+          statusCode: 200,
+          headers: const {},
+          body: Stream.value([1]),
+        ),
+      );
+      final response = await sandbox.request(
+        Uri.parse('https://example.com/one'),
+        {},
+        cancellation: cancellation,
+      );
+      final delivery = withSourceResponseLease(response, (ownedResponse) async {
+        entered.complete();
+        await gate.future;
+        processed = true;
+        if (!ownedResponse.isCancelled) callbacks++;
+      });
+      await entered.future;
+
+      cancellation.cancel('disposed');
+      await Future<void>.delayed(Duration.zero);
+      await expectLater(
+        sandbox.request(Uri.parse('https://example.com/two'), {}),
+        throwsA(
+          isA<SourceRequestPolicyException>()
+              .having((error) => error.code, 'code', 'too_many_requests'),
+        ),
+      );
+
+      gate.complete();
+      await delivery;
+      expect(processed, isTrue);
+      expect(callbacks, 0);
+      final next =
+          await sandbox.request(Uri.parse('https://example.com/two'), {});
+      next.release();
+    });
+
+    test('delivery callback throw releases ownership', () async {
+      final sandbox = SourceRequestSandbox(
+        policy: policyWith({
+          'example.com': ['93.184.216.34'],
+        }, maximumResponseBytes: 1),
+        maximumConcurrentRequests: 1,
+        maximumInFlightBytes: 1,
+        transport: (request, cancellation) async => SourceTransportResponse(
+          statusCode: 200,
+          headers: const {},
+          body: Stream.value([1]),
+        ),
+      );
+      final response =
+          await sandbox.request(Uri.parse('https://example.com/one'), {});
+
+      await expectLater(
+        withSourceResponseLease(response, (_) async {
+          throw StateError('callback failed');
+        }),
+        throwsStateError,
+      );
+
+      final next =
+          await sandbox.request(Uri.parse('https://example.com/two'), {});
+      next.release();
+    });
+
     test('redirect setup failures close response exactly once', () async {
       for (final testCase in <({String name, String location, dynamic body})>[
         (name: 'malformed location', location: 'http://[', body: 'body'),

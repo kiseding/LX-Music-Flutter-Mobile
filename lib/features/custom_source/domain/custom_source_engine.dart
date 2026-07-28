@@ -245,6 +245,7 @@ class CustomSourceEngine {
       debugPrint(
           '[LX] lx_request callbackId=${callbackId.hashCode} url=${_redactUrl(url)}');
       final Map<String, dynamic> options = data['options'] ?? {};
+      SourceRequestCancellation? requestCancellation;
       try {
         final isBinary = options['binary'] == true;
 
@@ -255,6 +256,7 @@ class CustomSourceEngine {
         }
 
         final cancellation = SourceRequestCancellation();
+        requestCancellation = cancellation;
         _httpCancellations[callbackId] = cancellation;
         final response = await _makeHttpRequest(
           url,
@@ -298,25 +300,29 @@ class CustomSourceEngine {
 
           debugPrint(
               '[LX] lx_request HTTP done callbackId=$callbackId status=${response.statusCode} bytes=${rawBytes.length}');
-          _executeJsCallback(
-              callbackId,
-              [
-                null,
-                {
-                  'statusCode': response.statusCode,
-                  'statusMessage': response.statusMessage,
-                  'body': body,
-                  'headers': flatHeaders,
-                  'bytes': rawBytes.length,
-                  'responseRaw': base64Encode(rawBytes),
-                },
-                body,
-              ],
-              url: url);
+          if (!response.isCancelled) {
+            _executeJsCallback(
+                callbackId,
+                [
+                  null,
+                  {
+                    'statusCode': response.statusCode,
+                    'statusMessage': response.statusMessage,
+                    'body': body,
+                    'headers': flatHeaders,
+                    'bytes': rawBytes.length,
+                    'responseRaw': base64Encode(rawBytes),
+                  },
+                  body,
+                ],
+                url: url);
+          }
         });
       } catch (e) {
         debugPrint('[LX] lx_request HTTP FAIL callbackId=$callbackId err=$e');
-        _executeJsCallback(callbackId, [e.toString(), null, null], url: url);
+        if (requestCancellation?.isCancelled != true) {
+          _executeJsCallback(callbackId, [e.toString(), null, null], url: url);
+        }
       } finally {
         _httpCancellations.remove(callbackId);
       }
