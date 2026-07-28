@@ -115,15 +115,20 @@ String playQualityToken(AudioQualityToken token) {
   }
 }
 
-/// FLAC/无损 seek 解码更慢；给更长 settle 窗口，但只 seek 一次。
-Duration seekBudgetForQuality(String? quality) {
+bool isLosslessQuality(String? quality) {
   final q = (quality ?? '').toLowerCase();
-  if (q.contains('flac') ||
+  return q.contains('flac') ||
       q.contains('hires') ||
       q.contains('ape') ||
       q.contains('wav') ||
       q.contains('alac') ||
-      q.contains('dsd')) {
+      q.contains('dsd') ||
+      q.contains('lossless');
+}
+
+/// FLAC/无损 seek 更慢；给更长 settle 窗口。
+Duration seekBudgetForQuality(String? quality) {
+  if (isLosslessQuality(quality)) {
     return const Duration(milliseconds: 1200);
   }
   return const Duration(milliseconds: 500);
@@ -372,7 +377,50 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     _broadcastState(_player.playbackEvent);
   }
 
-  /// 只 seek 一次，再等待引擎 position 稳定靠近目标（不循环 seek）。
+  String? get _currentPlayUrl {
+    final extras = mediaItem.value?.extras;
+    final url = extras?['url']?.toString();
+    if (url != null && url.isNotEmpty && !url.startsWith('data:')) return url;
+    return null;
+  }
+
+  String get _currentQualityLabel =>
+      mediaItem.value?.extras?['actualQuality']?.toString() ??
+      mediaItem.value?.extras?['requestedQuality']?.toString() ??
+      preferredQuality;
+
+  /// FLAC 等无损：just_audio 的 seek 会乐观改 updatePosition，但原生 AVPlayer
+  /// 可能未真正 seek，导致 UI 到目标、音频还在旧位置（差十几秒）。
+  /// 用 setAudioSource(initialPosition:) 强制按字节定位重载。
+  Future<Duration> hardSeekTo(Duration displayPosition) async {
+    final url = _currentPlayUrl;
+    final tag = mediaItem.value;
+    if (url == null || tag == null) {
+      await seek(displayPosition);
+      return _player.position;
+    }
+
+    var target = displayPosition;
+    if (target.isNegative) target = Duration.zero;
+    final dur = _player.duration;
+    if (dur != null && dur > Duration.zero && target > dur) {
+      target = dur - const Duration(milliseconds: 80);
+      if (target.isNegative) target = Duration.zero;
+    }
+
+    // 不自动 play：由 scrub finish 的 resumeAfter 决定，避免 pause 拖动后误起播
+    await _withAutoAdvanceSuppressed(() async {
+      await _player.setAudioSource(
+        audioSourceFor(url, tag: tag),
+        initialPosition: target,
+      );
+      // setAudioSource 把事件 position 设为 initialPosition（原生已按字节定位）
+      _broadcastState(_player.playbackEvent);
+    });
+    return _player.position;
+  }
+
+  /// 有损：普通 seek 一次；无损：hard seek 重载，再等待 position 稳定。
   Future<Duration> seekToDisplay(
     Duration displayPosition, {
     Duration? budget,
@@ -381,7 +429,12 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   }) async {
     var target = displayPosition;
     if (target.isNegative) target = Duration.zero;
-    await seek(target);
+
+    if (isLosslessQuality(_currentQualityLabel)) {
+      await hardSeekTo(target);
+    } else {
+      await seek(target);
+    }
     return waitForSettledPosition(
       target,
       budget: budget,

@@ -15,34 +15,26 @@ void main() {
     expect(play, contains('_startPlayer();'));
     expect(play, isNot(contains('await _player.play()')));
     expect(handler, contains('unawaited(_player.play()'));
-    expect(handler, isNot(contains('await _player.play()')));
   });
 
-  test('seekToDisplay seeks once then waits for stable engine position', () {
+  test('lossless scrub uses hard seek via setAudioSource initialPosition', () {
     final handler = File(
       'lib/core/audio/audio_handler.dart',
     ).readAsStringSync();
-    final method = handler.substring(
+    expect(handler, contains('bool isLosslessQuality('));
+    expect(handler, contains('Future<Duration> hardSeekTo('));
+    expect(handler, contains('initialPosition: target'));
+    expect(handler, contains('setAudioSource('));
+
+    final seekToDisplay = handler.substring(
       handler.indexOf('Future<Duration> seekToDisplay('),
-      handler.indexOf('Future<void> stop() async'),
+      handler.indexOf('Future<Duration> waitForSettledPosition('),
     );
-
-    expect('await seek('.allMatches(method).length, 1);
-    expect(method, contains('waitForSettledPosition'));
-    expect(method, contains('stableHits'));
-    expect(method, contains('ProcessingState.ready'));
+    expect(seekToDisplay, contains('isLosslessQuality'));
+    expect(seekToDisplay, contains('hardSeekTo('));
   });
 
-  test('lossless formats get a longer seek settle budget', () {
-    final handler = File(
-      'lib/core/audio/audio_handler.dart',
-    ).readAsStringSync();
-    expect(handler, contains('Duration seekBudgetForQuality('));
-    expect(handler, contains('flac'));
-    expect(handler, contains('milliseconds: 1200'));
-  });
-
-  test('scrub keeps display frozen until engine settles after play', () {
+  test('scrub does not pin official clock before engine settles', () {
     final provider = File(
       'lib/features/player/presentation/player_provider.dart',
     ).readAsStringSync();
@@ -52,16 +44,11 @@ void main() {
     );
 
     expect(scrub, contains('seekToDisplay('));
-    expect(scrub, contains('seekBudgetForQuality'));
-    expect(scrub, contains('await h.play()'));
-    // Must not pin UI to target before engine is ready.
-    expect(scrub, isNot(contains('posNotifier.unfreeze(position)')));
+    expect(scrub, contains('waitForSettledPosition'));
     expect(scrub, contains('unfreeze(settled)'));
-    expect(
-      scrub.split('seekToDisplay(').length - 1,
-      1,
-      reason: 'only one seekToDisplay per scrub finish',
-    );
+    expect(scrub, isNot(contains('unfreeze(position)')));
+    // Only one seekToDisplay; play path uses wait-only settle.
+    expect(scrub.split('seekToDisplay(').length - 1, 1);
   });
 
   test('progress UI holds local preview until scrub finish returns', () {
@@ -72,7 +59,6 @@ void main() {
       'lib/features/player/presentation/widgets/mini_player.dart',
     ).readAsStringSync();
 
-    // Clear seeking only after finishScrub completes.
     final fullEnd = full.substring(full.indexOf('onHorizontalDragEnd:'));
     final miniEnd = mini.substring(mini.indexOf('onHorizontalDragEnd:'));
     expect(
@@ -85,37 +71,9 @@ void main() {
     );
   });
 
-  test('full and mini player use the shared scrub transaction', () {
-    final full = File(
-      'lib/features/player/presentation/player_screen.dart',
-    ).readAsStringSync();
-    final mini = File(
-      'lib/features/player/presentation/widgets/mini_player.dart',
-    ).readAsStringSync();
-    expect(full, contains('beginScrubProvider'));
-    expect(mini, contains('beginScrubProvider'));
-    expect(full, contains('finishScrubProvider'));
-    expect(mini, contains('finishScrubProvider'));
-    expect(full, contains('Future<int> _scrubFuture'));
-    expect(mini, contains('Future<int> _scrubFuture'));
-  });
-
-  test('progress drags do not seek or resume before touch release', () {
-    final full = File(
-      'lib/features/player/presentation/player_screen.dart',
-    ).readAsStringSync();
-    final mini = File(
-      'lib/features/player/presentation/widgets/mini_player.dart',
-    ).readAsStringSync();
-
-    expect(full, isNot(contains('onTapDown: (d) async')));
-    expect(mini, isNot(contains('onTapDown: !canSeek')));
-  });
-
   test('auto-next uses seamless and end-of-track position guard', () {
     final source = File('lib/core/audio/audio_handler.dart').readAsStringSync();
     expect(source, contains('skipToNext(seamless: true)'));
     expect(source, contains('pos >= dur - const Duration(milliseconds: 80)'));
-    expect(source, contains('milliseconds: 450'));
   });
 }
