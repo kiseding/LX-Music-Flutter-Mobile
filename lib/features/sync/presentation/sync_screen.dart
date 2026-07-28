@@ -285,9 +285,14 @@ class _SyncScreenState extends ConsumerState<SyncScreen> {
     );
     if (ok == true) {
       final url = ctrl.text.trim();
-      await ref.read(cloudSessionProvider.notifier).setBaseUrl(url);
-      final alive = await _api.ping();
-      setState(() => _message = alive ? '服务器可达' : '保存成功，但健康检查失败（部署后重试）');
+      try {
+        await ref.read(cloudSessionProvider.notifier).setBaseUrl(url);
+        final alive = await _api.ping();
+        setState(() => _message = alive ? '服务器可达' : '保存成功，但健康检查失败（部署后重试）');
+      } on ArgumentError catch (error) {
+        setState(
+            () => _message = error.message?.toString() ?? '服务器地址必须使用 HTTPS');
+      }
     }
   }
 

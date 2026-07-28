@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/audio/audio_handler.dart';
 import '../../../core/storage/storage_service.dart';
+import '../../../core/network/outbound_url.dart';
 
 // 音质选择
 enum AudioQualityOption {
@@ -151,15 +152,23 @@ class SyncServerUrlNotifier extends StateNotifier<String?> {
 
   Future<void> _load() async {
     final storage = await StorageService.instance;
-    state = storage.getString('sync_server_url');
+    final saved = storage.getString('sync_server_url');
+    if (saved == null || saved.isEmpty) return;
+    try {
+      state = validateHttpsServiceUrl(saved);
+    } on ArgumentError {
+      state = null;
+    }
   }
 
   Future<void> setUrl(String? url) async {
-    state = url;
     final storage = await StorageService.instance;
     if (url != null) {
-      await storage.setString('sync_server_url', url);
+      final validated = validateHttpsServiceUrl(url);
+      state = validated;
+      await storage.setString('sync_server_url', validated);
     } else {
+      state = null;
       await storage.remove('sync_server_url');
     }
   }

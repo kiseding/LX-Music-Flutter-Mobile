@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:dio/dio.dart';
-import '../../../core/network/outbound_url.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../domain/custom_source.dart';
 import '../domain/custom_source_engine.dart';
@@ -372,7 +371,7 @@ class CustomSourceService {
 
   Future<bool> importSourceFromUrl(String url) async {
     try {
-      final response = await _dio.get(normalizeOutboundUrl(url),
+      final response = await _dio.get(url,
           options: Options(responseType: ResponseType.plain));
       final script = response.data.toString();
       if (validateScript(script)) {

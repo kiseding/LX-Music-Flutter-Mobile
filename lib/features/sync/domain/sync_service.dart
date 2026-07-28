@@ -32,9 +32,9 @@ class SyncConflict {
   });
 }
 
-/// 纯 HTTP 同步服务，参考桌面版 lx-music-sync-server 协议
+/// HTTPS 同步服务，参考桌面版 lx-music-sync-server 协议。
 class SyncService {
-  final Dio _dio = Dio();
+  final Dio _dio;
   String? _serverUrl;
   String? _token;
   DateTime? _lastSyncTime;
@@ -49,16 +49,17 @@ class SyncService {
       StreamController<SyncStatus>.broadcast();
   Stream<SyncStatus> get statusStream => _statusController.stream;
 
+  SyncService({Dio? dio}) : _dio = dio ?? Dio();
+
   // ---- 连接管理 ----
 
-  /// 连接到同步服务器（HTTP 健康检查）
+  /// 连接到同步服务器（HTTPS 健康检查）
   Future<bool> connect(String serverUrl, {String? token}) async {
+    final validatedUrl = validateHttpsServiceUrl(serverUrl);
+    _serverUrl = validatedUrl;
+    _token = token;
+    _updateStatus(SyncStatus.connecting);
     try {
-      _serverUrl =
-          normalizeOutboundUrl(serverUrl).replaceAll(RegExp(r'/+$'), '');
-      _token = token;
-      _updateStatus(SyncStatus.connecting);
-
       final response = await _dio.get(
         '$_serverUrl/api/health',
         options: Options(

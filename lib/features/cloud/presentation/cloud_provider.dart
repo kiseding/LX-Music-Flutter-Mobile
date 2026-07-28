@@ -69,12 +69,18 @@ class CloudSessionNotifier extends StateNotifier<CloudSessionState> {
       baseUrl: _api.baseUrl,
       username: _api.username,
       role: _api.role,
+      error: _api.configurationError,
     );
   }
 
   Future<void> setBaseUrl(String url) async {
-    await _api.setBaseUrl(url);
-    state = state.copyWith(baseUrl: _api.baseUrl, error: null);
+    try {
+      await _api.setBaseUrl(url);
+      state = state.copyWith(baseUrl: _api.baseUrl, error: null);
+    } on ArgumentError catch (error) {
+      state = state.copyWith(error: error.message?.toString());
+      rethrow;
+    }
   }
 
   Future<bool> login(String username, String password) async {

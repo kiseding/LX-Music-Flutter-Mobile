@@ -19,11 +19,13 @@ class CloudApiClient {
   String? _token;
   String? _username;
   String? _role;
+  String? _configurationError;
 
   String? get baseUrl => _baseUrl;
   String? get token => _token;
   String? get username => _username;
   String? get role => _role;
+  String? get configurationError => _configurationError;
   bool get isLoggedIn =>
       _token != null && _token!.isNotEmpty && _baseUrl != null;
   bool get isAdmin => _role == 'admin';
@@ -31,16 +33,26 @@ class CloudApiClient {
   Future<void> load() async {
     final prefs = await SharedPreferences.getInstance();
     final savedBaseUrl = prefs.getString(_kBase);
-    _baseUrl = savedBaseUrl == null ? null : normalizeOutboundUrl(savedBaseUrl);
+    _baseUrl = null;
+    _configurationError = null;
+    if (savedBaseUrl != null && savedBaseUrl.isNotEmpty) {
+      try {
+        _baseUrl = validateHttpsServiceUrl(savedBaseUrl);
+      } on ArgumentError catch (error) {
+        _configurationError = error.message?.toString();
+      }
+    }
     _token = prefs.getString(_kToken);
     _username = prefs.getString(_kUsername);
     _role = prefs.getString(_kRole);
   }
 
   Future<void> setBaseUrl(String url) async {
-    _baseUrl = normalizeOutboundUrl(url).replaceAll(RegExp(r'/+$'), '');
+    final validated = validateHttpsServiceUrl(url);
+    _baseUrl = validated;
+    _configurationError = null;
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_kBase, _baseUrl!);
+    await prefs.setString(_kBase, validated);
   }
 
   Future<void> _persistSession() async {
