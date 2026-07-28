@@ -1,8 +1,14 @@
 import 'dart:io';
 
+import 'package:audio_service/audio_service.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lx_music_flutter/core/audio/audio_handler.dart';
+import 'package:lx_music_flutter/features/player/domain/music_item.dart';
+import 'package:lx_music_flutter/features/player/domain/player_service.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   test('player service has no independently mutable queue', () {
     final source = File('lib/features/player/domain/player_service.dart')
         .readAsStringSync();
@@ -20,5 +26,23 @@ void main() {
     );
     expect(update, isNot(contains('ConcatenatingAudioSource')));
     expect(update, isNot(contains('setAudioSource')));
+  });
+
+  test('playNext inserts a removed duplicate after the current item', () async {
+    final handler = LxAudioHandler();
+    audioHandler = handler;
+    const currentId = 'B';
+    MediaItem item(String id) => MediaItem(id: id, title: id);
+    await handler.updateQueue([item(currentId)]);
+    await handler.updateQueue([item('A'), item(currentId), item('C')]);
+
+    await PlayerService().playNext(MusicItem(
+      id: 'A',
+      name: 'A',
+      singer: '',
+      source: 'test',
+    ));
+
+    expect(handler.queueItems.map((item) => item.id), ['B', 'A', 'C']);
   });
 }

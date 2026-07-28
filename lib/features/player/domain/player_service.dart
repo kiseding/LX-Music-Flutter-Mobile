@@ -85,9 +85,11 @@ class PlayerService {
         await handler.setPlaylist([item]);
         return;
       }
+      final currentId = handler.mediaItem.value?.id;
       items.removeWhere((queueItem) => queueItem.id == item.id);
-      final insertIndex =
-          (handler.currentQueueIndex + 1).clamp(0, items.length);
+      final currentIndex =
+          items.indexWhere((queueItem) => queueItem.id == currentId);
+      final insertIndex = (currentIndex + 1).clamp(0, items.length);
       items.insert(insertIndex, item);
       await handler.updateQueue(items);
     }
