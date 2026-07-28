@@ -94,9 +94,20 @@ enum PlayMode {
   shuffle, // 随机播放
 }
 
-// 播放模式切换 (RepeatOne, Sequential, Shuffle)
-final playModeProvider = StateProvider<PlayMode>((ref) {
+PlayMode playModeFromPlaybackState(PlaybackState state) {
+  if (state.shuffleMode == AudioServiceShuffleMode.all) {
+    return PlayMode.shuffle;
+  }
+  if (state.repeatMode == AudioServiceRepeatMode.one) {
+    return PlayMode.repeatOne;
+  }
   return PlayMode.sequential;
+}
+
+// 播放模式只读 handler 已发布的 repeat/shuffle 状态。
+final playModeProvider = Provider<PlayMode>((ref) {
+  final state = ref.watch(playbackStateProvider).value;
+  return state == null ? PlayMode.sequential : playModeFromPlaybackState(state);
 });
 
 /// 播放位置唯一真相：just_audio position + seek 不连续事件。

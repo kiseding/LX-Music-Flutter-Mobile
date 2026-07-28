@@ -182,8 +182,41 @@ QualityReloadIntent qualityReloadIntent({
   return QualityReloadIntent(clampedPosition, wasPlaying);
 }
 
+enum InterruptionAction {
+  none,
+  pausePreservingIntent,
+  pauseClearingIntent,
+  resume,
+}
+
+class AudioInterruptionPolicy {
+  bool _ownsPause = false;
+
+  InterruptionAction onBegin({required bool wasPlaying}) {
+    _ownsPause = wasPlaying;
+    return wasPlaying
+        ? InterruptionAction.pausePreservingIntent
+        : InterruptionAction.none;
+  }
+
+  InterruptionAction onEnd({
+    required bool userStillWantsPlay,
+    required bool mayResume,
+  }) {
+    final ownsPause = _ownsPause;
+    _ownsPause = false;
+    return ownsPause && userStillWantsPlay && mayResume
+        ? InterruptionAction.resume
+        : InterruptionAction.none;
+  }
+
+  InterruptionAction onBecomingNoisy() =>
+      InterruptionAction.pauseClearingIntent;
+}
+
 class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   final AudioPlayer _player;
+  final AudioInterruptionPolicy _interruptionPolicy = AudioInterruptionPolicy();
   final List<MediaItem> _queue = [];
   int _currentIndex = 0;
 
@@ -202,6 +235,10 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   AudioServiceRepeatMode _repeatMode = AudioServiceRepeatMode.none;
   AudioServiceShuffleMode _shuffleMode = AudioServiceShuffleMode.none;
   int _playbackPublicationToken = 0;
+  int _interruptionGeneration = 0;
+  int? _interruptionSourceGeneration;
+  int? _interruptionUserIntentGeneration;
+  Future<void>? _interruptionPause;
 
   // 注入 URL 解析器
   UrlResolver? urlResolver;
@@ -418,6 +455,56 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         !stillOwnsScrub();
     if (stale && _userWantsPlay) {
       _restoreAuthoritativePlaybackAfterScrubPause();
+    }
+  }
+
+  Future<void> beginAudioInterruption() async {
+    final action = _interruptionPolicy.onBegin(wasPlaying: _player.playing);
+    final interruptionGeneration = ++_interruptionGeneration;
+    if (action != InterruptionAction.pausePreservingIntent) {
+      _interruptionSourceGeneration = null;
+      _interruptionUserIntentGeneration = null;
+      _interruptionPause = null;
+      return;
+    }
+
+    final sourceGeneration = _playGeneration;
+    final userIntentGeneration = _userIntentGeneration;
+    _interruptionSourceGeneration = sourceGeneration;
+    _interruptionUserIntentGeneration = userIntentGeneration;
+    final pause = pauseForScrub(
+      sourceGeneration: sourceGeneration,
+      userIntentGeneration: userIntentGeneration,
+      stillOwnsScrub: () => interruptionGeneration == _interruptionGeneration,
+    );
+    _interruptionPause = pause;
+    await pause;
+  }
+
+  Future<void> endAudioInterruption({required bool mayResume}) async {
+    final pause = _interruptionPause;
+    if (pause != null) await pause;
+
+    final ownsSource = _interruptionSourceGeneration == _playGeneration;
+    final ownsUserIntent =
+        _interruptionUserIntentGeneration == _userIntentGeneration;
+    final action = _interruptionPolicy.onEnd(
+      userStillWantsPlay: _userWantsPlay && ownsSource && ownsUserIntent,
+      mayResume: mayResume,
+    );
+    _interruptionSourceGeneration = null;
+    _interruptionUserIntentGeneration = null;
+    _interruptionPause = null;
+    if (action == InterruptionAction.resume) {
+      _restoreAuthoritativePlaybackAfterScrubPause();
+    }
+  }
+
+  Future<void> handleBecomingNoisy() async {
+    if (_interruptionPolicy.onBecomingNoisy() ==
+        InterruptionAction.pauseClearingIntent) {
+      ++_interruptionGeneration;
+      await pause();
     }
   }
 

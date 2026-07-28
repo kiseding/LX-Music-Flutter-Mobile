@@ -672,7 +672,6 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
             ),
             onPressed: () {
               final nextMode = _getNextPlayMode(playMode);
-              ref.read(playModeProvider.notifier).state = nextMode;
               _applyPlayMode(playerService, nextMode);
             },
           ),
