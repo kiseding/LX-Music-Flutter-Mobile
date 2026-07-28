@@ -134,6 +134,8 @@ class PositionNotifier extends StateNotifier<Duration> {
     });
   }
 
+  Duration get position => state;
+
   void freeze() {
     _frozen = true;
   }
@@ -252,18 +254,37 @@ class ScrubCoordinator {
     if (h != null) {
       // await 平台 seek 完成（非乐观轮询）。精确 seek 依赖 ProgressiveAudioSource
       // 的 preferPreciseDurationAndTiming。
-      await h.seek(position);
+      final sourceGeneration = h.sourceGeneration;
+      final userIntentGeneration = h.userIntentGeneration;
+      final confirmed = await h.seekConfirmed(position);
       if (generation != _generation) return;
-      if (resumeAfter) {
+      if (confirmed != null &&
+          resumeAfter &&
+          h.ownsScrubTransaction(
+            sourceGeneration: sourceGeneration,
+            userIntentGeneration: userIntentGeneration,
+          )) {
         await h.play();
       }
+      if (generation != _generation) return;
+      if (!h.ownsScrubTransaction(
+        sourceGeneration: sourceGeneration,
+        userIntentGeneration: resumeAfter && confirmed != null
+            ? h.userIntentGeneration
+            : userIntentGeneration,
+      )) {
+        posNotifier.unfreeze(h.player.position);
+        return;
+      }
+      posNotifier.unfreeze(confirmed ?? h.player.position);
+      return;
     } else {
       await _ref.read(playerServiceProvider).seek(position);
     }
 
     if (generation != _generation) return;
-    // 以用户目标解冻：平台 seek 已完成，position 即目标点
-    posNotifier.unfreeze(position);
+    // 非 Lx handler 没有引擎确认接口，不能乐观发布请求目标。
+    posNotifier.unfreeze(posNotifier.position);
   }
 }
 

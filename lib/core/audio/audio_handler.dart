@@ -189,6 +189,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
   /// 单调世代：setPlaylist/切歌时递增，取消过期的异步解析/播放
   int _playGeneration = 0;
+  int _seekGeneration = 0;
   bool _userWantsPlay = true;
   int _userIntentGeneration = 0;
   int _sourceInstallToken = 0;
@@ -221,6 +222,15 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   /// 当前内部播放队列（供 urlResolver 按 id 查找 extras）
   List<MediaItem> get queueItems => List.unmodifiable(_queue);
   int get currentQueueIndex => _queue.isEmpty ? -1 : _currentIndex;
+  int get sourceGeneration => _playGeneration;
+  int get userIntentGeneration => _userIntentGeneration;
+
+  bool ownsScrubTransaction({
+    required int sourceGeneration,
+    required int userIntentGeneration,
+  }) =>
+      sourceGeneration == _playGeneration &&
+      userIntentGeneration == _userIntentGeneration;
 
   int _bumpGeneration() => ++_playGeneration;
 
@@ -399,43 +409,58 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
   @override
   Future<void> seek(Duration position) async {
-    final dur = _player.duration;
-    var target = position;
-    if (target.isNegative) target = Duration.zero;
-    if (dur != null && dur > Duration.zero && target > dur) {
-      target = dur - const Duration(milliseconds: 80);
+    await seekConfirmed(position);
+  }
+
+  Future<Duration?> seekConfirmed(Duration position) async {
+    final sourceGeneration = _playGeneration;
+    final seekGeneration = ++_seekGeneration;
+
+    return _withSourceMutation(() async {
+      bool ownsSeek() =>
+          sourceGeneration == _playGeneration &&
+          seekGeneration == _seekGeneration;
+      if (!ownsSeek()) return null;
+
+      final dur = _player.duration;
+      var target = position;
       if (target.isNegative) target = Duration.zero;
-    }
+      if (dur != null && dur > Duration.zero && target > dur) {
+        target = dur - const Duration(milliseconds: 80);
+        if (target.isNegative) target = Duration.zero;
+      }
 
-    // just_audio：loading 时 seek 会被直接忽略
-    for (var i = 0; i < 50; i++) {
+      // just_audio ignores seeks while loading. Wait only for source readiness,
+      // never for the position to settle.
+      for (var i = 0; i < 50 && ownsSeek(); i++) {
+        final ps = _player.processingState;
+        if (ps == ProcessingState.ready ||
+            ps == ProcessingState.buffering ||
+            ps == ProcessingState.completed) {
+          break;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 40));
+      }
       final ps = _player.processingState;
-      if (ps == ProcessingState.ready ||
-          ps == ProcessingState.buffering ||
-          ps == ProcessingState.completed) {
-        break;
+      if (!ownsSeek() ||
+          ps == ProcessingState.loading ||
+          ps == ProcessingState.idle) {
+        debugPrint('[AudioHandler] seek skipped: still $ps');
+        return null;
       }
-      await Future<void>.delayed(const Duration(milliseconds: 40));
-    }
-    final ps = _player.processingState;
-    if (ps == ProcessingState.loading || ps == ProcessingState.idle) {
-      debugPrint('[AudioHandler] seek skipped: still $ps');
-      return;
-    }
 
-    // completed 后需先回到可播状态再 seek
-    if (ps == ProcessingState.completed) {
-      try {
-        await _player.seek(target);
-        _publishPlaybackState();
-        return;
-      } catch (e) {
-        debugPrint('[AudioHandler] seek from completed: $e');
+      await _player.seek(target);
+      if (!ownsSeek()) return null;
+
+      var confirmed = _player.position;
+      if (confirmed.isNegative) confirmed = Duration.zero;
+      final confirmedDuration = _player.duration;
+      if (confirmedDuration != null && confirmed > confirmedDuration) {
+        confirmed = confirmedDuration;
       }
-    }
-
-    await _player.seek(target);
-    _publishPlaybackState();
+      _publishPlaybackState();
+      return confirmed;
+    });
   }
 
   @override
