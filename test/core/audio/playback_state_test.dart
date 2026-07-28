@@ -238,6 +238,30 @@ void main() {
     releaseResolver.complete();
     await pumpEventQueue();
   });
+
+  test('successful source install reconciles state without playback event',
+      () async {
+    final player = _PlaybackStateAudioPlayer()
+      ..sourceInstallProcessingState = ProcessingState.ready;
+    final handler = LxAudioHandler(player: player);
+    addTearDown(player.dispose);
+    handler.urlResolver = (id, [extras]) async => 'file:///tmp/$id.mp3';
+    player.emit(processingState: ProcessingState.completed, playing: false);
+    await pumpEventQueue();
+
+    await handler.setPlaylist([const MediaItem(id: 'A', title: 'A')]);
+
+    expect(player.sourceLoadCalls, 1);
+    expect(player.playCalls, 1);
+    expect(player.processingState, ProcessingState.ready);
+    expect(player.playing, isTrue);
+    expect(
+      handler.playbackState.value.processingState,
+      AudioProcessingState.ready,
+    );
+    expect(handler.playbackState.value.playing, isTrue);
+    expect(handler.playbackState.value.controls, contains(MediaControl.pause));
+  });
 }
 
 class _PlaybackStateAudioPlayer extends AudioPlayer {
@@ -248,6 +272,9 @@ class _PlaybackStateAudioPlayer extends AudioPlayer {
   double _speed = 1.0;
   bool _shuffleModeEnabled = false;
   int pauseCalls = 0;
+  int playCalls = 0;
+  int sourceLoadCalls = 0;
+  ProcessingState? sourceInstallProcessingState;
 
   void emit({
     required ProcessingState processingState,
@@ -305,11 +332,21 @@ class _PlaybackStateAudioPlayer extends AudioPlayer {
     bool preload = true,
     int? initialIndex,
     Duration? initialPosition,
-  }) async =>
-      null;
+  }) async {
+    sourceLoadCalls++;
+    final state = sourceInstallProcessingState;
+    if (state != null) {
+      _event = PlaybackEvent(
+        processingState: state,
+        updatePosition: initialPosition ?? Duration.zero,
+      );
+    }
+    return null;
+  }
 
   @override
   Future<void> play() async {
+    playCalls++;
     _playing = true;
   }
 

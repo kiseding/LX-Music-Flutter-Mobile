@@ -710,9 +710,22 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         }
         _installedPlaybackGeneration = gen;
         _installedMediaId = itemId;
+        _publishPlaybackState(
+          playingOverride: seamless && _userWantsPlay ? true : null,
+        );
+        if (_installedSourceOwnerToken != installToken ||
+            activeItemIndex() < 0) {
+          return;
+        }
         // completed 后 engine playing 可能为 false，以当前用户意图决定是否续播。
         if (_userWantsPlay) {
           _startPlayer();
+          if (_installedSourceOwnerToken != installToken ||
+              activeItemIndex() < 0 ||
+              !_userWantsPlay) {
+            return;
+          }
+          _publishPlaybackState(playingOverride: true);
         }
         if (!_isStale(gen)) _schedulePreload();
       });
