@@ -60,3 +60,47 @@ TDD, exact idempotent leases, and persisted true LRU access timestamps.
   operation boundaries, but Dart does not expose descriptor-relative atomic
   rename/delete APIs; a hostile process with write access to the cache
   directory could still attempt a check-to-operation race.
+
+## Review Fixes
+
+- Downloads now use generation-specific part and final staging paths. Stable
+  destination replacement occurs only inside a serialized per-key commit
+  section after current-generation checks. Persisted entries include their
+  generation identity.
+- A stale generation deletes only its unique staging artifacts. Stable-file and
+  index rollback is permitted only while the index still identifies that
+  generation; replacement generations cannot be removed by late cleanup.
+- Every creator and joiner now awaits the same finalized operation future,
+  including commit, durable-index, current-generation, and final path checks.
+  Lease acquisition additionally verifies the persisted commit generation
+  immediately before incrementing ownership.
+- `dispose` marks the service disposed synchronously, rejects new operations and
+  ordinary writes, cancels current operations, awaits initialization and all
+  finalized active futures, then drains the serialized index-write tail until
+  no cleanup can enqueue another write. Operation and write errors are
+  contained during disposal.
+- Download success requires a durable index write. A failed new-entry write
+  rolls back the generation-owned index state and stable file, restores any
+  prior committed entry, and returns null. A failed cache-hit timestamp write
+  restores prior metadata and returns null while retaining the already durable
+  file. Later writes remain usable because failures do not poison the queue.
+- Regression coverage includes two shared callers cancelled during the
+  post-install durable-index gate, token-ignoring downloader disposal,
+  generation-owned replacement preservation, durable-write rollback, queue
+  recovery, and cache-hit persistence failure.
+
+## Review Verification
+
+- Focused playback-cache suite: 25 passed.
+- Full `flutter test`: 444 passed.
+- Targeted analysis: no issues.
+- Full analysis retains 22 unrelated existing findings.
+- `git diff --check`: clean.
+
+## Task 5 Integration Requirement
+
+- Overall playback-cache remediation is not complete until Network Task 5
+  migrates the production caller in `lib/main.dart` from `getOrDownload` to
+  `acquireOrDownload` and holds/releases the lease for actual playback
+  ownership. Task 4 intentionally does not modify `main.dart` or the audio
+  handler.

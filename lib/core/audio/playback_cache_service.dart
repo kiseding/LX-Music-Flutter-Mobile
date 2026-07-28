@@ -81,10 +81,14 @@ class PlaybackCacheService {
   Future<void>? _initializing;
   final Map<String, _CacheEntry> _index = {};
   final Map<String, _InflightOperation> _inflight = {};
+  final Set<_InflightOperation> _activeOperations = {};
   final Map<String, int> _generations = {};
   final Map<String, int> _leaseCounts = {};
+  final Map<String, Future<void>> _commitTails = {};
   Future<void> _pendingIndexWrite = Future<void>.value();
   bool _initialized = false;
+  bool _disposed = false;
+  Future<void>? _disposeFuture;
 
   PlaybackCacheService({
     Dio? dio,
@@ -157,6 +161,7 @@ class PlaybackCacheService {
   }
 
   Future<void> init() {
+    if (_disposed) return Future<void>.value();
     if (_initialized) return Future<void>.value();
     return _initializing ??= _initialize();
   }
@@ -172,13 +177,41 @@ class PlaybackCacheService {
     await purgeExpired();
   }
 
-  Future<void> dispose() async {
+  Future<void> dispose() {
+    if (_disposeFuture != null) return _disposeFuture!;
+    _disposed = true;
     for (final operation in _inflight.values.toList()) {
       operation.token.cancel('disposed');
       _generations[operation.key] = operation.generation + 1;
     }
     _inflight.clear();
-    await _pendingIndexWrite;
+    return _disposeFuture = _drainForDispose();
+  }
+
+  Future<void> _drainForDispose() async {
+    final initialization = _initializing;
+    if (initialization != null) {
+      try {
+        await initialization;
+      } catch (_) {}
+    }
+    while (_activeOperations.isNotEmpty) {
+      final operations = _activeOperations
+          .map((operation) => operation.future)
+          .toList(growable: false);
+      await Future.wait(operations.map((future) async {
+        try {
+          await future;
+        } catch (_) {}
+      }));
+    }
+    while (true) {
+      final tail = _pendingIndexWrite;
+      try {
+        await tail;
+      } catch (_) {}
+      if (identical(tail, _pendingIndexWrite)) return;
+    }
   }
 
   /// Cancels the shared operation for [key], so every current caller receives
@@ -199,6 +232,7 @@ class PlaybackCacheService {
     required String songId,
     required String quality,
   }) async {
+    if (_disposed) return null;
     final key = cacheKey(
       platform: platform,
       songId: songId,
@@ -212,12 +246,15 @@ class PlaybackCacheService {
       quality: quality,
     );
     if (path == null) return null;
-    _leaseCounts[key] = (_leaseCounts[key] ?? 0) + 1;
     final safePath = await _validatedExistingFile(path);
-    if (safePath == null) {
-      await _releaseLease(key);
+    final entry = _index[key];
+    if (safePath == null ||
+        entry == null ||
+        entry.path != safePath ||
+        (_generations[key] ?? entry.generation) != entry.generation) {
       return null;
     }
+    _leaseCounts[key] = (_leaseCounts[key] ?? 0) + 1;
     return PlaybackCacheLease._(
       safePath,
       toPlayableUri(safePath),
@@ -231,6 +268,7 @@ class PlaybackCacheService {
     required String songId,
     required String quality,
   }) {
+    if (_disposed) return Future<String?>.value();
     return _getOrDownloadPath(
       key: cacheKey(
         platform: platform,
@@ -251,11 +289,18 @@ class PlaybackCacheService {
     required String songId,
     required String quality,
   }) async {
+    if (_disposed) return null;
     await init();
+    if (_disposed) return null;
     final hit = await _lookupValid(key);
     if (hit != null) {
       _index[key] = hit.copyWith(lastAccessedAt: _clock());
-      await _saveIndex();
+      try {
+        await _saveIndex();
+      } catch (_) {
+        _index[key] = hit;
+        return null;
+      }
       final safePath = await _validatedExistingFile(hit.path);
       if (safePath == null) return null;
       debugPrint('[PlaybackCache] hit key=$key');
@@ -268,26 +313,45 @@ class PlaybackCacheService {
     final generation = (_generations[key] ?? 0) + 1;
     _generations[key] = generation;
     final token = CancelToken();
-    late final _InflightOperation operation;
-    final future = _download(
-      key,
-      generation,
-      token,
+    final operation = _InflightOperation(key, generation, token);
+    _inflight[key] = operation;
+    _activeOperations.add(operation);
+    operation.future = _finalizeOperation(
+      operation,
       remoteUrl,
       platform,
       songId,
       quality,
     );
-    operation = _InflightOperation(key, generation, token, future);
-    _inflight[key] = operation;
+    return operation.future;
+  }
+
+  Future<String?> _finalizeOperation(
+    _InflightOperation operation,
+    String remoteUrl,
+    String platform,
+    String songId,
+    String quality,
+  ) async {
     try {
-      final path = await future;
-      if (path == null || !_isCurrent(key, generation, token)) return null;
+      final path = await _download(
+        operation,
+        remoteUrl,
+        platform,
+        songId,
+        quality,
+      );
+      if (path == null || !_isCurrentOperation(operation)) return null;
       return await _validatedExistingFile(path);
+    } catch (error) {
+      debugPrint(
+          '[PlaybackCache] operation failed key=${operation.key}: $error');
+      return null;
     } finally {
-      if (identical(_inflight[key], operation)) {
-        _inflight.remove(key);
+      if (identical(_inflight[operation.key], operation)) {
+        _inflight.remove(operation.key);
       }
+      _activeOperations.remove(operation);
     }
   }
 
@@ -301,7 +365,7 @@ class PlaybackCacheService {
   }
 
   Future<void> purgeExpired() async {
-    if (_root == null) return;
+    if (_root == null || _disposed) return;
     final now = _clock();
     final expired = _index.entries
         .where((entry) =>
@@ -317,6 +381,7 @@ class PlaybackCacheService {
   }
 
   Future<void> debugBackdateEntry(String key, {required int daysAgo}) async {
+    if (_disposed) return;
     final entry = _index[key];
     if (entry == null) return;
     final backdated = _clock().subtract(Duration(days: daysAgo));
@@ -346,18 +411,20 @@ class PlaybackCacheService {
   }
 
   Future<String?> _download(
-    String key,
-    int generation,
-    CancelToken token,
+    _InflightOperation operation,
     String remoteUrl,
     String platform,
     String songId,
     String quality,
   ) async {
+    final key = operation.key;
+    final generation = operation.generation;
+    final token = operation.token;
     final partPath = '$_root/$key.$generation.part';
+    String? stagePath;
     try {
       final safePartPath = await _validatedDestination(partPath);
-      if (safePartPath == null || !_isCurrent(key, generation, token)) {
+      if (safePartPath == null || !_isCurrentOperation(operation)) {
         return null;
       }
       final downloadUrl = normalizeOutboundUrl(remoteUrl);
@@ -384,7 +451,7 @@ class PlaybackCacheService {
         );
       }
 
-      if (!_isCurrent(key, generation, token)) {
+      if (!_isCurrentOperation(operation)) {
         await _deleteSafe(partPath);
         return null;
       }
@@ -413,70 +480,221 @@ class PlaybackCacheService {
         await _deleteSafe(safePart);
         return null;
       }
-      final requestedPath = '$_root/$key$detectedExt';
-      final destination = await _validatedDestination(requestedPath);
-      if (destination == null ||
+      stagePath = '$_root/$key.$generation.stage$detectedExt';
+      final safeStage = await _validatedDestination(stagePath);
+      if (safeStage == null ||
           await _validatedExistingFile(safePart) == null ||
-          !_isCurrent(key, generation, token)) {
+          !_isCurrentOperation(operation)) {
         await _deleteSafe(safePart);
         return null;
       }
-      await _deleteSafe(destination);
       if (await _validatedExistingFile(safePart) == null ||
-          await _validatedDestination(destination) == null ||
-          !_isCurrent(key, generation, token)) {
+          await _validatedDestination(safeStage) == null ||
+          !_isCurrentOperation(operation)) {
         await _deleteSafe(safePart);
         return null;
       }
-      await File(safePart).rename(destination);
-      final safeOutput = await _validatedExistingFile(destination);
-      if (safeOutput == null || !_isCurrent(key, generation, token)) {
-        await _deleteSafe(destination);
+      await File(safePart).rename(safeStage);
+      final staged = await _validatedExistingFile(safeStage);
+      if (staged == null || !_isCurrentOperation(operation)) {
+        await _deleteSafe(safeStage);
         return null;
       }
-
-      final size = await File(safeOutput).length();
-      final now = _clock();
-      _index[key] = _CacheEntry(
-        key: key,
-        path: safeOutput,
-        remoteUrl: remoteUrl,
-        createdAt: now,
-        lastAccessedAt: now,
-        sizeBytes: size,
-        quality: quality,
-        platform: platform,
-        songId: songId,
+      return await _serializeCommit(
+        key,
+        () => _commitStaged(
+          operation,
+          staged,
+          detectedExt,
+          remoteUrl,
+          platform,
+          songId,
+          quality,
+        ),
       );
-      await purgeExpired();
-      if (!_isCurrent(key, generation, token)) {
-        if (_index[key]?.path == safeOutput) _index.remove(key);
-        await _deleteSafe(safeOutput);
-        await _saveIndex();
-        return null;
-      }
-      await _saveIndex();
-      debugPrint('[PlaybackCache] saved key=$key size=$size');
-      return await _validatedExistingFile(safeOutput);
     } on DioException catch (error) {
       if (!CancelToken.isCancel(error)) {
         debugPrint('[PlaybackCache] download failed key=$key: $error');
       }
       await _deleteSafe(partPath);
+      if (stagePath != null) await _deleteSafe(stagePath);
       return null;
     } catch (error) {
       debugPrint('[PlaybackCache] download error key=$key: $error');
       await _deleteSafe(partPath);
+      if (stagePath != null) await _deleteSafe(stagePath);
       return null;
     }
   }
 
-  bool _isCurrent(String key, int generation, CancelToken token) {
-    final operation = _inflight[key];
-    return !token.isCancelled &&
-        _generations[key] == generation &&
-        operation?.generation == generation &&
-        identical(operation?.token, token);
+  Future<String?> _commitStaged(
+    _InflightOperation operation,
+    String staged,
+    String extension,
+    String remoteUrl,
+    String platform,
+    String songId,
+    String quality,
+  ) async {
+    final key = operation.key;
+    final generation = operation.generation;
+    if (!_isCurrentOperation(operation)) {
+      await _deleteSafe(staged);
+      return null;
+    }
+    final stablePath = await _validatedDestination('$_root/$key$extension');
+    final safeStage = await _validatedExistingFile(staged);
+    if (stablePath == null || safeStage == null) return null;
+
+    final previousEntry = _index[key];
+    final backupPath = '$_root/$key.$generation.previous$extension';
+    String? safeBackup;
+    var installed = false;
+    try {
+      final previousFile = await _validatedExistingFile(stablePath);
+      if (previousFile != null) {
+        safeBackup = await _validatedDestination(backupPath);
+        if (safeBackup == null || !_isCurrentOperation(operation)) return null;
+        await File(previousFile).rename(safeBackup);
+      }
+      if (!_isCurrentOperation(operation) ||
+          await _validatedExistingFile(safeStage) == null ||
+          await _validatedDestination(stablePath) == null) {
+        await _restorePrevious(stablePath, safeBackup);
+        return null;
+      }
+      await File(safeStage).rename(stablePath);
+      installed = true;
+      final stable = await _validatedExistingFile(stablePath);
+      if (stable == null || !_isCurrentOperation(operation)) {
+        await _deleteSafe(stablePath);
+        await _restorePrevious(stablePath, safeBackup);
+        return null;
+      }
+
+      final now = _clock();
+      _index[key] = _CacheEntry(
+        key: key,
+        path: stable,
+        remoteUrl: remoteUrl,
+        createdAt: now,
+        lastAccessedAt: now,
+        sizeBytes: await File(stable).length(),
+        quality: quality,
+        platform: platform,
+        songId: songId,
+        generation: generation,
+      );
+      await _purgeUnprotectedWithoutSaving();
+      try {
+        await _saveIndex(allowDuringDispose: true);
+      } catch (_) {
+        await _rollbackCommit(
+          key,
+          generation,
+          stablePath,
+          safeBackup,
+          previousEntry,
+        );
+        return null;
+      }
+      if (!_isCurrentOperation(operation) ||
+          _index[key]?.generation != generation ||
+          await _validatedExistingFile(stablePath) == null) {
+        await _rollbackCommit(
+          key,
+          generation,
+          stablePath,
+          safeBackup,
+          previousEntry,
+        );
+        return null;
+      }
+      if (safeBackup != null) await _deleteSafe(safeBackup);
+      debugPrint('[PlaybackCache] saved key=$key generation=$generation');
+      return await _validatedExistingFile(stablePath);
+    } catch (_) {
+      if (installed) {
+        if (_index[key]?.generation == generation) {
+          await _rollbackCommit(
+            key,
+            generation,
+            stablePath,
+            safeBackup,
+            previousEntry,
+          );
+        } else if (_index[key] == previousEntry) {
+          await _deleteSafe(stablePath);
+          await _restorePrevious(stablePath, safeBackup);
+        }
+      } else {
+        await _deleteSafe(staged);
+        await _restorePrevious(stablePath, safeBackup);
+      }
+      return null;
+    }
+  }
+
+  Future<void> _rollbackCommit(
+    String key,
+    int generation,
+    String stablePath,
+    String? backupPath,
+    _CacheEntry? previousEntry,
+  ) async {
+    if (_index[key]?.generation != generation) return;
+    _index.remove(key);
+    await _deleteSafe(stablePath);
+    await _restorePrevious(stablePath, backupPath);
+    if (previousEntry != null &&
+        await _validatedExistingFile(previousEntry.path) != null) {
+      _index[key] = previousEntry;
+    }
+    try {
+      await _saveIndex(allowDuringDispose: true);
+    } catch (_) {}
+  }
+
+  Future<void> _purgeUnprotectedWithoutSaving() async {
+    final now = _clock();
+    final expired = _index.entries
+        .where((entry) =>
+            !_isProtected(entry.key) &&
+            now.difference(entry.value.lastAccessedAt) > ttl)
+        .map((entry) => entry.key)
+        .toList();
+    for (final key in expired) {
+      await _removeEntry(key);
+    }
+    await _enforceSizeCap();
+  }
+
+  Future<void> _restorePrevious(String stablePath, String? backupPath) async {
+    if (backupPath == null) return;
+    final backup = await _validatedExistingFile(backupPath);
+    final destination = await _validatedDestination(stablePath);
+    if (backup != null && destination != null) {
+      await File(backup).rename(destination);
+    }
+  }
+
+  Future<T> _serializeCommit<T>(String key, Future<T> Function() action) {
+    final previous = _commitTails[key] ?? Future<void>.value();
+    final result = previous.then((_) => action());
+    final tail =
+        result.then<void>((_) {}, onError: (Object _, StackTrace __) {});
+    _commitTails[key] = tail;
+    tail.whenComplete(() {
+      if (identical(_commitTails[key], tail)) _commitTails.remove(key);
+    });
+    return result;
+  }
+
+  bool _isCurrentOperation(_InflightOperation operation) {
+    return !_disposed &&
+        !operation.token.isCancelled &&
+        _generations[operation.key] == operation.generation &&
+        identical(_inflight[operation.key], operation);
   }
 
   bool _isProtected(String key) {
@@ -578,6 +796,7 @@ class PlaybackCacheService {
           if (entry.key.isNotEmpty &&
               await _validatedExistingFile(entry.path) != null) {
             _index[entry.key] = entry;
+            _generations[entry.key] = entry.generation;
           }
         }
       }
@@ -586,7 +805,8 @@ class PlaybackCacheService {
     }
   }
 
-  Future<void> _saveIndex() {
+  Future<void> _saveIndex({bool allowDuringDispose = false}) {
+    if (_disposed && !allowDuringDispose) return Future<void>.value();
     final write = _pendingIndexWrite.then((_) async {
       final snapshot = json.encode(
         _index.values.map((entry) => entry.toJson()).toList(),
@@ -655,9 +875,9 @@ class _InflightOperation {
   final String key;
   final int generation;
   final CancelToken token;
-  final Future<String?> future;
+  late final Future<String?> future;
 
-  const _InflightOperation(this.key, this.generation, this.token, this.future);
+  _InflightOperation(this.key, this.generation, this.token);
 }
 
 class _CacheEntry {
@@ -670,6 +890,7 @@ class _CacheEntry {
   final String quality;
   final String platform;
   final String songId;
+  final int generation;
 
   const _CacheEntry({
     required this.key,
@@ -681,6 +902,7 @@ class _CacheEntry {
     required this.quality,
     required this.platform,
     required this.songId,
+    required this.generation,
   });
 
   _CacheEntry copyWith({DateTime? createdAt, DateTime? lastAccessedAt}) {
@@ -694,6 +916,7 @@ class _CacheEntry {
       quality: quality,
       platform: platform,
       songId: songId,
+      generation: generation,
     );
   }
 
@@ -707,6 +930,7 @@ class _CacheEntry {
         'quality': quality,
         'platform': platform,
         'songId': songId,
+        'generation': generation,
       };
 
   factory _CacheEntry.fromJson(Map<String, dynamic> json) {
@@ -726,6 +950,7 @@ class _CacheEntry {
       quality: json['quality']?.toString() ?? '',
       platform: json['platform']?.toString() ?? '',
       songId: json['songId']?.toString() ?? '',
+      generation: (json['generation'] as num?)?.toInt() ?? 0,
     );
   }
 }

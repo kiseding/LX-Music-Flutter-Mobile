@@ -663,6 +663,194 @@ void main() {
     final persisted = jsonDecode(store.value!) as List;
     expect(persisted, hasLength(2));
   });
+
+  test(
+      'post-commit cancellation returns null to both shared callers and preserves replacement',
+      () async {
+    final store = _ControlledIndexStore();
+    var calls = 0;
+    final commitCache = PlaybackCacheService(
+      cacheRootOverride: tempDir.path,
+      indexStore: store,
+      downloader: (url, savePath, {cancelToken}) async {
+        calls++;
+        await File(savePath).writeAsBytes(List<int>.filled(32, calls));
+      },
+    );
+    await cache.dispose();
+    cache = commitCache;
+    await cache.init();
+    store.blockWriteAfter(0);
+    final key = PlaybackCacheService.cacheKey(
+      platform: 'tx',
+      songId: 'post-commit',
+      quality: '320k',
+    );
+
+    final first = cache.getOrDownload(
+      remoteUrl: 'https://cdn.example.com/old.mp3',
+      platform: 'tx',
+      songId: 'post-commit',
+      quality: '320k',
+    );
+    final joined = cache.getOrDownload(
+      remoteUrl: 'https://cdn.example.com/old.mp3',
+      platform: 'tx',
+      songId: 'post-commit',
+      quality: '320k',
+    );
+    await store.blockedWriteStarted.future;
+    cache.cancelKey(key);
+    store.releaseBlockedWrite.complete();
+    final replacement = await cache.getOrDownload(
+      remoteUrl: 'https://cdn.example.com/new.mp3',
+      platform: 'tx',
+      songId: 'post-commit',
+      quality: '320k',
+    );
+
+    expect(await first, isNull);
+    expect(await joined, isNull);
+    expect(replacement, isNotNull);
+    expect(await File(replacement!).readAsBytes(), List<int>.filled(32, 2));
+    final persisted = (jsonDecode(store.value!) as List).single as Map;
+    expect(persisted['generation'], 3);
+  });
+
+  test('dispose waits for token-ignoring inflight cleanup and rejects new work',
+      () async {
+    final downloadStarted = Completer<void>();
+    final releaseDownload = Completer<void>();
+    final store = _ControlledIndexStore();
+    final disposeCache = PlaybackCacheService(
+      cacheRootOverride: tempDir.path,
+      indexStore: store,
+      downloader: (url, savePath, {cancelToken}) async {
+        downloadStarted.complete();
+        await releaseDownload.future;
+        await File(savePath).writeAsBytes(List<int>.filled(32, 1));
+      },
+    );
+    await cache.dispose();
+    cache = disposeCache;
+    final result = cache.getOrDownload(
+      remoteUrl: 'https://cdn.example.com/dispose.mp3',
+      platform: 'tx',
+      songId: 'dispose',
+      quality: '320k',
+    );
+    await downloadStarted.future;
+
+    var disposeCompleted = false;
+    final disposing = cache.dispose().then((_) => disposeCompleted = true);
+    await Future<void>.delayed(Duration.zero);
+    expect(disposeCompleted, isFalse);
+    expect(
+      await cache.getOrDownload(
+        remoteUrl: 'https://cdn.example.com/new.mp3',
+        platform: 'tx',
+        songId: 'new-after-dispose',
+        quality: '320k',
+      ),
+      isNull,
+    );
+    releaseDownload.complete();
+    await disposing;
+
+    expect(await result, isNull);
+    expect(
+      tempDir.listSync().whereType<File>().where((file) =>
+          file.path.endsWith('.part') || file.path.contains('.stage')),
+      isEmpty,
+    );
+    final writesAtDispose = store.writes;
+    await Future<void>.delayed(Duration.zero);
+    expect(store.writes, writesAtDispose);
+  });
+
+  test('failed durable commit rolls back owned file and later write recovers',
+      () async {
+    final store = _ControlledIndexStore();
+    final durableCache = PlaybackCacheService(
+      cacheRootOverride: tempDir.path,
+      indexStore: store,
+      downloader: (url, savePath, {cancelToken}) async {
+        await File(savePath).writeAsBytes(List<int>.filled(32, 1));
+      },
+    );
+    await cache.dispose();
+    cache = durableCache;
+    await cache.init();
+    store.failNextWrite();
+
+    final failed = await cache.getOrDownload(
+      remoteUrl: 'https://cdn.example.com/fail.mp3',
+      platform: 'tx',
+      songId: 'fail',
+      quality: '320k',
+    );
+
+    expect(failed, isNull);
+    expect(tempDir.listSync().whereType<File>(), isEmpty);
+    expect(jsonDecode(store.value!) as List, isEmpty);
+
+    final recovered = await cache.getOrDownload(
+      remoteUrl: 'https://cdn.example.com/recover.mp3',
+      platform: 'tx',
+      songId: 'recover',
+      quality: '320k',
+    );
+    expect(recovered, isNotNull);
+    expect(File(recovered!).existsSync(), isTrue);
+    await expectLater(cache.dispose(), completes);
+  });
+
+  test('failed cache-hit persistence restores metadata and queue recovers',
+      () async {
+    var now = DateTime(2026, 1, 1);
+    final store = _ControlledIndexStore();
+    final durableCache = PlaybackCacheService(
+      cacheRootOverride: tempDir.path,
+      indexStore: store,
+      clock: () => now,
+      downloader: (url, savePath, {cancelToken}) async {
+        await File(savePath).writeAsBytes(List<int>.filled(32, 1));
+      },
+    );
+    await cache.dispose();
+    cache = durableCache;
+    final path = await cache.getOrDownload(
+      remoteUrl: 'https://cdn.example.com/hit.mp3',
+      platform: 'tx',
+      songId: 'hit-write',
+      quality: '320k',
+    );
+    final persistedBefore = store.value;
+    now = now.add(const Duration(minutes: 1));
+    store.failNextWrite();
+
+    expect(
+      await cache.getOrDownload(
+        remoteUrl: 'https://cdn.example.com/hit.mp3',
+        platform: 'tx',
+        songId: 'hit-write',
+        quality: '320k',
+      ),
+      isNull,
+    );
+    expect(File(path!).existsSync(), isTrue);
+    expect(store.value, persistedBefore);
+
+    expect(
+      await cache.getOrDownload(
+        remoteUrl: 'https://cdn.example.com/hit.mp3',
+        platform: 'tx',
+        songId: 'hit-write',
+        quality: '320k',
+      ),
+      path,
+    );
+  });
 }
 
 Map<String, Object> _entryJson({required String key, required String path}) => {
@@ -711,6 +899,43 @@ class _BlockingIndexStore implements PlaybackCacheIndexStore {
       _blockNext = false;
       firstWriteStarted.complete();
       await releaseFirstWrite.future;
+    }
+    value = raw;
+  }
+}
+
+class _ControlledIndexStore implements PlaybackCacheIndexStore {
+  String? value;
+  var writes = 0;
+  var _writesBeforeBlock = -1;
+  var _failNext = false;
+  Completer<void> blockedWriteStarted = Completer<void>();
+  Completer<void> releaseBlockedWrite = Completer<void>();
+
+  void blockWriteAfter(int writesBeforeBlock) {
+    _writesBeforeBlock = writesBeforeBlock;
+    blockedWriteStarted = Completer<void>();
+    releaseBlockedWrite = Completer<void>();
+  }
+
+  void failNextWrite() => _failNext = true;
+
+  @override
+  Future<String?> read() async => value;
+
+  @override
+  Future<void> write(String raw) async {
+    writes++;
+    if (_writesBeforeBlock == 0) {
+      _writesBeforeBlock = -1;
+      blockedWriteStarted.complete();
+      await releaseBlockedWrite.future;
+    } else if (_writesBeforeBlock > 0) {
+      _writesBeforeBlock--;
+    }
+    if (_failNext) {
+      _failNext = false;
+      throw StateError('index write failed');
     }
     value = raw;
   }
