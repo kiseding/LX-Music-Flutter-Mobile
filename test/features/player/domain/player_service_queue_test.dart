@@ -399,7 +399,7 @@ void main() {
     await handler.applyPreferredQuality('flac');
 
     expect(player.playing, isFalse);
-    expect(player.sourceLoadCalls, loadsAfterRemoval);
+    expect(player.sourceLoadCalls, loadsAfterRemoval + 1);
   });
 
   test('older stale install cannot stop a newer authoritative install',

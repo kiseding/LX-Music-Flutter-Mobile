@@ -103,8 +103,9 @@ void main() {
     final source = File('lib/core/audio/audio_handler.dart').readAsStringSync();
     expect(
       source,
-      contains('skipToQueueItem(int index, {bool seamless = false})'),
+      contains('Duration initialPosition = Duration.zero'),
     );
+    expect(source, contains('bool playAfterLoad = true'));
     expect(source, isNot(contains('_skipToNextInternal(seamless: true)')));
     // 拖进度 pause 不清除播放意图
     expect(source, contains('pauseInternal({bool clearIntent = true})'));

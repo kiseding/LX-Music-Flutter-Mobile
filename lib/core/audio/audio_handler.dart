@@ -161,6 +161,27 @@ String playQualityToken(AudioQualityToken token) {
   }
 }
 
+class QualityReloadIntent {
+  final Duration position;
+  final bool resumeAfterReload;
+
+  const QualityReloadIntent(this.position, this.resumeAfterReload);
+}
+
+QualityReloadIntent qualityReloadIntent({
+  required Duration position,
+  required Duration? duration,
+  required bool wasPlaying,
+}) {
+  var clampedPosition = position.isNegative ? Duration.zero : position;
+  if (duration != null &&
+      duration >= Duration.zero &&
+      clampedPosition > duration) {
+    clampedPosition = duration;
+  }
+  return QualityReloadIntent(clampedPosition, wasPlaying);
+}
+
 class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   final AudioPlayer _player;
   final List<MediaItem> _queue = [];
@@ -567,12 +588,19 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   }
 
   @override
-  Future<void> skipToQueueItem(int index, {bool seamless = false}) async {
+  Future<void> skipToQueueItem(
+    int index, {
+    bool seamless = false,
+    Duration initialPosition = Duration.zero,
+    bool playAfterLoad = true,
+  }) async {
     _expressPlayIntent();
     await _loadQueueItem(
       index,
       seamless: seamless,
       preserveUserIntent: true,
+      initialPosition: initialPosition,
+      playAfterLoad: playAfterLoad,
     );
   }
 
@@ -582,13 +610,23 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     bool preserveUserIntent = false,
     bool recoverStaleInstall = true,
     int? bufferingPublication,
+    Duration initialPosition = Duration.zero,
+    bool? playAfterLoad,
+    int? expectedUserIntentGeneration,
   }) async {
     if (index < 0 || index >= _queue.length) return;
+    if (expectedUserIntentGeneration != null &&
+        expectedUserIntentGeneration != _userIntentGeneration) {
+      return;
+    }
 
     final gen = _bumpGeneration();
     if (!preserveUserIntent) _userWantsPlay = true;
     final item = _queue[index];
     final itemId = item.id;
+    bool ownsExpectedUserIntent() =>
+        expectedUserIntentGeneration == null ||
+        expectedUserIntentGeneration == _userIntentGeneration;
     int activeItemIndex() {
       if (_isStale(gen) ||
           _activeItemId != itemId ||
@@ -637,6 +675,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         }
       }
 
+      if (!ownsExpectedUserIntent()) return;
       var transactionIndex = activeItemIndex();
       if (transactionIndex < 0) return;
       final refreshed = _queue[transactionIndex].extras?['url']?.toString();
@@ -695,9 +734,10 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       _activeItemId = itemId;
 
       // URL 解析在锁外；共享 player source 的安装和恢复停止串行执行。
-      if (_isStale(gen)) return;
+      if (_isStale(gen) || !ownsExpectedUserIntent()) return;
       var recoverAuthoritative = false;
       await _withSourceMutation(() async {
+        if (!ownsExpectedUserIntent()) return;
         transactionIndex = activeItemIndex();
         if (transactionIndex < 0) return;
         final installToken = ++_sourceInstallToken;
@@ -706,7 +746,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         try {
           await _player.setAudioSource(
             audioSourceFor(url!, tag: updatedItem),
-            initialPosition: Duration.zero,
+            initialPosition: initialPosition,
           );
         } catch (_) {
           if (_installedSourceOwnerToken == installToken &&
@@ -736,7 +776,9 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
           return;
         }
         // completed 后 engine playing 可能为 false，以当前用户意图决定是否续播。
-        if (_userWantsPlay) {
+        final shouldPlay =
+            ownsExpectedUserIntent() && (playAfterLoad ?? _userWantsPlay);
+        if (shouldPlay) {
           final startIndex = transactionIndex;
           final startIntentGeneration = _userIntentGeneration;
           bool stillOwnsStart() =>
@@ -751,12 +793,14 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
               startIndex < _queue.length &&
               _queue[startIndex].id == itemId &&
               _userIntentGeneration == startIntentGeneration &&
-              _userWantsPlay;
+              ownsExpectedUserIntent() &&
+              (playAfterLoad != null || _userWantsPlay);
 
           _startPlayer(stillOwnsStart: stillOwnsStart);
           if (_installedSourceOwnerToken != installToken ||
               activeItemIndex() < 0 ||
-              !_userWantsPlay) {
+              _userIntentGeneration != startIntentGeneration ||
+              (playAfterLoad == null && !_userWantsPlay)) {
             return;
           }
           _publishPlaybackState(playingOverride: true);
@@ -984,6 +1028,17 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
   /// 设置页改音质后调用：清掉队列里过期的 url，并让当前曲按新音质重解析。
   Future<void> applyPreferredQuality(String quality) async {
+    final reloadIntent = qualityReloadIntent(
+      position: _player.position,
+      duration: _player.duration,
+      wasPlaying: _player.playing,
+    );
+    final intentGeneration = _userIntentGeneration;
+    if (reloadIntent.resumeAfterReload) {
+      await pauseInternal(clearIntent: false);
+      if (_userIntentGeneration != intentGeneration) return;
+    }
+
     preferredQuality = quality;
     if (_queue.isEmpty) return;
     for (var i = 0; i < _queue.length; i++) {
@@ -998,8 +1053,14 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     }
     queue.add(List.from(_queue));
     final idx = _currentIndex;
-    if (idx >= 0 && idx < _queue.length && _userWantsPlay) {
-      await _loadQueueItem(idx, preserveUserIntent: true);
+    if (idx >= 0 && idx < _queue.length) {
+      await _loadQueueItem(
+        idx,
+        preserveUserIntent: true,
+        initialPosition: reloadIntent.position,
+        playAfterLoad: reloadIntent.resumeAfterReload,
+        expectedUserIntentGeneration: intentGeneration,
+      );
     }
   }
 }
