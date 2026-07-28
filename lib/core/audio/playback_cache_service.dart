@@ -68,6 +68,18 @@ class PlaybackCacheLease {
 class PlaybackCacheService {
   static const defaultTtl = Duration(days: 3);
   static const defaultMaxBytes = 1024 * 1024 * 1024;
+  static const _stableAudioExtensions = [
+    '.flac',
+    '.m4a',
+    '.mp3',
+    '.aac',
+    '.ogg',
+    '.wav',
+    '.ape',
+  ];
+  static final _stableCacheName = RegExp(
+    r'^([0-9a-f]{40})\.(flac|m4a|mp3|aac|ogg|wav|ape)$',
+  );
 
   final Dio _dio;
   final PlaybackDownloader? _downloader;
@@ -173,6 +185,7 @@ class PlaybackCacheService {
     await directory.create(recursive: true);
     _root = _normalizeAbsolute(await directory.resolveSymbolicLinks());
     await _loadIndex();
+    await _cleanupUnindexedStableFiles();
     _initialized = true;
     await purgeExpired();
   }
@@ -388,6 +401,7 @@ class PlaybackCacheService {
     for (final key in expired) {
       await _removeEntry(key);
     }
+    await _cleanupUnindexedStableFiles();
     await _enforceSizeCap();
     await _saveIndex();
   }
@@ -623,6 +637,11 @@ class PlaybackCacheService {
         return null;
       }
       if (safeBackup != null) await _deleteSafe(safeBackup);
+      await _deleteStableSiblingsOwnedBy(
+        key,
+        generation,
+        except: stablePath,
+      );
       debugPrint('[PlaybackCache] saved key=$key generation=$generation');
       return await _validatedExistingFile(stablePath);
     } catch (_) {
@@ -678,7 +697,39 @@ class PlaybackCacheService {
     for (final key in expired) {
       await _removeEntry(key);
     }
+    await _cleanupUnindexedStableFiles();
     await _enforceSizeCap();
+  }
+
+  Future<void> _deleteStableSiblingsOwnedBy(
+    String key,
+    int generation, {
+    required String except,
+  }) async {
+    final normalizedExcept = _normalizeAbsolute(except);
+    for (final extension in _stableAudioExtensions) {
+      if (_index[key]?.generation != generation) return;
+      final candidate = _normalizeAbsolute('$_root/$key$extension');
+      if (candidate == normalizedExcept) continue;
+      await _deleteSafe(candidate);
+    }
+  }
+
+  Future<void> _cleanupUnindexedStableFiles() async {
+    final root = _root;
+    if (root == null) return;
+    final indexedPaths =
+        _index.values.map((entry) => _normalizeAbsolute(entry.path)).toSet();
+    await for (final entity in Directory(root).list(followLinks: false)) {
+      if (entity is! File) continue;
+      final name = entity.uri.pathSegments.last;
+      final match = _stableCacheName.firstMatch(name);
+      if (match == null) continue;
+      final key = match.group(1)!;
+      final path = _normalizeAbsolute(entity.path);
+      if (indexedPaths.contains(path) || _isProtected(key)) continue;
+      await _deleteSafe(path);
+    }
   }
 
   Future<void> _restorePrevious(String stablePath, String? backupPath) async {
@@ -858,15 +909,7 @@ class PlaybackCacheService {
 
   String _guessExt(String url) {
     final path = Uri.tryParse(url)?.path.toLowerCase() ?? url.toLowerCase();
-    for (final ext in [
-      '.flac',
-      '.m4a',
-      '.mp3',
-      '.aac',
-      '.ogg',
-      '.wav',
-      '.ape'
-    ]) {
+    for (final ext in _stableAudioExtensions) {
       if (path.contains(ext)) return ext;
     }
     return '.audio';

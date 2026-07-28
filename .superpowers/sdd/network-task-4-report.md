@@ -129,3 +129,32 @@ TDD, exact idempotent leases, and persisted true LRU access timestamps.
 - Targeted analysis: no issues.
 - Full analysis retains 22 unrelated existing findings.
 - `git diff --check`: clean.
+
+## Stable Sibling Fix
+
+- Stable cache ownership now recognizes only exact lowercase 40-hex cache keys
+  followed by an approved audio extension: FLAC, M4A, MP3, AAC, OGG, WAV, or
+  APE. Generation-specific part, staging, and backup files are excluded, as are
+  filenames that merely share a key prefix.
+- Per-key commit keeps the prior indexed file and every old stable sibling until
+  the replacement file and generation-bearing index entry are durably written.
+  After durability, sibling deletion proceeds only while the index still names
+  the committing generation. MP3-to-FLAC and FLAC-to-MP3 transitions therefore
+  leave exactly the new stable file.
+- A failed format-transition index write removes only the new generation file,
+  restores a same-extension backup when applicable, and retains the prior
+  different-extension file and index entry.
+- Physical stable-file accounting now matches index accounting after format
+  transitions, so old siblings cannot silently exceed `maxBytes`.
+- Initialization and explicit purge scan for known-pattern stable files left by
+  earlier versions. Unindexed files are removed through root-safe deletion;
+  indexed paths and leased/inflight keys are preserved. Unknown, staging, part,
+  and prefix-related filenames are not treated as cache-owned stable files.
+
+## Stable Sibling Verification
+
+- Focused playback-cache suite: 34 passed.
+- Full `flutter test`: 453 passed.
+- Targeted analysis: no issues.
+- Full analysis retains 22 unrelated existing findings.
+- `git diff --check`: clean.

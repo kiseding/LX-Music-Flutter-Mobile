@@ -1000,6 +1000,240 @@ void main() {
     expect(afterPurge['lastAccessedAt'],
         DateTime(2026, 1, 1, 2).millisecondsSinceEpoch);
   });
+
+  test('expired mp3 replaced by flac removes old stable sibling', () async {
+    var now = DateTime(2026, 1, 1);
+    final transitionCache = PlaybackCacheService(
+      cacheRootOverride: tempDir.path,
+      indexStore: MemoryPlaybackCacheIndexStore(),
+      clock: () => now,
+      ttl: const Duration(hours: 1),
+      downloader: (url, savePath, {cancelToken}) async {
+        final bytes = url.endsWith('.flac')
+            ? <int>[0x66, 0x4c, 0x61, 0x43, ...List<int>.filled(28, 0)]
+            : <int>[0x49, 0x44, 0x33, ...List<int>.filled(29, 0)];
+        await File(savePath).writeAsBytes(bytes);
+      },
+    );
+    await cache.dispose();
+    cache = transitionCache;
+
+    final oldPath = await cache.getOrDownload(
+      remoteUrl: 'https://cdn.example.com/song.mp3',
+      platform: 'tx',
+      songId: 'mp3-to-flac',
+      quality: 'same-key',
+    );
+    now = now.add(const Duration(hours: 2));
+    final newPath = await cache.getOrDownload(
+      remoteUrl: 'https://cdn.example.com/song.flac',
+      platform: 'tx',
+      songId: 'mp3-to-flac',
+      quality: 'same-key',
+    );
+
+    expect(oldPath, endsWith('.mp3'));
+    expect(newPath, endsWith('.flac'));
+    expect(File(oldPath!).existsSync(), isFalse);
+    expect(File(newPath!).existsSync(), isTrue);
+  });
+
+  test('expired flac replaced by mp3 removes old stable sibling', () async {
+    var now = DateTime(2026, 1, 1);
+    final transitionCache = PlaybackCacheService(
+      cacheRootOverride: tempDir.path,
+      indexStore: MemoryPlaybackCacheIndexStore(),
+      clock: () => now,
+      ttl: const Duration(hours: 1),
+      downloader: (url, savePath, {cancelToken}) async {
+        final bytes = url.endsWith('.flac')
+            ? <int>[0x66, 0x4c, 0x61, 0x43, ...List<int>.filled(28, 0)]
+            : <int>[0x49, 0x44, 0x33, ...List<int>.filled(29, 0)];
+        await File(savePath).writeAsBytes(bytes);
+      },
+    );
+    await cache.dispose();
+    cache = transitionCache;
+
+    final oldPath = await cache.getOrDownload(
+      remoteUrl: 'https://cdn.example.com/song.flac',
+      platform: 'tx',
+      songId: 'flac-to-mp3',
+      quality: 'same-key',
+    );
+    now = now.add(const Duration(hours: 2));
+    final newPath = await cache.getOrDownload(
+      remoteUrl: 'https://cdn.example.com/song.mp3',
+      platform: 'tx',
+      songId: 'flac-to-mp3',
+      quality: 'same-key',
+    );
+
+    expect(oldPath, endsWith('.flac'));
+    expect(newPath, endsWith('.mp3'));
+    expect(File(oldPath!).existsSync(), isFalse);
+    expect(File(newPath!).existsSync(), isTrue);
+  });
+
+  test('format transition never deletes a prefix-related filename', () async {
+    var now = DateTime(2026, 1, 1);
+    final key = PlaybackCacheService.cacheKey(
+      platform: 'tx',
+      songId: 'prefix-safe',
+      quality: 'same-key',
+    );
+    final unrelated = File('${tempDir.path}/${key}0.mp3')
+      ..writeAsBytesSync(List<int>.filled(32, 9));
+    final transitionCache = PlaybackCacheService(
+      cacheRootOverride: tempDir.path,
+      indexStore: MemoryPlaybackCacheIndexStore(),
+      clock: () => now,
+      ttl: const Duration(hours: 1),
+      downloader: (url, savePath, {cancelToken}) async {
+        final bytes = url.endsWith('.flac')
+            ? <int>[0x66, 0x4c, 0x61, 0x43, ...List<int>.filled(28, 0)]
+            : <int>[0x49, 0x44, 0x33, ...List<int>.filled(29, 0)];
+        await File(savePath).writeAsBytes(bytes);
+      },
+    );
+    await cache.dispose();
+    cache = transitionCache;
+
+    await cache.getOrDownload(
+      remoteUrl: 'https://cdn.example.com/song.mp3',
+      platform: 'tx',
+      songId: 'prefix-safe',
+      quality: 'same-key',
+    );
+    now = now.add(const Duration(hours: 2));
+    await cache.getOrDownload(
+      remoteUrl: 'https://cdn.example.com/song.flac',
+      platform: 'tx',
+      songId: 'prefix-safe',
+      quality: 'same-key',
+    );
+
+    expect(unrelated.existsSync(), isTrue);
+    expect(unrelated.readAsBytesSync(), List<int>.filled(32, 9));
+  });
+
+  test('failed format transition restores old index and file only', () async {
+    var now = DateTime(2026, 1, 1);
+    final store = _ControlledIndexStore();
+    final transitionCache = PlaybackCacheService(
+      cacheRootOverride: tempDir.path,
+      indexStore: store,
+      clock: () => now,
+      ttl: const Duration(hours: 1),
+      downloader: (url, savePath, {cancelToken}) async {
+        final bytes = url.endsWith('.flac')
+            ? <int>[0x66, 0x4c, 0x61, 0x43, ...List<int>.filled(28, 0)]
+            : <int>[0x49, 0x44, 0x33, ...List<int>.filled(29, 0)];
+        await File(savePath).writeAsBytes(bytes);
+      },
+    );
+    await cache.dispose();
+    cache = transitionCache;
+    final oldPath = await cache.getOrDownload(
+      remoteUrl: 'https://cdn.example.com/song.mp3',
+      platform: 'tx',
+      songId: 'transition-failure',
+      quality: 'same-key',
+    );
+    now = now.add(const Duration(hours: 2));
+    store.failNextWrite();
+
+    final failed = await cache.getOrDownload(
+      remoteUrl: 'https://cdn.example.com/song.flac',
+      platform: 'tx',
+      songId: 'transition-failure',
+      quality: 'same-key',
+    );
+
+    expect(failed, isNull);
+    expect(File(oldPath!).existsSync(), isTrue);
+    expect(File(oldPath.replaceAll('.mp3', '.flac')).existsSync(), isFalse);
+    final persisted = (jsonDecode(store.value!) as List).single as Map;
+    expect(persisted['path'], oldPath);
+  });
+
+  test('format transition leaves physical stable bytes within maxBytes',
+      () async {
+    var now = DateTime(2026, 1, 1);
+    final sizeCache = PlaybackCacheService(
+      cacheRootOverride: tempDir.path,
+      indexStore: MemoryPlaybackCacheIndexStore(),
+      clock: () => now,
+      ttl: const Duration(hours: 1),
+      maxBytes: 64,
+      downloader: (url, savePath, {cancelToken}) async {
+        final bytes = url.endsWith('.flac')
+            ? <int>[0x66, 0x4c, 0x61, 0x43, ...List<int>.filled(28, 0)]
+            : <int>[0x49, 0x44, 0x33, ...List<int>.filled(29, 0)];
+        await File(savePath).writeAsBytes(bytes);
+      },
+    );
+    await cache.dispose();
+    cache = sizeCache;
+    await cache.getOrDownload(
+      remoteUrl: 'https://cdn.example.com/song.mp3',
+      platform: 'tx',
+      songId: 'size-transition',
+      quality: 'same-key',
+    );
+    now = now.add(const Duration(hours: 2));
+    await cache.getOrDownload(
+      remoteUrl: 'https://cdn.example.com/song.flac',
+      platform: 'tx',
+      songId: 'size-transition',
+      quality: 'same-key',
+    );
+    await cache.getOrDownload(
+      remoteUrl: 'https://cdn.example.com/other.mp3',
+      platform: 'tx',
+      songId: 'other-size',
+      quality: 'same-key',
+    );
+
+    final stableFiles = tempDir.listSync().whereType<File>().where((file) =>
+        RegExp(r'/[0-9a-f]{40}\.(mp3|flac|m4a|aac|ogg|wav|ape)$')
+            .hasMatch(file.path));
+    final physicalBytes =
+        stableFiles.fold<int>(0, (total, file) => total + file.lengthSync());
+    expect(physicalBytes, lessThanOrEqualTo(64));
+  });
+
+  test('init removes unindexed known stable cache files only', () async {
+    final orphanKey = List.filled(40, 'a').join();
+    final indexedKey = List.filled(40, 'b').join();
+    final orphan = File('${tempDir.path}/$orphanKey.mp3')
+      ..writeAsBytesSync(List<int>.filled(32, 1));
+    final indexed = File('${tempDir.path}/$indexedKey.flac')
+      ..writeAsBytesSync(List<int>.filled(32, 2));
+    final unrelated = File('${tempDir.path}/${orphanKey}0.mp3')
+      ..writeAsBytesSync(List<int>.filled(32, 3));
+    final staging = File('${tempDir.path}/$orphanKey.1.stage.mp3')
+      ..writeAsBytesSync(List<int>.filled(32, 4));
+    final store = MemoryPlaybackCacheIndexStore()
+      ..value = jsonEncode([
+        _entryJson(key: indexedKey, path: indexed.path),
+      ]);
+    final migrationCache = PlaybackCacheService(
+      cacheRootOverride: tempDir.path,
+      indexStore: store,
+      clock: () => DateTime(2026, 1, 2),
+      downloader: (url, savePath, {cancelToken}) async {},
+    );
+    await cache.dispose();
+    cache = migrationCache;
+
+    await cache.init();
+
+    expect(orphan.existsSync(), isFalse);
+    expect(indexed.existsSync(), isTrue);
+    expect(unrelated.existsSync(), isTrue);
+    expect(staging.existsSync(), isTrue);
+  });
 }
 
 Map<String, Object> _entryJson({required String key, required String path}) => {
