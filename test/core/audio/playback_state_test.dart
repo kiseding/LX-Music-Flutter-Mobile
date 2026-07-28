@@ -340,6 +340,82 @@ void main() {
     );
     expect(handler.playbackState.value.playing, isFalse);
   });
+
+  test('authoritative source install failure reports and falls back once',
+      () async {
+    final player = _PlaybackStateAudioPlayer()
+      ..sourceInstallProcessingState = ProcessingState.ready;
+    final handler = LxAudioHandler(player: player);
+    addTearDown(player.dispose);
+    final errors = <String>[];
+    handler.onError = errors.add;
+    const items = [
+      MediaItem(
+        id: 'A',
+        title: 'A',
+        extras: {'url': 'file:///tmp/A.mp3', 'requestedQuality': '320k'},
+      ),
+      MediaItem(
+        id: 'B',
+        title: 'B',
+        extras: {'url': 'file:///tmp/B.mp3', 'requestedQuality': '320k'},
+      ),
+      MediaItem(
+        id: 'C',
+        title: 'C',
+        extras: {'url': 'file:///tmp/C.mp3', 'requestedQuality': '320k'},
+      ),
+    ];
+    await handler.setPlaylist(items);
+    player.failNextSourceInstall = true;
+
+    final navigation = handler.skipToNext();
+    await pumpEventQueue();
+
+    expect(handler.currentQueueIndex, 2);
+    expect(handler.mediaItem.value?.id, 'C');
+    expect(errors, hasLength(1));
+    await navigation;
+  });
+
+  test('stale source install failure is silent and cannot fall back', () async {
+    final player = _PlaybackStateAudioPlayer()
+      ..sourceInstallProcessingState = ProcessingState.ready;
+    final handler = LxAudioHandler(player: player);
+    addTearDown(player.dispose);
+    final errors = <String>[];
+    handler.onError = errors.add;
+    const items = [
+      MediaItem(
+        id: 'A',
+        title: 'A',
+        extras: {'url': 'file:///tmp/A.mp3', 'requestedQuality': '320k'},
+      ),
+      MediaItem(
+        id: 'B',
+        title: 'B',
+        extras: {'url': 'file:///tmp/B.mp3', 'requestedQuality': '320k'},
+      ),
+      MediaItem(
+        id: 'C',
+        title: 'C',
+        extras: {'url': 'file:///tmp/C.mp3', 'requestedQuality': '320k'},
+      ),
+    ];
+    await handler.setPlaylist(items);
+    final staleFailure = player.gateNextSourceInstallFailure();
+
+    final staleNavigation = handler.skipToNext();
+    await staleFailure.started.future;
+    final currentNavigation = handler.skipToQueueItem(2);
+    staleFailure.release.complete();
+    await Future.wait([staleNavigation, currentNavigation]);
+
+    expect(handler.currentQueueIndex, 2);
+    expect(handler.mediaItem.value?.id, 'C');
+    expect(errors, isEmpty);
+    expect(player.sourceLoadCalls, 3);
+  });
 }
 
 class _PlaybackStateAudioPlayer extends AudioPlayer {
@@ -355,10 +431,17 @@ class _PlaybackStateAudioPlayer extends AudioPlayer {
   ProcessingState? sourceInstallProcessingState;
   bool failNextSourceInstall = false;
   final _playFailureGates = <_PlayFailureGate>[];
+  final _sourceFailureGates = <_PlayFailureGate>[];
 
   _PlayFailureGate gateNextPlayFailure() {
     final gate = _PlayFailureGate();
     _playFailureGates.add(gate);
+    return gate;
+  }
+
+  _PlayFailureGate gateNextSourceInstallFailure() {
+    final gate = _PlayFailureGate();
+    _sourceFailureGates.add(gate);
     return gate;
   }
 
@@ -420,6 +503,13 @@ class _PlaybackStateAudioPlayer extends AudioPlayer {
     Duration? initialPosition,
   }) async {
     sourceLoadCalls++;
+    final failureGate =
+        _sourceFailureGates.isEmpty ? null : _sourceFailureGates.removeAt(0);
+    if (failureGate != null) {
+      failureGate.started.complete();
+      await failureGate.release.future;
+      throw StateError('source install');
+    }
     if (failNextSourceInstall) {
       failNextSourceInstall = false;
       throw StateError('source install');

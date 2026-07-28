@@ -706,6 +706,53 @@ void main() {
 
     expect(player.playing, isFalse);
   });
+
+  for (final releaseQualityFirst in [true, false]) {
+    test(
+        'overlapping quality and scrub owners wait when ${releaseQualityFirst ? 'quality' : 'scrub'} releases first',
+        () async {
+      final player = _QualityAudioPlayer();
+      final handler = LxAudioHandler(player: player);
+      addTearDown(player.dispose);
+      handler.urlResolver = (id, [extras]) async =>
+          'file:///tmp/$id-${extras?['requestedQuality']}.mp3';
+      await handler.setPlaylist([_item('A')]);
+      player.setEngineState(
+        position: const Duration(seconds: 42),
+        duration: const Duration(minutes: 3),
+        playing: true,
+      );
+      final resolveGate = _Gate();
+      handler.urlResolver = (id, [extras]) async {
+        resolveGate.started.complete();
+        await resolveGate.release.future;
+        return 'file:///tmp/$id-flac.mp3';
+      };
+
+      final reload = handler.applyPreferredQuality('flac');
+      await resolveGate.started.future;
+      final scrubOwner = await handler.pauseForScrub(
+        sourceGeneration: handler.sourceGeneration,
+        userIntentGeneration: handler.userIntentGeneration,
+        stillOwnsScrub: () => true,
+      );
+      expect(scrubOwner, isNotNull);
+
+      if (releaseQualityFirst) {
+        resolveGate.release.complete();
+        await reload;
+        expect(player.playing, isFalse);
+        await handler.releaseAfterScrub(scrubOwner!, resumeAfter: true);
+      } else {
+        await handler.releaseAfterScrub(scrubOwner!, resumeAfter: true);
+        expect(player.playing, isFalse);
+        resolveGate.release.complete();
+        await reload;
+      }
+
+      expect(player.playing, isTrue);
+    });
+  }
 }
 
 MediaItem _item(String id) => MediaItem(

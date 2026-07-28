@@ -87,6 +87,29 @@ void main() {
     expect(player.playing, isFalse);
   });
 
+  test('pending quality source request makes old completion inert', () async {
+    await handler.setPlaylist([item('A'), item('B')]);
+    handler.urlResolver = (id, [extras]) async =>
+        'file:///tmp/$id-${extras?['requestedQuality']}.mp3';
+    player.gateNextPause();
+
+    final reload = handler.applyPreferredQuality('flac');
+    await player.pauseStarted.future;
+    final loadsBeforeCompletion = player.sourceLoadCalls;
+    player.emitCompleted();
+    await pumpEventQueue();
+
+    expect(handler.currentQueueIndex, 0);
+    expect(handler.mediaItem.value?.id, 'A');
+    expect(player.sourceLoadCalls, loadsBeforeCompletion);
+
+    player.releasePause.complete();
+    await reload;
+
+    expect(handler.currentQueueIndex, 0);
+    expect(handler.mediaItem.value?.id, 'A');
+  });
+
   test('completion uses one native signal and no position threshold', () {
     final source = File('lib/core/audio/audio_handler.dart').readAsStringSync();
     expect(source, contains('state != ProcessingState.completed'));
@@ -131,15 +154,24 @@ class _CompletionAudioPlayer extends AudioPlayer {
   int sourceLoadCalls = 0;
   Completer<void>? _sourceLoadStarted;
   Completer<void>? _releaseSourceLoad;
+  Completer<void>? _pauseStarted;
+  Completer<void>? _releasePause;
 
   void emitCompleted() => _processingStates.add(ProcessingState.completed);
 
   Completer<void> get sourceLoadStarted => _sourceLoadStarted!;
   Completer<void> get releaseSourceLoad => _releaseSourceLoad!;
+  Completer<void> get pauseStarted => _pauseStarted!;
+  Completer<void> get releasePause => _releasePause!;
 
   void gateNextSourceLoad() {
     _sourceLoadStarted = Completer<void>();
     _releaseSourceLoad = Completer<void>();
+  }
+
+  void gateNextPause() {
+    _pauseStarted = Completer<void>();
+    _releasePause = Completer<void>();
   }
 
   @override
@@ -178,6 +210,14 @@ class _CompletionAudioPlayer extends AudioPlayer {
 
   @override
   Future<void> pause() async {
+    final started = _pauseStarted;
+    final release = _releasePause;
+    if (started != null && release != null) {
+      started.complete();
+      await release.future;
+      _pauseStarted = null;
+      _releasePause = null;
+    }
     _playing = false;
   }
 

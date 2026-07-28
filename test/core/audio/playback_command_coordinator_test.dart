@@ -89,16 +89,75 @@ void main() {
     await coordinator.explicitPlay();
     expect(player.playCalls, 1);
 
-    await coordinator.pausePreservingIntent();
+    final owner = await coordinator.pausePreservingIntent();
     await pumpEventQueue();
 
     expect(player.playing, isFalse);
     expect(player.playCalls, 1);
 
-    await coordinator.resumePreservingIntent();
+    await coordinator.releasePreservingIntent(owner);
 
     expect(player.playing, isTrue);
     expect(player.playCalls, 2);
+  });
+
+  for (final releaseFirst in ['first', 'second']) {
+    test(
+        'overlapping preserving owners block until $releaseFirst releases last',
+        () async {
+      final player = _LifecycleAudioPlayer();
+      final coordinator = PlaybackCommandCoordinator(player);
+      addTearDown(player.dispose);
+      await _install(coordinator);
+      await coordinator.explicitPlay();
+      final first = await coordinator.pausePreservingIntent();
+      final second = await coordinator.pausePreservingIntent();
+
+      await coordinator.explicitPlay();
+      await coordinator.releasePreservingIntent(
+        releaseFirst == 'first' ? first : second,
+      );
+      expect(player.playing, isFalse);
+
+      await coordinator.releasePreservingIntent(
+        releaseFirst == 'first' ? second : first,
+      );
+      expect(player.playing, isTrue);
+    });
+  }
+
+  test('explicit pause remains denied after preserving owner release',
+      () async {
+    final player = _LifecycleAudioPlayer();
+    final coordinator = PlaybackCommandCoordinator(player);
+    addTearDown(player.dispose);
+    await _install(coordinator);
+    await coordinator.explicitPlay();
+    final first = await coordinator.pausePreservingIntent();
+    final second = await coordinator.pausePreservingIntent();
+
+    await coordinator.explicitPause();
+    await coordinator.releasePreservingIntent(first);
+    await coordinator.releasePreservingIntent(second);
+
+    expect(player.playing, isFalse);
+  });
+
+  test('stop remains denied after preserving owner release', () async {
+    final player = _LifecycleAudioPlayer();
+    final coordinator = PlaybackCommandCoordinator(player);
+    addTearDown(player.dispose);
+    await _install(coordinator);
+    await coordinator.explicitPlay();
+    final first = await coordinator.pausePreservingIntent();
+    final second = await coordinator.pausePreservingIntent();
+
+    await coordinator.stop();
+    await coordinator.releasePreservingIntent(first);
+    await coordinator.releasePreservingIntent(second);
+
+    expect(player.playing, isFalse);
+    expect(player.processingState, ProcessingState.idle);
   });
 
   test('natural completion does not replay the current source', () async {
@@ -224,6 +283,57 @@ void main() {
     await pumpEventQueue();
 
     expect(errors, ['play']);
+  });
+
+  test('source commit reports installed and stale outcomes', () async {
+    final player = _LifecycleAudioPlayer();
+    final coordinator = PlaybackCommandCoordinator(player);
+    addTearDown(player.dispose);
+    final stale = coordinator.requestSource(
+      mediaId: 'A',
+      queueIndex: 0,
+      position: Duration.zero,
+    );
+    final current = coordinator.requestSource(
+      mediaId: 'B',
+      queueIndex: 1,
+      position: Duration.zero,
+    );
+
+    expect(
+      await coordinator.commitSource(
+        stale,
+        AudioSource.uri(Uri.parse('file:///tmp/A.mp3')),
+      ),
+      isA<SourceCommitStale>(),
+    );
+    expect(
+      await coordinator.commitSource(
+        current,
+        AudioSource.uri(Uri.parse('file:///tmp/B.mp3')),
+      ),
+      isA<SourceCommitInstalled>(),
+    );
+  });
+
+  test('authoritative source commit returns its install error', () async {
+    final error = StateError('source install');
+    final player = _LifecycleAudioPlayer()..sourceInstallError = error;
+    final coordinator = PlaybackCommandCoordinator(player);
+    addTearDown(player.dispose);
+    final request = coordinator.requestSource(
+      mediaId: 'A',
+      queueIndex: 0,
+      position: Duration.zero,
+    );
+
+    final result = await coordinator.commitSource(
+      request,
+      AudioSource.uri(Uri.parse('file:///tmp/A.mp3')),
+    );
+
+    expect(result, isA<SourceCommitFailed>());
+    expect((result as SourceCommitFailed).error, same(error));
   });
 
   test('failed seek is consumed before a later interruption pause', () async {
@@ -368,6 +478,7 @@ class _LifecycleAudioPlayer extends AudioPlayer {
   int playCalls = 0;
   int seekCalls = 0;
   bool failNextSeek = false;
+  Object? sourceInstallError;
   final calls = <String>[];
 
   @override
@@ -384,6 +495,8 @@ class _LifecycleAudioPlayer extends AudioPlayer {
     Duration? initialPosition,
   }) async {
     calls.add('source');
+    final error = sourceInstallError;
+    if (error != null) throw error;
     _processingState = ProcessingState.ready;
     return null;
   }

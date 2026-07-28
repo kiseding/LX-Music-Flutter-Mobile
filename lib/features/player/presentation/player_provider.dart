@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:just_audio/just_audio.dart';
 
 import '../../../core/audio/audio_handler.dart';
+import '../../../core/audio/playback_command_coordinator.dart';
 import '../../playlist/presentation/playlist_provider.dart';
 import '../domain/music_item.dart';
 import '../domain/player_service.dart';
@@ -239,13 +240,15 @@ abstract interface class ScrubPlayback {
   int get interruptionGeneration;
   int get playbackStartBlockGeneration;
 
-  Future<void> pauseForScrub({
+  Future<PreservingPauseOwner?> pauseForScrub({
     required int sourceGeneration,
     required int userIntentGeneration,
     required bool Function() stillOwnsScrub,
   });
   Future<Duration?> seekConfirmed(Duration position);
-  Future<void> resumeAfterScrub({
+  Future<void> releaseAfterScrub(
+    PreservingPauseOwner? owner, {
+    required bool resumeAfter,
     required int interruptionGeneration,
     required int startBlockGeneration,
   });
@@ -279,7 +282,7 @@ class ScrubCoordinator {
             userIntentGeneration: userIntentGeneration,
             stillOwnsScrub: () => generation == _generation,
           )
-        : Future<void>.value();
+        : Future<PreservingPauseOwner?>.value();
     _transactions[generation] = _ScrubTransaction(
       sourceGeneration: sourceGeneration,
       userIntentGeneration: userIntentGeneration,
@@ -314,13 +317,15 @@ class ScrubCoordinator {
       if (!transaction.owns(_playback)) return;
       confirmed = await _playback.seekConfirmed(position);
       if (generation != _generation) return;
-      if (confirmed != null && resumeAfter && transaction.owns(_playback)) {
-        await _playback.resumeAfterScrub(
-          interruptionGeneration: transaction.interruptionGeneration,
-          startBlockGeneration: transaction.startBlockGeneration,
-        );
-      }
     } finally {
+      final owner = await transaction.pauseFuture;
+      await _playback.releaseAfterScrub(
+        owner,
+        resumeAfter:
+            confirmed != null && resumeAfter && transaction.owns(_playback),
+        interruptionGeneration: transaction.interruptionGeneration,
+        startBlockGeneration: transaction.startBlockGeneration,
+      );
       if (generation == _generation) {
         final actual =
             transaction.sourceGeneration == _playback.sourceGeneration
@@ -338,7 +343,7 @@ class _ScrubTransaction {
   final int userIntentGeneration;
   final int interruptionGeneration;
   final int startBlockGeneration;
-  final Future<void> pauseFuture;
+  final Future<PreservingPauseOwner?> pauseFuture;
 
   const _ScrubTransaction({
     required this.sourceGeneration,
@@ -380,7 +385,7 @@ class _HandlerScrubPlayback implements ScrubPlayback {
       _handler?.playbackStartBlockGeneration ?? 0;
 
   @override
-  Future<void> pauseForScrub({
+  Future<PreservingPauseOwner?> pauseForScrub({
     required int sourceGeneration,
     required int userIntentGeneration,
     required bool Function() stillOwnsScrub,
@@ -390,7 +395,7 @@ class _HandlerScrubPlayback implements ScrubPlayback {
         userIntentGeneration: userIntentGeneration,
         stillOwnsScrub: stillOwnsScrub,
       ) ??
-      Future<void>.value();
+      Future<PreservingPauseOwner?>.value();
 
   @override
   Future<Duration?> seekConfirmed(Duration position) async {
@@ -401,11 +406,15 @@ class _HandlerScrubPlayback implements ScrubPlayback {
   }
 
   @override
-  Future<void> resumeAfterScrub({
+  Future<void> releaseAfterScrub(
+    PreservingPauseOwner? owner, {
+    required bool resumeAfter,
     required int interruptionGeneration,
     required int startBlockGeneration,
   }) =>
-      _handler?.resumeAfterScrub(
+      _handler?.releaseAfterScrub(
+        owner,
+        resumeAfter: resumeAfter,
         interruptionGeneration: interruptionGeneration,
         startBlockGeneration: startBlockGeneration,
       ) ??

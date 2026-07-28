@@ -9,6 +9,31 @@ typedef PlaybackMutationError = void Function(
   StackTrace stackTrace,
 );
 
+sealed class SourceCommitResult {
+  const SourceCommitResult();
+}
+
+final class SourceCommitInstalled extends SourceCommitResult {
+  const SourceCommitInstalled();
+}
+
+final class SourceCommitStale extends SourceCommitResult {
+  final bool nativeInstallApplied;
+
+  const SourceCommitStale({this.nativeInstallApplied = false});
+}
+
+final class SourceCommitFailed extends SourceCommitResult {
+  final Object error;
+  final StackTrace stackTrace;
+
+  const SourceCommitFailed(this.error, this.stackTrace);
+}
+
+final class PreservingPauseOwner {
+  PreservingPauseOwner._();
+}
+
 class PlaybackCommandCoordinator {
   final AudioPlayer _player;
   final VoidCallback? _onStateChanged;
@@ -22,7 +47,7 @@ class PlaybackCommandCoordinator {
   int? _installedSourceToken;
   bool _stopDesired = false;
   bool _desiredPlaying = false;
-  bool _preservingPause = false;
+  final Set<PreservingPauseOwner> _preservingPauseOwners = {};
   int _intentRevision = 0;
   int? _resumeDeniedIntentRevision;
   int _interruptionDepth = 0;
@@ -44,6 +69,7 @@ class PlaybackCommandCoordinator {
   int? _failedPlayIntentRevision;
   int? _failedPlaySourceToken;
   int? _failedSourceToken;
+  SourceCommitFailed? _failedSourceCommit;
 
   PlaybackCommandCoordinator(
     this._player, {
@@ -53,6 +79,11 @@ class PlaybackCommandCoordinator {
         _onError = onError;
 
   int get sourceToken => _sourceToken;
+  int? get desiredSourceToken => _desiredSource?.token;
+  int? get installedSourceToken => _installedSourceToken;
+  bool get installedSourceIsAuthoritative =>
+      _installedSourceToken != null &&
+      _installedSourceToken == _desiredSource?.token;
   int get intentRevision => _intentRevision;
   int get interruptionDepth => _interruptionDepth;
   bool get interruptionActive => _interruptionDepth > 0;
@@ -73,6 +104,7 @@ class PlaybackCommandCoordinator {
       position: position,
     );
     _failedSourceToken = null;
+    _failedSourceCommit = null;
     _stopDesired = false;
     _desiredSeek = null;
     _appliedSeekRevision = _seekRevision;
@@ -82,18 +114,27 @@ class PlaybackCommandCoordinator {
 
   bool ownsSourceRequest(int token) => _desiredSource?.token == token;
 
-  Future<bool> commitSource(int token, AudioSource source) async {
+  Future<SourceCommitResult> commitSource(int token, AudioSource source) async {
     final desired = _desiredSource;
-    if (desired == null || desired.token != token) return false;
+    if (desired == null || desired.token != token) {
+      return const SourceCommitStale();
+    }
     desired.source = source;
     await _markDirty(awaitApplication: true);
-    return _desiredSource?.token == token && _installedSourceToken == token;
+    if (_desiredSource?.token != token) {
+      return SourceCommitStale(
+        nativeInstallApplied: _installedSourceToken == token,
+      );
+    }
+    if (_installedSourceToken == token) return const SourceCommitInstalled();
+    return _failedSourceToken == token && _failedSourceCommit != null
+        ? _failedSourceCommit!
+        : const SourceCommitStale();
   }
 
   Future<void> explicitPlay() {
     _intentRevision++;
     _desiredPlaying = true;
-    _preservingPause = false;
     _stopDesired = false;
     _retirePausedPlayLifecycle();
     return _markDirty();
@@ -102,18 +143,19 @@ class PlaybackCommandCoordinator {
   Future<void> explicitPause() {
     _intentRevision++;
     _desiredPlaying = false;
-    _preservingPause = false;
     return _markDirty();
   }
 
-  Future<void> pausePreservingIntent() {
-    _preservingPause = true;
-    return _markDirty(awaitApplication: true);
+  Future<PreservingPauseOwner> pausePreservingIntent() async {
+    final owner = PreservingPauseOwner._();
+    _preservingPauseOwners.add(owner);
+    await _markDirty(awaitApplication: true);
+    return owner;
   }
 
-  Future<void> resumePreservingIntent() {
-    _preservingPause = false;
-    _retirePausedPlayLifecycle();
+  Future<void> releasePreservingIntent(PreservingPauseOwner owner) {
+    if (!_preservingPauseOwners.remove(owner)) return settled;
+    if (_preservingPauseOwners.isEmpty) _retirePausedPlayLifecycle();
     return _markDirty();
   }
 
@@ -121,8 +163,6 @@ class PlaybackCommandCoordinator {
     _desiredPlaying = playing;
     if (playing) {
       _retirePausedPlayLifecycle();
-    } else {
-      _preservingPause = true;
     }
     return _markDirty();
   }
@@ -138,7 +178,6 @@ class PlaybackCommandCoordinator {
   Future<void> stop() {
     _intentRevision++;
     _desiredPlaying = false;
-    _preservingPause = false;
     _desiredSource = null;
     _stopDesired = true;
     _sourceToken++;
@@ -195,7 +234,6 @@ class PlaybackCommandCoordinator {
     _interruptionMayResume = true;
     _intentRevision++;
     _desiredPlaying = false;
-    _preservingPause = false;
     _resumeDeniedIntentRevision = _intentRevision;
     return _markDirty();
   }
@@ -220,7 +258,7 @@ class PlaybackCommandCoordinator {
 
   bool get _effectivePlaying =>
       _desiredPlaying &&
-      !_preservingPause &&
+      _preservingPauseOwners.isEmpty &&
       !interruptionActive &&
       (_resumeDeniedIntentRevision == null ||
           _intentRevision > _resumeDeniedIntentRevision!);
@@ -271,7 +309,7 @@ class PlaybackCommandCoordinator {
           );
         } catch (error, stackTrace) {
           _failedSourceToken = desiredSource.token;
-          _onError?.call('setAudioSource', error, stackTrace);
+          _failedSourceCommit = SourceCommitFailed(error, stackTrace);
           if (_desiredSource?.token == desiredSource.token) {
             _onStateChanged?.call();
           }
@@ -306,7 +344,7 @@ class PlaybackCommandCoordinator {
         if (_player.playing || _activePlayCommandToken != null) {
           final playToken = _activePlayCommandToken;
           if (playToken != null) {
-            _playEndReasons[playToken] = _preservingPause
+            _playEndReasons[playToken] = _preservingPauseOwners.isNotEmpty
                 ? _PlayEndReason.preservingPause
                 : _PlayEndReason.pause;
           }

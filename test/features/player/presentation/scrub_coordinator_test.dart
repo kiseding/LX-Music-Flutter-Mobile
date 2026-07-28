@@ -4,6 +4,7 @@ import 'package:audio_service/audio_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:lx_music_flutter/core/audio/audio_handler.dart';
+import 'package:lx_music_flutter/core/audio/playback_command_coordinator.dart';
 import 'package:lx_music_flutter/features/player/presentation/player_provider.dart';
 
 void main() {
@@ -433,7 +434,7 @@ class _FakeScrubPlayback implements ScrubPlayback {
   }
 
   @override
-  Future<void> pauseForScrub({
+  Future<PreservingPauseOwner?> pauseForScrub({
     required int sourceGeneration,
     required int userIntentGeneration,
     required bool Function() stillOwnsScrub,
@@ -446,15 +447,20 @@ class _FakeScrubPlayback implements ScrubPlayback {
     }
     if (pauseError != null) throw pauseError!;
     playing = false;
+    return null;
   }
 
   @override
-  Future<void> resumeAfterScrub({
+  Future<void> releaseAfterScrub(
+    PreservingPauseOwner? owner, {
+    required bool resumeAfter,
     required int interruptionGeneration,
     required int startBlockGeneration,
   }) async {
-    resumeCalls++;
-    playing = true;
+    if (resumeAfter) {
+      resumeCalls++;
+      playing = true;
+    }
   }
 
   @override
@@ -511,7 +517,7 @@ class _RealHandlerScrubPlayback implements ScrubPlayback {
   int get playbackStartBlockGeneration => handler.playbackStartBlockGeneration;
 
   @override
-  Future<void> pauseForScrub({
+  Future<PreservingPauseOwner?> pauseForScrub({
     required int sourceGeneration,
     required int userIntentGeneration,
     required bool Function() stillOwnsScrub,
@@ -527,11 +533,15 @@ class _RealHandlerScrubPlayback implements ScrubPlayback {
       handler.seekConfirmed(position);
 
   @override
-  Future<void> resumeAfterScrub({
+  Future<void> releaseAfterScrub(
+    PreservingPauseOwner? owner, {
+    required bool resumeAfter,
     required int interruptionGeneration,
     required int startBlockGeneration,
   }) =>
-      handler.resumeAfterScrub(
+      handler.releaseAfterScrub(
+        owner,
+        resumeAfter: resumeAfter,
         interruptionGeneration: interruptionGeneration,
         startBlockGeneration: startBlockGeneration,
       );

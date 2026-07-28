@@ -4,6 +4,7 @@ import 'package:audio_service/audio_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:lx_music_flutter/core/audio/audio_handler.dart';
+import 'package:lx_music_flutter/core/audio/playback_command_coordinator.dart';
 import 'package:lx_music_flutter/features/player/presentation/player_provider.dart';
 
 void main() {
@@ -344,7 +345,7 @@ void main() {
     final intentGeneration = handler.userIntentGeneration;
     final interruptionGeneration = handler.interruptionGeneration;
     final startBlockGeneration = handler.playbackStartBlockGeneration;
-    await handler.pauseForScrub(
+    final owner = await handler.pauseForScrub(
       sourceGeneration: sourceGeneration,
       userIntentGeneration: intentGeneration,
       stillOwnsScrub: () => true,
@@ -355,7 +356,9 @@ void main() {
     await handler.beginAudioInterruption();
     seekGate.release.complete();
     expect(await seek, const Duration(seconds: 30));
-    await handler.resumeAfterScrub(
+    await handler.releaseAfterScrub(
+      owner,
+      resumeAfter: true,
       interruptionGeneration: interruptionGeneration,
       startBlockGeneration: startBlockGeneration,
     );
@@ -376,7 +379,7 @@ void main() {
     final intentGeneration = handler.userIntentGeneration;
     final interruptionGeneration = handler.interruptionGeneration;
     final startBlockGeneration = handler.playbackStartBlockGeneration;
-    await handler.pauseForScrub(
+    final owner = await handler.pauseForScrub(
       sourceGeneration: sourceGeneration,
       userIntentGeneration: intentGeneration,
       stillOwnsScrub: () => true,
@@ -388,7 +391,9 @@ void main() {
     await handler.endAudioInterruption(mayResume: false);
     seekGate.release.complete();
     await seek;
-    await handler.resumeAfterScrub(
+    await handler.releaseAfterScrub(
+      owner,
+      resumeAfter: true,
       interruptionGeneration: interruptionGeneration,
       startBlockGeneration: startBlockGeneration,
     );
@@ -923,7 +928,7 @@ class _InterruptionScrubPlayback implements ScrubPlayback {
   int get playbackStartBlockGeneration => handler.playbackStartBlockGeneration;
 
   @override
-  Future<void> pauseForScrub({
+  Future<PreservingPauseOwner?> pauseForScrub({
     required int sourceGeneration,
     required int userIntentGeneration,
     required bool Function() stillOwnsScrub,
@@ -939,11 +944,15 @@ class _InterruptionScrubPlayback implements ScrubPlayback {
       handler.seekConfirmed(position);
 
   @override
-  Future<void> resumeAfterScrub({
+  Future<void> releaseAfterScrub(
+    PreservingPauseOwner? owner, {
+    required bool resumeAfter,
     required int interruptionGeneration,
     required int startBlockGeneration,
   }) =>
-      handler.resumeAfterScrub(
+      handler.releaseAfterScrub(
+        owner,
+        resumeAfter: resumeAfter,
         interruptionGeneration: interruptionGeneration,
         startBlockGeneration: startBlockGeneration,
       );
