@@ -24,12 +24,30 @@ Uri playableUri(String url) {
   return Uri.parse(url);
 }
 
+/// iOS/macOS：开启精确时长与定位，否则 FLAC 等格式 seek 会失败或偏差很大，
+/// 而 just_audio 仍乐观更新 position，造成歌词/进度与可听输出脱节。
+const _preciseDarwinOptions = ProgressiveAudioSourceOptions(
+  darwinAssetOptions: DarwinAssetOptions(
+    preferPreciseDurationAndTiming: true,
+  ),
+);
+
 AudioSource audioSourceFor(String url, {MediaItem? tag}) {
   // 未解析曲目用超长静音，避免短 WAV 瞬间 completed 连跳多首
   if (url.isEmpty) {
     return SilenceAudioSource(duration: const Duration(days: 1), tag: tag);
   }
-  return AudioSource.uri(playableUri(url), tag: tag);
+  final uri = playableUri(url);
+  // ProgressiveAudioSource 覆盖本地 file / 普通 http 媒体；m3u8/mpd 仍走 uri 工厂
+  final path = uri.path.toLowerCase();
+  if (path.endsWith('.m3u8') || path.endsWith('.mpd')) {
+    return AudioSource.uri(uri, tag: tag);
+  }
+  return ProgressiveAudioSource(
+    uri,
+    tag: tag,
+    options: _preciseDarwinOptions,
+  );
 }
 
 /// 单曲 setAudioSource 架构下，just_audio 的 shuffle/seekToNext 无效。
@@ -113,25 +131,6 @@ String playQualityToken(AudioQualityToken token) {
     case AudioQualityToken.hires:
       return 'hires';
   }
-}
-
-bool isLosslessQuality(String? quality) {
-  final q = (quality ?? '').toLowerCase();
-  return q.contains('flac') ||
-      q.contains('hires') ||
-      q.contains('ape') ||
-      q.contains('wav') ||
-      q.contains('alac') ||
-      q.contains('dsd') ||
-      q.contains('lossless');
-}
-
-/// FLAC/无损 seek 更慢；给更长 settle 窗口。
-Duration seekBudgetForQuality(String? quality) {
-  if (isLosslessQuality(quality)) {
-    return const Duration(milliseconds: 1200);
-  }
-  return const Duration(milliseconds: 500);
 }
 
 class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
@@ -375,116 +374,6 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
     await _player.seek(target);
     _broadcastState(_player.playbackEvent);
-  }
-
-  String? get _currentPlayUrl {
-    final extras = mediaItem.value?.extras;
-    final url = extras?['url']?.toString();
-    if (url != null && url.isNotEmpty && !url.startsWith('data:')) return url;
-    return null;
-  }
-
-  String get _currentQualityLabel =>
-      mediaItem.value?.extras?['actualQuality']?.toString() ??
-      mediaItem.value?.extras?['requestedQuality']?.toString() ??
-      preferredQuality;
-
-  /// FLAC 等无损：just_audio 的 seek 会乐观改 updatePosition，但原生 AVPlayer
-  /// 可能未真正 seek，导致 UI 到目标、音频还在旧位置（差十几秒）。
-  /// 用 setAudioSource(initialPosition:) 强制按字节定位重载。
-  Future<Duration> hardSeekTo(Duration displayPosition) async {
-    final url = _currentPlayUrl;
-    final tag = mediaItem.value;
-    if (url == null || tag == null) {
-      await seek(displayPosition);
-      return _player.position;
-    }
-
-    var target = displayPosition;
-    if (target.isNegative) target = Duration.zero;
-    final dur = _player.duration;
-    if (dur != null && dur > Duration.zero && target > dur) {
-      target = dur - const Duration(milliseconds: 80);
-      if (target.isNegative) target = Duration.zero;
-    }
-
-    // 不自动 play：由 scrub finish 的 resumeAfter 决定，避免 pause 拖动后误起播
-    await _withAutoAdvanceSuppressed(() async {
-      await _player.setAudioSource(
-        audioSourceFor(url, tag: tag),
-        initialPosition: target,
-      );
-      // setAudioSource 把事件 position 设为 initialPosition（原生已按字节定位）
-      _broadcastState(_player.playbackEvent);
-    });
-    return _player.position;
-  }
-
-  /// 有损：普通 seek 一次；无损：hard seek 重载，再等待 position 稳定。
-  Future<Duration> seekToDisplay(
-    Duration displayPosition, {
-    Duration? budget,
-    Duration tolerance = const Duration(milliseconds: 150),
-    int stableHits = 3,
-  }) async {
-    var target = displayPosition;
-    if (target.isNegative) target = Duration.zero;
-
-    if (isLosslessQuality(_currentQualityLabel)) {
-      await hardSeekTo(target);
-    } else {
-      await seek(target);
-    }
-    return waitForSettledPosition(
-      target,
-      budget: budget,
-      tolerance: tolerance,
-      stableHits: stableHits,
-      requirePlaying: false,
-    );
-  }
-
-  /// 不起 seek，只在 [budget] 内轮询，直到 position 连续稳定在目标附近。
-  /// FLAC 起播后禁止再 seek，否则解码重启、声音落后 UI。
-  Future<Duration> waitForSettledPosition(
-    Duration target, {
-    Duration? budget,
-    Duration tolerance = const Duration(milliseconds: 150),
-    int stableHits = 3,
-    bool requirePlaying = false,
-  }) async {
-    final quality = mediaItem.value?.extras?['actualQuality']?.toString() ??
-        mediaItem.value?.extras?['requestedQuality']?.toString() ??
-        preferredQuality;
-    final settleBudget = budget ?? seekBudgetForQuality(quality);
-    final deadline = DateTime.now().add(settleBudget);
-    if (target.isNegative) target = Duration.zero;
-
-    var hits = 0;
-    Duration last = _player.position;
-    while (DateTime.now().isBefore(deadline)) {
-      final p = _player.position;
-      final near =
-          (p - target).inMilliseconds.abs() <= tolerance.inMilliseconds;
-      final ready = _player.processingState == ProcessingState.ready ||
-          _player.processingState == ProcessingState.buffering;
-      final playingOk = !requirePlaying || _player.playing;
-      if (near && ready && playingOk) {
-        hits += 1;
-        last = p;
-        if (hits >= stableHits) {
-          _broadcastState(_player.playbackEvent);
-          return p;
-        }
-      } else {
-        hits = 0;
-        last = p;
-      }
-      await Future<void>.delayed(const Duration(milliseconds: 25));
-    }
-
-    _broadcastState(_player.playbackEvent);
-    return last;
   }
 
   @override

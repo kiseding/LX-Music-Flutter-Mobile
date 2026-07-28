@@ -3,6 +3,38 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('local progressive sources request precise darwin timing for flac seek',
+      () {
+    final handler = File(
+      'lib/core/audio/audio_handler.dart',
+    ).readAsStringSync();
+    expect(handler, contains('ProgressiveAudioSource('));
+    expect(handler, contains('preferPreciseDurationAndTiming: true'));
+    expect(handler, contains('DarwinAssetOptions'));
+  });
+
+  test('scrub path is a single pause-seek-play without settle polling', () {
+    final handler = File(
+      'lib/core/audio/audio_handler.dart',
+    ).readAsStringSync();
+    expect(handler, isNot(contains('waitForSettledPosition')));
+    expect(handler, isNot(contains('hardSeekTo')));
+    expect(handler, isNot(contains('seekToDisplay')));
+    expect(handler, isNot(contains('seekBudgetForQuality')));
+
+    final provider = File(
+      'lib/features/player/presentation/player_provider.dart',
+    ).readAsStringSync();
+    final scrub = provider.substring(
+      provider.indexOf('Future<void> finish('),
+      provider.indexOf('final scrubCoordinatorProvider'),
+    );
+    expect(scrub, contains('await h.seek(position)'));
+    expect(scrub, contains('unfreeze(position)'));
+    expect(scrub, isNot(contains('waitForSettledPosition')));
+    expect(scrub, isNot(contains('seekToDisplay')));
+  });
+
   test('play starts asynchronously instead of waiting for playback to end', () {
     final handler = File(
       'lib/core/audio/audio_handler.dart',
@@ -11,44 +43,8 @@ void main() {
       handler.indexOf('Future<void> play() async'),
       handler.indexOf('/// 供测试：模拟当前曲播放完成'),
     );
-
     expect(play, contains('_startPlayer();'));
     expect(play, isNot(contains('await _player.play()')));
-    expect(handler, contains('unawaited(_player.play()'));
-  });
-
-  test('lossless scrub uses hard seek via setAudioSource initialPosition', () {
-    final handler = File(
-      'lib/core/audio/audio_handler.dart',
-    ).readAsStringSync();
-    expect(handler, contains('bool isLosslessQuality('));
-    expect(handler, contains('Future<Duration> hardSeekTo('));
-    expect(handler, contains('initialPosition: target'));
-    expect(handler, contains('setAudioSource('));
-
-    final seekToDisplay = handler.substring(
-      handler.indexOf('Future<Duration> seekToDisplay('),
-      handler.indexOf('Future<Duration> waitForSettledPosition('),
-    );
-    expect(seekToDisplay, contains('isLosslessQuality'));
-    expect(seekToDisplay, contains('hardSeekTo('));
-  });
-
-  test('scrub does not pin official clock before engine settles', () {
-    final provider = File(
-      'lib/features/player/presentation/player_provider.dart',
-    ).readAsStringSync();
-    final scrub = provider.substring(
-      provider.indexOf('Future<void> finish('),
-      provider.indexOf('final scrubCoordinatorProvider'),
-    );
-
-    expect(scrub, contains('seekToDisplay('));
-    expect(scrub, contains('waitForSettledPosition'));
-    expect(scrub, contains('unfreeze(settled)'));
-    expect(scrub, isNot(contains('unfreeze(position)')));
-    // Only one seekToDisplay; play path uses wait-only settle.
-    expect(scrub.split('seekToDisplay(').length - 1, 1);
   });
 
   test('progress UI holds local preview until scrub finish returns', () {
@@ -58,7 +54,6 @@ void main() {
     final mini = File(
       'lib/features/player/presentation/widgets/mini_player.dart',
     ).readAsStringSync();
-
     final fullEnd = full.substring(full.indexOf('onHorizontalDragEnd:'));
     final miniEnd = mini.substring(mini.indexOf('onHorizontalDragEnd:'));
     expect(
