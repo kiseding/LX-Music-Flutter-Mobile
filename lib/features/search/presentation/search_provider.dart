@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/music_source_service.dart';
 import '../../../core/storage/storage_service.dart';
@@ -72,7 +73,7 @@ class SearchNotifier extends StateNotifier<SearchState> {
 
   Future<void> search(String query, {bool isLoadMore = false}) async {
     final timestamp = DateTime.now().millisecondsSinceEpoch;
-    print(' [SearchFlow] [$timestamp] SearchNotifier.search START: query=$query, isLoadMore=$isLoadMore');
+    debugPrint(' [SearchFlow] [$timestamp] SearchNotifier.search START: query=$query, isLoadMore=$isLoadMore');
     
     if (query.isEmpty) {
       state = SearchState();
@@ -81,7 +82,7 @@ class SearchNotifier extends StateNotifier<SearchState> {
 
     // 防止重复搜索
     if (state.isLoading && !isLoadMore) {
-      print(' [SearchFlow] [$timestamp] SearchNotifier.search IGNORED: Already loading');
+      debugPrint(' [SearchFlow] [$timestamp] SearchNotifier.search IGNORED: Already loading');
       return;
     }
     if (isLoadMore && (!state.hasMore || state.isLoading)) return;
@@ -93,7 +94,7 @@ class SearchNotifier extends StateNotifier<SearchState> {
 
     final stopwatch = Stopwatch()..start();
     try {
-      print(' [SearchFlow] [$timestamp] Calling Service.search: source=$sourceId, type=music');
+      debugPrint(' [SearchFlow] [$timestamp] Calling Service.search: source=$sourceId, type=music');
       final results = await _service.search(
         query,
         customSourceId: sourceId,
@@ -102,7 +103,7 @@ class SearchNotifier extends StateNotifier<SearchState> {
       );
       
       stopwatch.stop();
-      print(' [SearchFlow] [$timestamp] Service.search SUCCESS: found ${results.length} items, duration=${stopwatch.elapsedMilliseconds}ms');
+      debugPrint(' [SearchFlow] [$timestamp] Service.search SUCCESS: found ${results.length} items, duration=${stopwatch.elapsedMilliseconds}ms');
 
       state = state.copyWith(
         items: isLoadMore ? [...state.items, ...results] : results,
@@ -112,8 +113,8 @@ class SearchNotifier extends StateNotifier<SearchState> {
       );
     } catch (e, stack) {
       stopwatch.stop();
-      print(' [SearchFlow] [$timestamp] Service.search ERROR: $e, duration=${stopwatch.elapsedMilliseconds}ms');
-      print(stack);
+      debugPrint(' [SearchFlow] [$timestamp] Service.search ERROR: $e, duration=${stopwatch.elapsedMilliseconds}ms');
+      debugPrint(stack.toString());
       state = state.copyWith(isLoading: false, error: e.toString());
     }
   }
@@ -173,7 +174,7 @@ final hotSearchProvider = FutureProvider<List<String>>((ref) async {
   if (kwSource == null) return _defaultHotSearch;
   try {
     final dio = kwSource.createDioForService();
-    final response = await dio.get('http://search.kuwo.cn/r.s', queryParameters: {
+    final response = await dio.get('https://search.kuwo.cn/r.s', queryParameters: {
       'client': 'kt',
       'rn': '20',
       'pn': '0',

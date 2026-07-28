@@ -23,9 +23,9 @@ class KwSource extends MusicPlatform {
 
   KwSource() {
     _dio = createDio();
-    _dio.options.baseUrl = 'http://search.kuwo.cn';
+    _dio.options.baseUrl = 'https://search.kuwo.cn';
     _dio.options.headers.addAll({
-      'Referer': 'http://www.kuwo.cn/',
+      'Referer': 'https://www.kuwo.cn/',
       'Cookie': 'kw_token=',
     });
   }
@@ -101,7 +101,7 @@ class KwSource extends MusicPlatform {
     // 排行榜 API 使用 artistPic 作为封面
     final artwork = item['pic'] as String?
         ?? item['artistPic'] as String?
-        ?? ((songmid.isNotEmpty && songmid.length > 5) ? 'http://img.kuwo.cn/star/starheads/${songmid}_small.jpg' : '');
+        ?? ((songmid.isNotEmpty && songmid.length > 5) ? 'https://img.kuwo.cn/star/starheads/${songmid}_small.jpg' : '');
 
     return MusicItem(
       id: songmid,
@@ -137,7 +137,7 @@ class KwSource extends MusicPlatform {
 
     try {
       final response = await _dio.get(
-        'http://artistpicserver.kuwo.cn/pic.web',
+        'https://artistpicserver.kuwo.cn/pic.web',
         queryParameters: {
           'corp': 'kuwo',
           'type': 'rid_pic',
@@ -247,7 +247,7 @@ class KwSource extends MusicPlatform {
         });
 
         final response = await urlDio.get(
-          'http://antiserver.kuwo.cn/anti.s',
+          'https://antiserver.kuwo.cn/anti.s',
           queryParameters: {
             'type': 'convert_url',
             'rid': ridFormat,
@@ -278,11 +278,11 @@ class KwSource extends MusicPlatform {
       try {
         final urlDio = createDioForService(headers: {
           'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36',
-          'Referer': 'http://www.kuwo.cn/',
+          'Referer': 'https://www.kuwo.cn/',
         });
 
         final response = await urlDio.get(
-          'http://www.kuwo.cn/url',
+          'https://www.kuwo.cn/url',
           queryParameters: {
             'format': _qualityToFormat(quality),
             'rid': ridFormat,
@@ -337,13 +337,13 @@ class KwSource extends MusicPlatform {
       final lyricDio = createDioForService(
         headers: {
           'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36',
-          'Referer': 'http://www.kuwo.cn/',
+          'Referer': 'https://www.kuwo.cn/',
         },
       );
       lyricDio.options.responseType = ResponseType.bytes;
 
       final response = await lyricDio.get(
-        'http://newlyric.kuwo.cn/newlyric.lrc?$params',
+        'https://newlyric.kuwo.cn/newlyric.lrc?$params',
       );
 
       final data = response.data;
@@ -417,10 +417,10 @@ class KwSource extends MusicPlatform {
     try {
       final dio = createDioForService(headers: {
         'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36',
-        'Referer': 'http://www.kuwo.cn/',
+        'Referer': 'https://www.kuwo.cn/',
       });
       final response = await dio.get(
-        'http://nplserver.kuwo.cn/pl.svc',
+        'https://nplserver.kuwo.cn/pl.svc',
         queryParameters: {
           'op': 'getlistinfo',
           'pid': songListId,

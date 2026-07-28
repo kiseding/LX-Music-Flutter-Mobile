@@ -11,15 +11,20 @@ void main() {
   ];
 
   test('production networking has no bad certificate callback', () {
-    for (final path in [
-      ...centralizedClients,
-      'lib/features/custom_source/domain/custom_source_engine.dart',
-    ]) {
+    for (final file in _productionDartFiles()) {
       expect(
-        File(path).readAsStringSync(),
+        file.readAsStringSync(),
         isNot(contains('badCertificateCallback')),
-        reason: path,
+        reason: file.path,
       );
+    }
+  });
+
+  test('production outbound URL literals use HTTPS', () {
+    for (final file in _productionDartFiles()) {
+      final insecure = _quotedLiterals(file.readAsStringSync())
+          .where((literal) => literal.contains('http://'));
+      expect(insecure, isEmpty, reason: file.path);
     }
   });
 
@@ -37,4 +42,54 @@ void main() {
     final plist = File('ios/Runner/Info.plist').readAsStringSync();
     expect(plist, isNot(contains('<key>NSAllowsArbitraryLoads</key>')));
   });
+}
+
+List<File> _productionDartFiles() {
+  final files = Directory('lib')
+      .listSync(recursive: true)
+      .whereType<File>()
+      .where((file) => file.path.endsWith('.dart'))
+      .toList();
+  files.sort((a, b) => a.path.compareTo(b.path));
+  return files;
+}
+
+Iterable<String> _quotedLiterals(String source) sync* {
+  var index = 0;
+  while (index < source.length) {
+    if (source.startsWith('//', index)) {
+      final newline = source.indexOf('\n', index + 2);
+      index = newline < 0 ? source.length : newline + 1;
+      continue;
+    }
+    if (source.startsWith('/*', index)) {
+      final end = source.indexOf('*/', index + 2);
+      index = end < 0 ? source.length : end + 2;
+      continue;
+    }
+
+    final quote = source[index];
+    if (quote != "'" && quote != '"') {
+      index++;
+      continue;
+    }
+
+    final tripleQuote = '$quote$quote$quote';
+    final triple = source.startsWith(tripleQuote, index);
+    final delimiter = triple ? tripleQuote : quote;
+    final start = index + delimiter.length;
+    index = start;
+    while (index < source.length) {
+      if (!triple && source[index] == '\\') {
+        index += 2;
+        continue;
+      }
+      if (source.startsWith(delimiter, index)) {
+        yield source.substring(start, index);
+        index += delimiter.length;
+        break;
+      }
+      index++;
+    }
+  }
 }

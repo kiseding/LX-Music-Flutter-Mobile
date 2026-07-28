@@ -137,7 +137,7 @@ class WySource extends MusicPlatform {
 
       final response = await _dio
           .post(
-            'http://interface.music.163.com/eapi/batch',
+            'https://interface.music.163.com/eapi/batch',
             data: eapiParams,
             options: Options(contentType: 'application/x-www-form-urlencoded'),
           )
@@ -209,8 +209,9 @@ class WySource extends MusicPlatform {
 
   static String _normalizeArtwork(dynamic value) {
     final artwork = value?.toString().trim() ?? '';
-    if (artwork.startsWith('http://')) {
-      return 'https://${artwork.substring(7)}';
+    final uri = Uri.tryParse(artwork);
+    if (uri?.scheme == 'http') {
+      return uri!.replace(scheme: 'https').toString();
     }
     return artwork;
   }
@@ -292,7 +293,7 @@ class WySource extends MusicPlatform {
       });
 
       final response = await lyricDio.post(
-        'http://interface.music.163.com/eapi/song/lyric/v1',
+        'https://interface.music.163.com/eapi/song/lyric/v1',
         data: 'params=${eapiParams['params']}',
       );
 
@@ -342,9 +343,7 @@ class WySource extends MusicPlatform {
         final songs = await getLeaderboardSongs(c.id, limit: 1);
         final art = songs.isNotEmpty ? songs.first.artwork : null;
         var cover = (art != null && art.isNotEmpty) ? art : null;
-        if (cover != null && cover.startsWith('http://')) {
-          cover = 'https://${cover.substring(7)}';
-        }
+        cover = cover == null ? null : _normalizeArtwork(cover);
         return c.copyWith(coverUrl: cover);
       } catch (_) {
         return c;
@@ -413,7 +412,7 @@ class WySource extends MusicPlatform {
 
       // 桌面版: weapi /weapi/v3/song/detail
       final detailParams = weapi({
-        'c': '[' + ids.map((id) => '{"id":$id}').join(',') + ']',
+        'c': '[${ids.map((id) => '{"id":$id}').join(',')}]',
         'ids': '[${ids.join(',')}]',
       });
 

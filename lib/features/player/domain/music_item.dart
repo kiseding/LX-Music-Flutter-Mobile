@@ -117,10 +117,9 @@ class MusicItem {
 
   static String? _normalizeArtwork(
       String source, String platform, String? artwork) {
-    if ((source == 'wy' || platform == 'wy') &&
-        artwork != null &&
-        artwork.startsWith('http://')) {
-      return 'https://${artwork.substring(7)}';
+    final uri = artwork == null ? null : Uri.tryParse(artwork);
+    if ((source == 'wy' || platform == 'wy') && uri?.scheme == 'http') {
+      return uri!.replace(scheme: 'https').toString();
     }
     return artwork;
   }

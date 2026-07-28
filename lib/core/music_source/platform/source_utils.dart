@@ -48,8 +48,9 @@ String formatSingerName(List<dynamic> singers,
 
 String normalizeNeteaseArtwork(dynamic value) {
   final artwork = value?.toString().trim() ?? '';
-  if (artwork.startsWith('http://')) {
-    return 'https://${artwork.substring(7)}';
+  final uri = Uri.tryParse(artwork);
+  if (uri?.scheme == 'http') {
+    return uri!.replace(scheme: 'https').toString();
   }
   return artwork;
 }
