@@ -1621,8 +1621,19 @@ class CustomSourceEngine {
     ValidatedSourceRequest request,
     SourceRequestCancellation cancellation,
   ) async {
+    if (cancellation.isCancelled) {
+      throw const SourceRequestPolicyException(
+          'cancelled', 'Source request was cancelled');
+    }
     final cancelToken = CancelToken();
+    if (cancellation.isCancelled) {
+      cancelToken.cancel('Source request cancelled');
+    }
     cancellation.future.then((reason) => cancelToken.cancel(reason));
+    if (cancellation.isCancelled) {
+      throw const SourceRequestPolicyException(
+          'cancelled', 'Source request was cancelled');
+    }
     var nextAddress = 0;
     final dio = Dio();
     dio.httpClientAdapter = IOHttpClientAdapter(
@@ -1644,6 +1655,9 @@ class CustomSourceEngine {
       },
     );
     try {
+      if (cancellation.isCancelled) {
+        cancelToken.cancel('Source request cancelled');
+      }
       final response = await dio.request<dynamic>(
         request.uri.toString(),
         data: request.body,

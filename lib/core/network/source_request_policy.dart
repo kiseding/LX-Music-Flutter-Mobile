@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:dio/dio.dart' show FormData;
+
 typedef SourceAddressResolver = Future<List<InternetAddress>> Function(
   String host,
 );
@@ -48,12 +50,17 @@ class SourceTransportResponse {
     this.close,
   });
 
-  String? header(String name) {
+  String? singleHeader(String name) {
     final values = headers.entries
         .where((entry) => entry.key.toLowerCase() == name.toLowerCase())
         .expand((entry) => entry.value)
         .toList();
-    return values.isEmpty ? null : values.join(', ');
+    if (values.isEmpty) return null;
+    if (values.length != 1) {
+      throw const SourceRequestPolicyException(
+          'ambiguous_redirect', 'Redirect has multiple Location values');
+    }
+    return values.single;
   }
 }
 
@@ -83,6 +90,41 @@ class SourceRequestCancellation {
 }
 
 class SourceRequestPolicy {
+  static const _ipv4DeniedPrefixes = <(List<int>, int)>[
+    ([0], 8),
+    ([10], 8),
+    ([100, 64], 10),
+    ([127], 8),
+    ([169, 254], 16),
+    ([172, 16], 12),
+    ([192, 0, 0], 24),
+    ([192, 0, 2], 24),
+    ([192, 31, 196], 24),
+    ([192, 52, 193], 24),
+    ([192, 88, 99], 24),
+    ([192, 168], 16),
+    ([192, 175, 48], 24),
+    ([198, 18], 15),
+    ([198, 51, 100], 24),
+    ([203, 0, 113], 24),
+    ([224], 4),
+    ([240], 4),
+  ];
+  static const _ipv6DeniedPrefixes = <(List<int>, int)>[
+    ([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 96),
+    ([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff], 96),
+    ([0x00, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0], 96),
+    ([0x00, 0x64, 0xff, 0x9b, 0x00, 0x01], 48),
+    ([0x01, 0x00, 0, 0, 0, 0, 0, 0], 64),
+    ([0x20, 0x01, 0x00], 23),
+    ([0x20, 0x01, 0x0d, 0xb8], 32),
+    ([0x20, 0x02], 16),
+    ([0x3f, 0xff, 0x00], 20),
+    ([0x5f, 0x00], 16),
+    ([0xfc], 7),
+    ([0xfe, 0x80], 10),
+    ([0xff], 8),
+  ];
   static const _hopByHop = {
     'connection',
     'keep-alive',
@@ -176,34 +218,24 @@ class SourceRequestPolicy {
   static bool _isPublic(InternetAddress address) {
     final bytes = address.rawAddress;
     if (address.type == InternetAddressType.IPv4) {
-      final a = bytes[0], b = bytes[1];
-      return !(a == 0 ||
-          a == 10 ||
-          a == 127 ||
-          (a == 100 && b >= 64 && b <= 127) ||
-          (a == 169 && b == 254) ||
-          (a == 172 && b >= 16 && b <= 31) ||
-          (a == 192 && b == 168) ||
-          (a == 192 && b == 0 && bytes[2] == 0) ||
-          (a == 192 && b == 0 && bytes[2] == 2) ||
-          (a == 198 && (b == 18 || b == 19)) ||
-          (a == 198 && b == 51 && bytes[2] == 100) ||
-          (a == 203 && b == 0 && bytes[2] == 113) ||
-          a >= 224);
+      return !_ipv4DeniedPrefixes
+          .any((prefix) => _matchesPrefix(bytes, prefix.$1, prefix.$2));
     }
-    final first = bytes[0], second = bytes[1];
-    final globalUnicast = (first & 0xe0) == 0x20;
-    return globalUnicast &&
-        !(bytes.every((byte) => byte == 0) ||
-            bytes.skip(1).every((byte) => byte == 0) ||
-            (first & 0xfe) == 0xfc ||
-            (first == 0xfe && (second & 0xc0) == 0x80) ||
-            first >= 0xff ||
-            (first == 0x20 &&
-                second == 0x01 &&
-                bytes[2] == 0x0d &&
-                bytes[3] == 0xb8) ||
-            (first == 0x20 && second == 0x02));
+    final globallyRoutable = (bytes[0] & 0xe0) == 0x20;
+    return globallyRoutable &&
+        !_ipv6DeniedPrefixes
+            .any((prefix) => _matchesPrefix(bytes, prefix.$1, prefix.$2));
+  }
+
+  static bool _matchesPrefix(List<int> address, List<int> prefix, int bits) {
+    final wholeBytes = bits ~/ 8;
+    for (var i = 0; i < wholeBytes; i++) {
+      if (address[i] != prefix[i]) return false;
+    }
+    final remainingBits = bits % 8;
+    if (remainingBits == 0) return true;
+    final mask = 0xff << (8 - remainingBits) & 0xff;
+    return address[wholeBytes] & mask == prefix[wholeBytes] & mask;
   }
 }
 
@@ -213,14 +245,25 @@ typedef SourceTransport = Future<SourceTransportResponse> Function(
 );
 
 class SourceRequestSandbox {
+  static const _crossOriginHeaders = {
+    'accept',
+    'accept-language',
+    'user-agent',
+  };
   final SourceRequestPolicy policy;
   final SourceTransport transport;
   final int maximumRedirects;
+  final int maximumInFlightBytes;
+  final int maximumConcurrentResponseBodies;
+  int _inFlightBytes = 0;
+  int _activeResponseBodies = 0;
 
-  const SourceRequestSandbox({
+  SourceRequestSandbox({
     required this.policy,
     required this.transport,
     this.maximumRedirects = 5,
+    this.maximumInFlightBytes = 20 * 1024 * 1024,
+    this.maximumConcurrentResponseBodies = 4,
   });
 
   Future<SourceRequestResponse> request(
@@ -230,11 +273,19 @@ class SourceRequestSandbox {
   }) async {
     final cancel = cancellation ?? SourceRequestCancellation();
     var current = uri;
+    var currentOptions = Map<String, dynamic>.from(options);
     for (var redirects = 0;; redirects++) {
       if (cancel.isCancelled) _throwCancelled();
-      final request = await policy.validate(current, options);
+      final request = await Future.any([
+        policy.validate(current, currentOptions),
+        cancel.future.then<ValidatedSourceRequest>((reason) =>
+            throw SourceRequestPolicyException('cancelled', reason)),
+      ]);
+      if (cancel.isCancelled) _throwCancelled();
+      final transportFuture = transport(request, cancel);
+      if (cancel.isCancelled) _throwCancelled();
       final response = await Future.any([
-        transport(request, cancel).timeout(
+        transportFuture.timeout(
           request.timeout,
           onTimeout: () {
             cancel.cancel('Source request timed out');
@@ -245,18 +296,46 @@ class SourceRequestSandbox {
         cancel.future.then<SourceTransportResponse>((reason) =>
             throw SourceRequestPolicyException('cancelled', reason)),
       ]);
-      final location = response.header('location');
-      if (response.statusCode != null &&
-          response.statusCode! >= 300 &&
-          response.statusCode! < 400 &&
-          location != null) {
+      if (cancel.isCancelled) {
+        response.close?.call();
+        _throwCancelled();
+      }
+      final status = response.statusCode;
+      final isRedirect = status == 301 ||
+          status == 302 ||
+          status == 303 ||
+          status == 307 ||
+          status == 308;
+      if (isRedirect) {
+        String? location;
+        try {
+          location = response.singleHeader('location');
+        } catch (_) {
+          response.close?.call();
+          rethrow;
+        }
+        if (location == null) {
+          final bytes = await _readBody(response, request.timeout, cancel);
+          return SourceRequestResponse(
+            statusCode: response.statusCode,
+            statusMessage: response.statusMessage,
+            headers: response.headers,
+            bytes: bytes,
+          );
+        }
         if (redirects >= maximumRedirects) {
           response.close?.call();
           throw const SourceRequestPolicyException(
               'too_many_redirects', 'Redirect limit exceeded');
         }
+        final next = current.resolve(location);
+        currentOptions = _redirectOptions(
+          request,
+          status!,
+          crossOrigin: !_sameOrigin(current, next),
+        );
         response.close?.call();
-        current = current.resolve(location);
+        current = next;
         continue;
       }
 
@@ -271,11 +350,73 @@ class SourceRequestSandbox {
     }
   }
 
+  Map<String, dynamic> _redirectOptions(
+    ValidatedSourceRequest request,
+    int status, {
+    required bool crossOrigin,
+  }) {
+    var method = request.method;
+    var body = request.body;
+    final dropsBody = status == 303 ||
+        ((status == 301 || status == 302) && request.method == 'POST');
+    if (dropsBody) {
+      method = 'GET';
+      body = null;
+    } else if (body != null && (body is Stream || body is FormData)) {
+      throw const SourceRequestPolicyException('redirect_body_not_replayable',
+          'Redirect cannot replay a one-shot request body');
+    }
+
+    final headers = <String, String>{};
+    for (final entry in request.headers.entries) {
+      final lower = entry.key.toLowerCase();
+      if (lower.startsWith('content-')) continue;
+      if (!crossOrigin || _crossOriginHeaders.contains(lower)) {
+        headers[entry.key] = entry.value;
+      }
+    }
+    if (body != null) {
+      final contentType = _headerValue(request.headers, 'content-type');
+      if (contentType != null) headers['Content-Type'] = contentType;
+    }
+    return {
+      'method': method,
+      'headers': headers,
+      'body': body,
+      'timeout': request.timeout.inMilliseconds,
+    };
+  }
+
+  bool _sameOrigin(Uri first, Uri second) =>
+      first.scheme.toLowerCase() == second.scheme.toLowerCase() &&
+      first.host.toLowerCase() == second.host.toLowerCase() &&
+      first.port == second.port;
+
+  String? _headerValue(Map<String, String> headers, String name) {
+    for (final entry in headers.entries) {
+      if (entry.key.toLowerCase() == name) return entry.value;
+    }
+    return null;
+  }
+
   Future<List<int>> _readBody(
     SourceTransportResponse response,
     Duration timeout,
     SourceRequestCancellation cancellation,
   ) async {
+    if (_activeResponseBodies >= maximumConcurrentResponseBodies) {
+      response.close?.call();
+      throw const SourceRequestPolicyException('too_many_response_bodies',
+          'Concurrent response body limit exceeded');
+    }
+    final reservedBytes = policy.maximumResponseBytes;
+    if (reservedBytes > maximumInFlightBytes - _inFlightBytes) {
+      response.close?.call();
+      throw const SourceRequestPolicyException(
+          'response_budget_exceeded', 'In-flight response budget exceeded');
+    }
+    _inFlightBytes += reservedBytes;
+    _activeResponseBodies++;
     final bytes = <int>[];
     final done = Completer<List<int>>();
     late StreamSubscription<List<int>> subscription;
@@ -288,12 +429,13 @@ class SourceRequestSandbox {
     subscription = response.body.listen(
       (chunk) {
         if (done.isCompleted) return;
-        bytes.addAll(chunk);
-        if (bytes.length > policy.maximumResponseBytes) {
+        if (chunk.length > policy.maximumResponseBytes - bytes.length) {
           completeError(const SourceRequestPolicyException(
               'response_too_large', 'Response exceeds byte limit'));
           unawaited(subscription.cancel());
+          return;
         }
+        bytes.addAll(chunk);
       },
       onError: completeError,
       onDone: () {
@@ -318,6 +460,8 @@ class SourceRequestSandbox {
       timer.cancel();
       await subscription.cancel();
       response.close?.call();
+      _inFlightBytes -= reservedBytes;
+      _activeResponseBodies--;
     }
   }
 

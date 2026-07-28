@@ -2,52 +2,55 @@
 
 ## Status
 
-Implemented the compatibility-first custom-source HTTPS request sandbox.
+Implemented the Task 2 request sandbox and resolved all three Important and
+both Minor review findings.
 
-- Requires absolute HTTPS URLs without credentials.
-- Resolves and validates every DNS result for every request and redirect.
-- Rejects non-public, private, loopback, link-local, multicast, unspecified,
-  documentation, benchmark, reserved, IPv4-mapped, and unsupported IPv6
-  destinations.
-- Rejects mixed public/private DNS answer sets.
-- Sanitizes sensitive, proxy, forwarding, host, content-length, and hop-by-hop
-  request headers.
-- Disables automatic redirects, validates each `Location`, and limits redirects
-  to five.
-- Bounds DNS, transport, response-read time, and response bytes.
-- Cancels and closes active requests safely during source cancellation, reload,
-  or engine disposal.
-- Injects the resolver and transport for deterministic tests.
-- Pins each connection to a validated numeric address with
-  `HttpClient.connectionFactory`; the original HTTPS URI remains visible to
-  `HttpClient` for hostname certificate verification and TLS SNI.
-- Preserves the LX callback response shape and aliases `rawData` to the decoded
-  `responseRaw` buffer in JavaScript, avoiding a second Dart base64 copy.
+## Resolutions
+
+- Redirects track origin and implement explicit 301, 302, 303, 307, and 308
+  method/body semantics. Body-preserving redirects reject `FormData` and stream
+  bodies with `redirect_body_not_replayable`.
+- Cross-origin redirects retain only `Accept`, `Accept-Language`, and
+  `User-Agent`. Caller custom headers such as `X-Api-Key` are never forwarded.
+  Content-Type is regenerated only when a replayable body is retained.
+- Redirect `Location` is accepted only as one field value. Multiple values fail
+  with `ambiguous_redirect`; non-redirect statuses do not interpret Location.
+- IPv4 and IPv6 use explicit special-purpose deny-prefix tables under a
+  conservative globally-routable policy. Tests cover the first and last address
+  of every denied prefix plus known public controls.
+- Validation races cancellation, rechecks after every await, and checks
+  immediately before transport invocation. Cancellation during DNS and
+  pre-cancelled disposal paths make zero transport calls.
+- The production pinned transport checks cancellation before constructing Dio
+  and synchronously cancels its token before `dio.request` when necessary.
+- Per-response byte limits are checked before appending a chunk. Each response
+  body reserves its maximum allowance before stream subscription under a
+  default 20 MiB aggregate budget and four-body concurrency cap; both are
+  injectable and released in `finally`.
+- DNS pinning, HTTPS hostname/SNI validation, callback compatibility, one Dart
+  base64 encoding, and the JavaScript `rawData = responseRaw` alias remain.
 
 ## TDD Evidence
 
-The policy test was run before production implementation and failed because
-`source_request_policy.dart` and all requested policy types did not exist.
-Additional DNS-timeout, stalled-body cancellation, and redirect-close tests
-were also observed failing before their implementations.
+Each finding was reproduced by a failing focused test before its production
+change. Red runs covered redirect status behavior and header leakage, one-shot
+body replay, omitted IP ranges, DNS cancellation, aggregate reservation,
+concurrency release, and ambiguous Location handling.
 
 ## Verification
 
 - Focused: `flutter test test/core/network/source_request_policy_test.dart test/features/custom_source/domain/custom_source_engine_test.dart test/features/custom_source/domain/custom_source_host_regression_test.dart`
-  - Result: 22 passed.
-- Full: `flutter test`
-  - Result: 348 passed.
+  - Result: 46 passed.
 - Targeted analysis: `flutter analyze lib/core/network/source_request_policy.dart lib/features/custom_source/domain/custom_source_engine.dart test/core/network/source_request_policy_test.dart test/features/custom_source/domain/custom_source_engine_test.dart`
   - Result: no issues.
-- Formatting: `dart format` on all four changed Dart files.
-- Whitespace: `git diff --check`
-  - Result: clean.
+- Full suite: `flutter test`
+  - Result: 372 passed.
 
 ## Concerns
 
-- The sandbox intentionally rejects HTTP sources, credential-bearing URLs,
-  private/reserved destinations, sensitive script-provided headers, and proxy
-  routing. Existing public HTTPS custom sources retain the callback API and
-  body/form/query behavior, but sources relying on those unsafe behaviors will
-  no longer work.
-- The default maximum response size is 10 MiB and the redirect limit is five.
+- Sources relying on HTTP, private/special-purpose addresses, URL credentials,
+  proxies, cross-origin custom headers, or replaying one-shot redirect bodies
+  are intentionally rejected.
+- The default per-response cap remains 10 MiB. With the default 20 MiB aggregate
+  reservation, at most two maximum-sized bodies can read concurrently even
+  though the separate response-body concurrency cap is four.

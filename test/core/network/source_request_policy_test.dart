@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lx_music_flutter/core/network/source_request_policy.dart';
 
@@ -92,6 +93,109 @@ void main() {
       }
     });
 
+    test('rejects every IPv4 special-purpose prefix at its boundaries',
+        () async {
+      final policy = policyWith({});
+      const prefixes = <List<String>>[
+        ['0.0.0.0', '0.255.255.255'],
+        ['10.0.0.0', '10.255.255.255'],
+        ['100.64.0.0', '100.127.255.255'],
+        ['127.0.0.0', '127.255.255.255'],
+        ['169.254.0.0', '169.254.255.255'],
+        ['172.16.0.0', '172.31.255.255'],
+        ['192.0.0.0', '192.0.0.255'],
+        ['192.0.2.0', '192.0.2.255'],
+        ['192.31.196.0', '192.31.196.255'],
+        ['192.52.193.0', '192.52.193.255'],
+        ['192.88.99.0', '192.88.99.255'],
+        ['192.168.0.0', '192.168.255.255'],
+        ['192.175.48.0', '192.175.48.255'],
+        ['198.18.0.0', '198.19.255.255'],
+        ['198.51.100.0', '198.51.100.255'],
+        ['203.0.113.0', '203.0.113.255'],
+        ['224.0.0.0', '239.255.255.255'],
+        ['240.0.0.0', '255.255.255.255'],
+      ];
+
+      for (final prefix in prefixes) {
+        for (final address in prefix) {
+          await expectLater(
+            policy.validate(Uri.parse('https://$address'), {}),
+            throwsA(isA<SourceRequestPolicyException>()),
+            reason: '$prefix boundary $address',
+          );
+        }
+      }
+    });
+
+    test('allows known public IPv4 addresses around special blocks', () async {
+      final policy = policyWith({});
+      for (final address in [
+        '8.8.8.8',
+        '93.184.216.34',
+        '192.31.195.255',
+        '192.31.197.0',
+        '192.52.192.255',
+        '192.52.194.0',
+        '192.88.98.255',
+        '192.88.100.0',
+        '192.175.47.255',
+        '192.175.49.0',
+      ]) {
+        expect(
+          await policy.validate(Uri.parse('https://$address'), {}),
+          isA<ValidatedSourceRequest>(),
+          reason: address,
+        );
+      }
+    });
+
+    test('rejects every IPv6 special-purpose prefix at its boundaries',
+        () async {
+      final policy = policyWith({});
+      const prefixes = <List<String>>[
+        ['::', '::ffff:ffff'],
+        ['::ffff:0:0', '::ffff:ffff:ffff'],
+        ['64:ff9b::', '64:ff9b::ffff:ffff'],
+        ['64:ff9b:1::', '64:ff9b:1:ffff:ffff:ffff:ffff:ffff'],
+        ['100::', '100::ffff:ffff:ffff:ffff'],
+        ['2001::', '2001:1ff:ffff:ffff:ffff:ffff:ffff:ffff'],
+        ['2001:db8::', '2001:db8:ffff:ffff:ffff:ffff:ffff:ffff'],
+        ['2002::', '2002:ffff:ffff:ffff:ffff:ffff:ffff:ffff'],
+        ['3fff::', '3fff:fff:ffff:ffff:ffff:ffff:ffff:ffff'],
+        ['5f00::', '5f00:ffff:ffff:ffff:ffff:ffff:ffff:ffff'],
+        ['fc00::', 'fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff'],
+        ['fe80::', 'febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff'],
+        ['ff00::', 'ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff'],
+      ];
+
+      for (final prefix in prefixes) {
+        for (final address in prefix) {
+          await expectLater(
+            policy.validate(Uri.parse('https://[$address]'), {}),
+            throwsA(isA<SourceRequestPolicyException>()),
+            reason: '$prefix boundary $address',
+          );
+        }
+      }
+    });
+
+    test('allows known public IPv6 addresses around special blocks', () async {
+      final policy = policyWith({});
+      for (final address in [
+        '2001:200::1',
+        '2001:4860:4860::8888',
+        '2606:2800:220:1:248:1893:25c8:1946',
+        '3ffe:ffff:ffff:ffff:ffff:ffff:ffff:ffff',
+      ]) {
+        expect(
+          await policy.validate(Uri.parse('https://[$address]'), {}),
+          isA<ValidatedSourceRequest>(),
+          reason: address,
+        );
+      }
+    });
+
     test('rejects a DNS result containing any non-public address', () async {
       final policy = policyWith({
         'mixed.example': ['93.184.216.34', '127.0.0.1'],
@@ -169,6 +273,227 @@ void main() {
   });
 
   group('SourceRequestSandbox', () {
+    Future<List<ValidatedSourceRequest>> followRedirect({
+      required int status,
+      String method = 'POST',
+      dynamic body = 'payload',
+      String location = '/done',
+      Map<String, dynamic>? headers,
+    }) async {
+      final requests = <ValidatedSourceRequest>[];
+      final sandbox = SourceRequestSandbox(
+        policy: policyWith({
+          'one.example': ['93.184.216.34'],
+          'two.example': ['93.184.216.35'],
+        }),
+        transport: (request, cancellation) async {
+          requests.add(request);
+          return SourceTransportResponse(
+            statusCode: requests.length == 1 ? status : 200,
+            headers: requests.length == 1
+                ? {
+                    'location': [location]
+                  }
+                : const {},
+            body: const Stream.empty(),
+          );
+        },
+      );
+      await sandbox.request(
+        Uri.parse('https://one.example/start'),
+        {
+          'method': method,
+          'body': body,
+          'headers': headers ??
+              {
+                'Content-Type': 'text/plain',
+                'Content-Language': 'en',
+                'X-Api-Key': 'secret',
+              },
+        },
+      );
+      return requests;
+    }
+
+    for (final status in [301, 302]) {
+      test('$status rewrites POST to GET and drops body content headers',
+          () async {
+        final requests = await followRedirect(status: status);
+
+        expect(requests.last.method, 'GET');
+        expect(requests.last.body, isNull);
+        expect(
+          requests.last.headers.keys.map((name) => name.toLowerCase()),
+          isNot(contains('content-type')),
+        );
+        expect(requests.last.headers['X-Api-Key'], 'secret');
+      });
+
+      test('$status rejects a retained one-shot PUT body', () async {
+        await expectLater(
+          followRedirect(
+            status: status,
+            method: 'PUT',
+            body: Stream.value([1, 2, 3]),
+          ),
+          throwsA(
+            isA<SourceRequestPolicyException>().having(
+              (error) => error.code,
+              'code',
+              'redirect_body_not_replayable',
+            ),
+          ),
+        );
+      });
+    }
+
+    test('303 rewrites every method to GET and drops the body', () async {
+      final requests = await followRedirect(status: 303, method: 'PUT');
+
+      expect(requests.last.method, 'GET');
+      expect(requests.last.body, isNull);
+    });
+
+    for (final status in [307, 308]) {
+      test('$status preserves a replayable method and body', () async {
+        final requests = await followRedirect(status: status, method: 'PUT');
+
+        expect(requests.last.method, 'PUT');
+        expect(requests.last.body, 'payload');
+        expect(requests.last.headers['Content-Type'], 'text/plain');
+      });
+
+      test('$status rejects FormData as a one-shot redirect body', () async {
+        await expectLater(
+          followRedirect(status: status, body: FormData.fromMap({'a': 'b'})),
+          throwsA(
+            isA<SourceRequestPolicyException>().having(
+              (error) => error.code,
+              'code',
+              'redirect_body_not_replayable',
+            ),
+          ),
+        );
+      });
+
+      test('$status rejects a stream as a one-shot redirect body', () async {
+        await expectLater(
+          followRedirect(status: status, body: Stream.value([1, 2, 3])),
+          throwsA(
+            isA<SourceRequestPolicyException>().having(
+              (error) => error.code,
+              'code',
+              'redirect_body_not_replayable',
+            ),
+          ),
+        );
+      });
+    }
+
+    test('cross-origin redirect forwards only allowlisted caller headers',
+        () async {
+      final requests = await followRedirect(
+        status: 307,
+        location: 'https://two.example/done',
+        headers: {
+          'Accept': 'application/json',
+          'Accept-Language': 'en',
+          'User-Agent': 'source-agent',
+          'Content-Type': 'text/plain',
+          'X-Api-Key': 'secret',
+          'X-Custom': 'private',
+        },
+      );
+
+      expect(requests.last.headers['Accept'], 'application/json');
+      expect(requests.last.headers['Accept-Language'], 'en');
+      expect(requests.last.headers['User-Agent'], 'source-agent');
+      expect(requests.last.headers['Content-Type'], 'text/plain');
+      expect(requests.last.headers, isNot(contains('X-Api-Key')));
+      expect(requests.last.headers, isNot(contains('X-Custom')));
+    });
+
+    test('cross-origin body-dropping redirect forwards no content headers',
+        () async {
+      final requests = await followRedirect(
+        status: 302,
+        location: 'https://two.example/done',
+      );
+
+      expect(requests.last.method, 'GET');
+      expect(requests.last.headers, isNot(contains('Content-Type')));
+      expect(requests.last.headers, isNot(contains('X-Api-Key')));
+    });
+
+    test('rejects multiple Location field values', () async {
+      final sandbox = SourceRequestSandbox(
+        policy: policyWith({
+          'example.com': ['93.184.216.34'],
+        }),
+        transport: (request, cancellation) async => SourceTransportResponse(
+          statusCode: 302,
+          headers: {
+            'location': ['/one', '/two']
+          },
+          body: const Stream.empty(),
+        ),
+      );
+
+      await expectLater(
+        sandbox.request(Uri.parse('https://example.com/start'), {}),
+        throwsA(
+          isA<SourceRequestPolicyException>()
+              .having((error) => error.code, 'code', 'ambiguous_redirect'),
+        ),
+      );
+    });
+
+    test('does not follow a non-redirect status carrying Location', () async {
+      var calls = 0;
+      final sandbox = SourceRequestSandbox(
+        policy: policyWith({
+          'example.com': ['93.184.216.34'],
+        }),
+        transport: (request, cancellation) async {
+          calls++;
+          return SourceTransportResponse(
+            statusCode: 304,
+            headers: {
+              'location': ['/unexpected']
+            },
+            body: Stream.value([1]),
+          );
+        },
+      );
+
+      final response =
+          await sandbox.request(Uri.parse('https://example.com/start'), {});
+
+      expect(calls, 1);
+      expect(response.statusCode, 304);
+      expect(response.bytes, [1]);
+    });
+
+    test('ignores multiple Location values on a success response', () async {
+      final sandbox = SourceRequestSandbox(
+        policy: policyWith({
+          'example.com': ['93.184.216.34'],
+        }),
+        transport: (request, cancellation) async => SourceTransportResponse(
+          statusCode: 200,
+          headers: {
+            'location': ['/one', '/two']
+          },
+          body: Stream.value([1]),
+        ),
+      );
+
+      final response =
+          await sandbox.request(Uri.parse('https://example.com/start'), {});
+
+      expect(response.bytes, [1]);
+    });
+
     test('validates every redirect and passes validated addresses to transport',
         () async {
       final resolvedHosts = <String>[];
@@ -317,6 +642,78 @@ void main() {
       unawaited(body.close());
     });
 
+    test('cancellation during DNS never invokes transport', () async {
+      final dnsStarted = Completer<void>();
+      final dnsResult = Completer<List<InternetAddress>>();
+      final cancellation = SourceRequestCancellation();
+      var transportCalls = 0;
+      final sandbox = SourceRequestSandbox(
+        policy: SourceRequestPolicy(resolve: (host) {
+          dnsStarted.complete();
+          return dnsResult.future;
+        }),
+        transport: (request, cancellation) async {
+          transportCalls++;
+          return SourceTransportResponse(
+            statusCode: 200,
+            headers: const {},
+            body: const Stream.empty(),
+          );
+        },
+      );
+
+      final response = sandbox.request(
+        Uri.parse('https://example.com'),
+        {},
+        cancellation: cancellation,
+      );
+      await dnsStarted.future;
+      cancellation.cancel('Source disposed');
+
+      await expectLater(
+        response,
+        throwsA(
+          isA<SourceRequestPolicyException>()
+              .having((error) => error.code, 'code', 'cancelled'),
+        ),
+      );
+      dnsResult.complete([publicAddress]);
+      await Future<void>.delayed(Duration.zero);
+      expect(transportCalls, 0);
+    });
+
+    test('pre-cancelled request does not resolve or invoke transport',
+        () async {
+      var resolverCalls = 0;
+      var transportCalls = 0;
+      final cancellation = SourceRequestCancellation()..cancel('disposed');
+      final sandbox = SourceRequestSandbox(
+        policy: SourceRequestPolicy(resolve: (host) async {
+          resolverCalls++;
+          return [publicAddress];
+        }),
+        transport: (request, cancellation) async {
+          transportCalls++;
+          return SourceTransportResponse(
+            statusCode: 200,
+            headers: const {},
+            body: const Stream.empty(),
+          );
+        },
+      );
+
+      await expectLater(
+        sandbox.request(
+          Uri.parse('https://example.com'),
+          {},
+          cancellation: cancellation,
+        ),
+        throwsA(isA<SourceRequestPolicyException>()),
+      );
+      expect(resolverCalls, 0);
+      expect(transportCalls, 0);
+    });
+
     test('bounds a stalled transport by the validated timeout', () async {
       final sandbox = SourceRequestSandbox(
         policy: policyWith({
@@ -419,6 +816,95 @@ void main() {
       await sandbox.request(Uri.parse('https://example.com/start'), {});
 
       expect(closed, isTrue);
+    });
+
+    test('rejects aggregate in-flight bytes and releases budget', () async {
+      final firstBody = StreamController<List<int>>();
+      var calls = 0;
+      var secondListened = false;
+      final sandbox = SourceRequestSandbox(
+        policy: policyWith({
+          'example.com': ['93.184.216.34'],
+        }, maximumResponseBytes: 5),
+        maximumInFlightBytes: 5,
+        transport: (request, cancellation) async {
+          calls++;
+          return SourceTransportResponse(
+            statusCode: 200,
+            headers: const {},
+            body: calls == 1
+                ? firstBody.stream
+                : calls == 2
+                    ? Stream<List<int>>.multi((controller) {
+                        secondListened = true;
+                        controller.add([4, 5, 6]);
+                      })
+                    : Stream.value([1, 2, 3, 4, 5]),
+          );
+        },
+      );
+
+      final first = sandbox.request(Uri.parse('https://example.com/one'), {});
+      await Future<void>.delayed(Duration.zero);
+      final second = sandbox.request(Uri.parse('https://example.com/two'), {});
+
+      await expectLater(
+        second.timeout(const Duration(seconds: 1)),
+        throwsA(
+          isA<SourceRequestPolicyException>().having(
+            (error) => error.code,
+            'code',
+            'response_budget_exceeded',
+          ),
+        ),
+      );
+      expect(secondListened, isFalse);
+      await firstBody.close();
+      expect(await first, isA<SourceRequestResponse>());
+
+      final afterRelease =
+          await sandbox.request(Uri.parse('https://example.com/three'), {});
+      expect(afterRelease.bytes, [1, 2, 3, 4, 5]);
+    });
+
+    test('rejects excess concurrent response bodies and releases the slot',
+        () async {
+      final firstBody = StreamController<List<int>>();
+      var calls = 0;
+      final sandbox = SourceRequestSandbox(
+        policy: policyWith({
+          'example.com': ['93.184.216.34'],
+        }),
+        maximumConcurrentResponseBodies: 1,
+        transport: (request, cancellation) async {
+          calls++;
+          return SourceTransportResponse(
+            statusCode: 200,
+            headers: const {},
+            body: calls == 1 ? firstBody.stream : const Stream.empty(),
+          );
+        },
+      );
+
+      final first = sandbox.request(Uri.parse('https://example.com/one'), {});
+      await Future<void>.delayed(Duration.zero);
+      await expectLater(
+        sandbox.request(Uri.parse('https://example.com/two'), {}),
+        throwsA(
+          isA<SourceRequestPolicyException>().having(
+            (error) => error.code,
+            'code',
+            'too_many_response_bodies',
+          ),
+        ),
+      );
+      await firstBody.close();
+      await first;
+
+      expect(
+        await sandbox.request(Uri.parse('https://example.com/three'), {}),
+        isA<SourceRequestResponse>(),
+      );
     });
   });
 }
