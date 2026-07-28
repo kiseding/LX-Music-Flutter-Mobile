@@ -362,8 +362,9 @@ void main() {
 
     final removal = handler.removeQueueItem(current);
     await player.sourceLoadStarted.future;
-    await handler.play();
+    final userPlay = handler.play();
     player.releaseSourceLoad.complete();
+    await userPlay;
     await removal;
 
     expect(player.playing, isTrue);
@@ -414,12 +415,13 @@ void main() {
     await olderGate.started.future;
     final newerGate = player.queueSourceLoadGate();
     final newerLoad = handler.skipToQueueItem(1);
+    expect(player.sourceLoadCalls, 1);
+    olderGate.release.complete();
     await newerGate.started.future;
     newerGate.release.complete();
     await newerLoad;
     final stopsAfterNewer = player.stopCalls;
 
-    olderGate.release.complete();
     await olderLoad;
 
     expect(player.stopCalls, stopsAfterNewer);
@@ -447,12 +449,13 @@ void main() {
     await recoveryGate.started.future;
     final newerGate = player.queueSourceLoadGate();
     final newerLoad = handler.skipToQueueItem(1);
+    expect(player.sourceLoadCalls, 2);
+    recoveryGate.release.complete();
     await newerGate.started.future;
     newerGate.release.complete();
     await newerLoad;
     final stopsAfterNewer = player.stopCalls;
 
-    recoveryGate.release.complete();
     await staleLoad;
 
     expect(player.stopCalls, stopsAfterNewer);
@@ -479,8 +482,9 @@ void main() {
     final removal = handler.removeQueueItem(current);
     await removalGate.started.future;
 
-    await handler.skipToQueueItem(1);
+    final userSelection = handler.skipToQueueItem(1);
     removalGate.release.complete();
+    await userSelection;
     await removal;
 
     expect(player.playing, isTrue);
@@ -513,6 +517,71 @@ void main() {
     expect((player.loadedSource as ProgressiveAudioSource).tag.id, 'A');
     expect(handler.mediaItem.value?.id, 'A');
   });
+
+  test('newer install waits for stale recovery stop and remains current',
+      () async {
+    MediaItem item(String id) => MediaItem(
+          id: id,
+          title: id,
+          extras: {
+            'url': 'file:///tmp/$id.mp3',
+            'requestedQuality': '320k',
+          },
+        );
+    await handler.updateQueue([item('A'), item('B')]);
+    final staleInstall = player.queueSourceLoadGate();
+    final staleLoad = handler.skipToQueueItem(0);
+    await staleInstall.started.future;
+    await handler.updateQueue([item('B')]);
+    final recoveryStop = player.gateNextStop();
+    staleInstall.release.complete();
+    await recoveryStop.started.future;
+
+    final newerLoad = handler.skipToQueueItem(0);
+    expect(player.sourceLoadCalls, 1);
+    recoveryStop.release.complete();
+    await staleLoad;
+    await newerLoad;
+
+    expect(player.sourceLoadCalls, 2);
+    expect(player.playing, isTrue);
+    expect((player.loadedSource as ProgressiveAudioSource).tag.id, 'B');
+    expect(handler.mediaItem.value?.id, 'B');
+  });
+
+  test('bounded non-recovering stale stop releases source gate', () async {
+    MediaItem item(String id) => MediaItem(
+          id: id,
+          title: id,
+          extras: {
+            'url': 'file:///tmp/$id.mp3',
+            'requestedQuality': '320k',
+          },
+        );
+    await handler.updateQueue([item('A'), item('B')]);
+    final staleInstall = player.queueSourceLoadGate();
+    final staleLoad = handler.skipToQueueItem(0);
+    await staleInstall.started.future;
+    await handler.updateQueue([item('B')]);
+    final recoveryInstall = player.queueSourceLoadGate();
+    staleInstall.release.complete();
+    await recoveryInstall.started.future;
+    await handler.updateQueue([item('A')]);
+    final boundedStop = player.gateNextStop();
+    recoveryInstall.release.complete();
+    await boundedStop.started.future;
+
+    final newerLoad = handler.skipToQueueItem(0);
+    expect(player.sourceLoadCalls, 2);
+    boundedStop.release.complete();
+    await staleLoad;
+    await newerLoad;
+
+    expect(player.sourceLoadCalls, 3);
+    expect(player.playing, isTrue);
+    expect((player.loadedSource as ProgressiveAudioSource).tag.id, 'A');
+    expect(handler.mediaItem.value?.id, 'A');
+  });
 }
 
 class _RecordingAudioPlayer extends AudioPlayer {
@@ -523,6 +592,7 @@ class _RecordingAudioPlayer extends AudioPlayer {
   Completer<void>? _sourceLoadStarted;
   Completer<void>? _releaseSourceLoad;
   final _sourceLoadGates = <_SourceLoadGate>[];
+  _SourceLoadGate? _stopGate;
   int playCalls = 0;
   int sourceLoadCalls = 0;
   int stopCalls = 0;
@@ -546,6 +616,12 @@ class _RecordingAudioPlayer extends AudioPlayer {
   _SourceLoadGate queueSourceLoadGate() {
     final gate = _SourceLoadGate();
     _sourceLoadGates.add(gate);
+    return gate;
+  }
+
+  _SourceLoadGate gateNextStop() {
+    final gate = _SourceLoadGate();
+    _stopGate = gate;
     return gate;
   }
 
@@ -608,6 +684,12 @@ class _RecordingAudioPlayer extends AudioPlayer {
   Future<void> stop() async {
     stopCalls++;
     _playing = false;
+    final gate = _stopGate;
+    if (gate != null) {
+      _stopGate = null;
+      gate.started.complete();
+      await gate.release.future;
+    }
   }
 }
 

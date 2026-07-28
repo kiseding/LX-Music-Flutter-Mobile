@@ -144,6 +144,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   int _userIntentGeneration = 0;
   int _sourceInstallToken = 0;
   int _installedSourceOwnerToken = 0;
+  Future<void> _sourceMutationTail = Future<void>.value();
   bool _handlingCompleted = false;
 
   /// >0 时忽略 completed / currentIndex 自动推进（换源、点选切歌期间）
@@ -195,6 +196,23 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     _userIntentGeneration++;
     _userWantsPlay = true;
   }
+
+  Future<T> _withSourceMutation<T>(Future<T> Function() operation) async {
+    final previous = _sourceMutationTail;
+    final release = Completer<void>();
+    _sourceMutationTail = release.future;
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release.complete();
+    }
+  }
+
+  Future<void> _stopPlayerSource() => _withSourceMutation(() async {
+        _installedSourceOwnerToken = ++_sourceInstallToken;
+        await _player.stop();
+      });
 
   void _startPlayer() {
     unawaited(_player.play().catchError((Object e, StackTrace stack) {
@@ -319,7 +337,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     _userWantsPlay = true;
     // 如果播放器处于空闲/错误状态，先重置再播放
     if (_player.processingState == ProcessingState.idle) {
-      await _player.stop();
+      await _stopPlayerSource();
       if (_player.currentIndex != null) {
         await _player.seek(Duration.zero, index: _player.currentIndex);
       }
@@ -402,7 +420,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   Future<void> _stopInternal() async {
     _userWantsPlay = false;
     _bumpGeneration();
-    await _player.stop();
+    await _stopPlayerSource();
     await super.stop();
   }
 
@@ -414,13 +432,6 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
   Future<void> _skipToNextInternal({bool seamless = false}) async {
     if (_queue.isEmpty) return;
-
-    // 用户点「下一首」：立刻停当前曲，避免听感重叠。
-    // 自动连播（seamless）：不要 pause/playing:false，否则锁屏下 iOS 会杀会话。
-    if (!seamless) {
-      await _haltCurrentPlayback();
-    }
-    if (seamless) _userWantsPlay = true;
 
     final shuffle = _player.shuffleModeEnabled ||
         playbackState.value.shuffleMode == AudioServiceShuffleMode.all;
@@ -434,6 +445,13 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       loop: loop,
     );
     if (nextIndex < 0) return;
+
+    // 用户点「下一首」：立刻停当前曲，避免听感重叠。
+    // 自动连播（seamless）：不要 pause/playing:false，否则锁屏下 iOS 会杀会话。
+    if (!seamless) {
+      await _haltCurrentPlayback();
+    }
+    if (seamless) _userWantsPlay = true;
     await _loadQueueItem(
       nextIndex,
       seamless: seamless,
@@ -671,29 +689,35 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         mediaItem.add(updatedItem);
         _activeItemId = itemId;
 
-        // 只加载当前曲，避免 concat 静音轨 completed 连跳
+        // URL 解析在锁外；共享 player source 的安装和恢复停止串行执行。
         if (_isStale(gen)) return;
-        final installToken = ++_sourceInstallToken;
-        _installedSourceOwnerToken = installToken;
-        await _player.setAudioSource(
-          audioSourceFor(url, tag: updatedItem),
-          initialPosition: Duration.zero,
-        );
-        if (_installedSourceOwnerToken != installToken) return;
-        transactionIndex = activeItemIndex();
-        if (transactionIndex < 0) {
-          await _recoverStaleSource(
-            installToken: installToken,
-            recover: recoverStaleInstall,
+        var recoverAuthoritative = false;
+        await _withSourceMutation(() async {
+          transactionIndex = activeItemIndex();
+          if (transactionIndex < 0) return;
+          final installToken = ++_sourceInstallToken;
+          _installedSourceOwnerToken = installToken;
+          await _player.setAudioSource(
+            audioSourceFor(url!, tag: updatedItem),
+            initialPosition: Duration.zero,
           );
-          return;
-        }
-        // seamless 自动下一首必须 play，即使 completed 后 playing 已是 false
-        if (_userWantsPlay || seamless) {
-          _userWantsPlay = true;
-          _startPlayer();
-        }
-        if (!_isStale(gen)) _schedulePreload();
+          if (_installedSourceOwnerToken != installToken) return;
+          transactionIndex = activeItemIndex();
+          if (transactionIndex < 0) {
+            await _player.stop();
+            recoverAuthoritative = recoverStaleInstall &&
+                _installedSourceOwnerToken == installToken &&
+                _playGeneration == gen;
+            return;
+          }
+          // seamless 自动下一首必须 play，即使 completed 后 playing 已是 false
+          if (_userWantsPlay || seamless) {
+            _userWantsPlay = true;
+            _startPlayer();
+          }
+          if (!_isStale(gen)) _schedulePreload();
+        });
+        if (recoverAuthoritative) await _recoverAuthoritativeSource();
       } catch (e) {
         debugPrint('[AudioHandler] 播放失败: $e');
         var transactionIndex = activeItemIndex();
@@ -711,15 +735,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     });
   }
 
-  Future<void> _recoverStaleSource({
-    required int installToken,
-    required bool recover,
-  }) async {
-    if (_installedSourceOwnerToken != installToken) return;
-    await _player.stop();
-    if (_installedSourceOwnerToken != installToken) return;
-    if (!recover) return;
-
+  Future<void> _recoverAuthoritativeSource() async {
     final authoritativeId = mediaItem.value?.id;
     if (authoritativeId == null || _activeItemId != authoritativeId) return;
     final authoritativeIndex =
@@ -744,7 +760,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     queue.add(List.from(_queue));
 
     if (items.isEmpty) {
-      await _player.stop();
+      await _stopPlayerSource();
       return;
     }
 
@@ -786,12 +802,14 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     _queue.add(mediaItem);
     queue.add(List.from(_queue));
 
-    if (_player.audioSource is ConcatenatingAudioSource) {
-      final source = _player.audioSource as ConcatenatingAudioSource;
-      final url = mediaItem.extras?['url']?.toString() ?? '';
-      await source.add(
-          audioSourceFor(url.startsWith('data:') ? '' : url, tag: mediaItem));
-    }
+    await _withSourceMutation(() async {
+      if (_player.audioSource is ConcatenatingAudioSource) {
+        final source = _player.audioSource as ConcatenatingAudioSource;
+        final url = mediaItem.extras?['url']?.toString() ?? '';
+        await source.add(
+            audioSourceFor(url.startsWith('data:') ? '' : url, tag: mediaItem));
+      }
+    });
   }
 
   @override
@@ -865,12 +883,14 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       this.mediaItem.add(currentItem);
       _publishPlaybackState();
 
-      if (_player.audioSource is ConcatenatingAudioSource) {
-        final source = _player.audioSource as ConcatenatingAudioSource;
-        if (index < source.length) {
-          await source.removeAt(index);
+      await _withSourceMutation(() async {
+        if (_player.audioSource is ConcatenatingAudioSource) {
+          final source = _player.audioSource as ConcatenatingAudioSource;
+          if (index < source.length) {
+            await source.removeAt(index);
+          }
         }
-      }
+      });
     }
   }
 
