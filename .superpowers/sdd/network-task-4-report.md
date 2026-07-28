@@ -158,3 +158,34 @@ TDD, exact idempotent leases, and persisted true LRU access timestamps.
 - Targeted analysis: no issues.
 - Full analysis retains 22 unrelated existing findings.
 - `git diff --check`: clean.
+
+## Persisted Index Hardening
+
+- Persisted and live stable entries now require an exact lowercase 40-hex key,
+  an approved audio extension, and a lexical basename equal to
+  `<entry.key><extension>`. The normalized path must be a direct child of the
+  canonical cache root; nested paths and key-to-other-key mappings are dropped.
+- Stable validation uses `FileSystemEntity.type(..., followLinks: false)` and
+  accepts only regular files. Same-root and outside-root aliases are rejected.
+  An exact recognized in-root symlink may be unlinked lexically, but its target
+  is never resolved for return or deletion. Mismatched rejected paths are
+  preserved from orphan cleanup so an A-to-B poisoned entry cannot delete B.
+- Cache hits, lease acquisition, operation completion, eviction, rollback, and
+  stable sibling cleanup revalidate exact stable ownership before returning or
+  deleting a path. Commit destinations reject links before replacement and
+  verify the installed lexical destination is a regular file afterward.
+- Index loading ignores serialized sizes. Each fully validated entry is rebuilt
+  with its normalized path and physical `File.length`, unmeasurable entries are
+  dropped, and the repaired index is persisted before orphan and capacity
+  purging. `maxBytes` therefore operates on measured bytes after restart.
+
+## Persisted Index Verification
+
+- Strict RED covered mismatched ownership, nested paths, invalid keys,
+  outside-root and same-root aliases, A-link-to-B target preservation, false
+  zero/huge sizes, repaired-index persistence, and physical-size cap eviction.
+- Focused playback-cache suite: 43 passed.
+- Full `flutter test`: 462 passed.
+- Targeted analysis: no issues.
+- Full analysis retains 22 unrelated existing findings.
+- `git diff --check`: clean.

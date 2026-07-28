@@ -1234,6 +1234,255 @@ void main() {
     expect(unrelated.existsSync(), isTrue);
     expect(staging.existsSync(), isTrue);
   });
+
+  test('mismatched persisted key path is dropped without deleting other key',
+      () async {
+    final keyA = List.filled(40, 'a').join();
+    final keyB = List.filled(40, 'b').join();
+    final fileB = File('${tempDir.path}/$keyB.mp3')
+      ..writeAsBytesSync(List<int>.filled(32, 7));
+    final store = MemoryPlaybackCacheIndexStore()
+      ..value = jsonEncode([
+        _entryJson(key: keyA, path: fileB.path),
+      ]);
+    final strictCache = _cacheForPersistedPath(tempDir, store);
+    await cache.dispose();
+    cache = strictCache;
+
+    await cache.init();
+
+    expect(jsonDecode(store.value!) as List, isEmpty);
+    expect(fileB.existsSync(), isTrue);
+    expect(fileB.readAsBytesSync(), List<int>.filled(32, 7));
+  });
+
+  test('persisted stable path must be a direct child with exact basename',
+      () async {
+    final key = List.filled(40, 'c').join();
+    final nested = Directory('${tempDir.path}/nested')..createSync();
+    final nestedFile = File('${nested.path}/$key.mp3')
+      ..writeAsBytesSync(List<int>.filled(32, 5));
+    final store = MemoryPlaybackCacheIndexStore()
+      ..value = jsonEncode([
+        _entryJson(key: key, path: nestedFile.path),
+      ]);
+    final strictCache = _cacheForPersistedPath(tempDir, store);
+    await cache.dispose();
+    cache = strictCache;
+
+    await cache.init();
+
+    expect(jsonDecode(store.value!) as List, isEmpty);
+    expect(nestedFile.existsSync(), isTrue);
+  });
+
+  test('persisted key must be lowercase forty hex characters', () async {
+    final invalidKey = List.filled(40, 'A').join();
+    final file = File('${tempDir.path}/$invalidKey.mp3')
+      ..writeAsBytesSync(List<int>.filled(32, 4));
+    final store = MemoryPlaybackCacheIndexStore()
+      ..value = jsonEncode([
+        _entryJson(key: invalidKey, path: file.path),
+      ]);
+    final strictCache = _cacheForPersistedPath(tempDir, store);
+    await cache.dispose();
+    cache = strictCache;
+
+    await cache.init();
+
+    expect(jsonDecode(store.value!) as List, isEmpty);
+    expect(file.existsSync(), isTrue);
+  });
+
+  test('exact outside-root symlink is removed without deleting target',
+      () async {
+    if (Platform.isWindows) return;
+    final key = List.filled(40, 'd').join();
+    final outside = await Directory.systemTemp.createTemp('cache_link_out_');
+    addTearDown(() => outside.deleteSync(recursive: true));
+    final target = File('${outside.path}/target.mp3')
+      ..writeAsBytesSync(List<int>.filled(32, 8));
+    final link = Link('${tempDir.path}/$key.mp3');
+    try {
+      await link.create(target.path);
+    } on FileSystemException {
+      return;
+    }
+    final store = MemoryPlaybackCacheIndexStore()
+      ..value = jsonEncode([
+        _entryJson(key: key, path: link.path),
+      ]);
+    final strictCache = _cacheForPersistedPath(tempDir, store);
+    await cache.dispose();
+    cache = strictCache;
+
+    await cache.init();
+
+    expect(jsonDecode(store.value!) as List, isEmpty);
+    expect(link.existsSync(), isFalse);
+    expect(target.existsSync(), isTrue);
+  });
+
+  test('exact same-root symlink is removed without deleting target', () async {
+    if (Platform.isWindows) return;
+    final keyA = List.filled(40, 'e').join();
+    final keyB = List.filled(40, 'f').join();
+    final targetB = File('${tempDir.path}/$keyB.mp3')
+      ..writeAsBytesSync(List<int>.filled(32, 6));
+    final linkA = Link('${tempDir.path}/$keyA.mp3');
+    try {
+      await linkA.create(targetB.path);
+    } on FileSystemException {
+      return;
+    }
+    final store = MemoryPlaybackCacheIndexStore()
+      ..value = jsonEncode([
+        _entryJson(key: keyA, path: linkA.path),
+        _entryJson(key: keyB, path: targetB.path),
+      ]);
+    final strictCache = _cacheForPersistedPath(tempDir, store);
+    await cache.dispose();
+    cache = strictCache;
+
+    await cache.init();
+
+    final persisted = (jsonDecode(store.value!) as List).cast<Map>();
+    expect(persisted.map((entry) => entry['key']), [keyB]);
+    expect(linkA.existsSync(), isFalse);
+    expect(targetB.existsSync(), isTrue);
+    expect(targetB.readAsBytesSync(), List<int>.filled(32, 6));
+  });
+
+  test('commit rejects a hostile stable destination symlink', () async {
+    if (Platform.isWindows) return;
+    const platform = 'tx';
+    const songId = 'hostile-destination';
+    const quality = '320k';
+    final key = PlaybackCacheService.cacheKey(
+      platform: platform,
+      songId: songId,
+      quality: quality,
+    );
+    final target = File('${tempDir.path}/hostile-target.bin')
+      ..writeAsBytesSync(List<int>.filled(32, 9));
+    final link = Link('${tempDir.path}/$key.mp3');
+    final hostileCache = PlaybackCacheService(
+      cacheRootOverride: tempDir.path,
+      indexStore: MemoryPlaybackCacheIndexStore(),
+      downloader: (url, savePath, {cancelToken}) async {
+        await File(savePath).writeAsBytes([
+          0x49,
+          0x44,
+          0x33,
+          ...List<int>.filled(29, 1),
+        ]);
+        await link.create(target.path);
+      },
+    );
+    await cache.dispose();
+    cache = hostileCache;
+
+    final result = await cache.getOrDownload(
+      remoteUrl: 'https://cdn.example.com/hostile.mp3',
+      platform: platform,
+      songId: songId,
+      quality: quality,
+    );
+
+    expect(result, isNull);
+    expect(link.existsSync(), isTrue);
+    expect(target.existsSync(), isTrue);
+    expect(target.readAsBytesSync(), List<int>.filled(32, 9));
+  });
+
+  test('load repairs persisted path and size from physical stable file',
+      () async {
+    final key = List.filled(40, '1').join();
+    final file = File('${tempDir.path}/$key.mp3')
+      ..writeAsBytesSync(List<int>.filled(37, 2));
+    final store = MemoryPlaybackCacheIndexStore()
+      ..value = jsonEncode([
+        {
+          ..._entryJson(key: key, path: '${tempDir.path}/./$key.mp3'),
+          'sizeBytes': 0,
+        },
+      ]);
+    final repairCache = _cacheForPersistedPath(tempDir, store);
+    await cache.dispose();
+    cache = repairCache;
+
+    await cache.init();
+
+    final repaired = (jsonDecode(store.value!) as List).single as Map;
+    expect(repaired['path'], file.path);
+    expect(repaired['sizeBytes'], 37);
+  });
+
+  test('load ignores huge persisted size and keeps physically small entry',
+      () async {
+    final key = List.filled(40, '2').join();
+    final file = File('${tempDir.path}/$key.mp3')
+      ..writeAsBytesSync(List<int>.filled(16, 2));
+    final store = MemoryPlaybackCacheIndexStore()
+      ..value = jsonEncode([
+        {
+          ..._entryJson(key: key, path: file.path),
+          'sizeBytes': 999999,
+        },
+      ]);
+    final repairCache = PlaybackCacheService(
+      cacheRootOverride: tempDir.path,
+      indexStore: store,
+      maxBytes: 20,
+      clock: () => DateTime(2026, 1, 2),
+      downloader: (url, savePath, {cancelToken}) async {},
+    );
+    await cache.dispose();
+    cache = repairCache;
+
+    await cache.init();
+
+    expect(file.existsSync(), isTrue);
+    final repaired = (jsonDecode(store.value!) as List).single as Map;
+    expect(repaired['sizeBytes'], 16);
+  });
+
+  test('load uses physical sizes to evict oldest entry over cap', () async {
+    final oldKey = List.filled(40, '3').join();
+    final newKey = List.filled(40, '4').join();
+    final oldFile = File('${tempDir.path}/$oldKey.mp3')
+      ..writeAsBytesSync(List<int>.filled(40, 3));
+    final newFile = File('${tempDir.path}/$newKey.flac')
+      ..writeAsBytesSync(List<int>.filled(40, 4));
+    final oldEntry = _entryJson(key: oldKey, path: oldFile.path);
+    final newEntry = {
+      ..._entryJson(key: newKey, path: newFile.path),
+      'createdAt': DateTime(2026, 1, 2).millisecondsSinceEpoch,
+      'lastAccessedAt': DateTime(2026, 1, 2).millisecondsSinceEpoch,
+    };
+    final store = MemoryPlaybackCacheIndexStore()
+      ..value = jsonEncode([
+        {...oldEntry, 'sizeBytes': 0},
+        {...newEntry, 'sizeBytes': 0},
+      ]);
+    final repairCache = PlaybackCacheService(
+      cacheRootOverride: tempDir.path,
+      indexStore: store,
+      maxBytes: 50,
+      clock: () => DateTime(2026, 1, 2),
+      downloader: (url, savePath, {cancelToken}) async {},
+    );
+    await cache.dispose();
+    cache = repairCache;
+
+    await cache.init();
+
+    expect(oldFile.existsSync(), isFalse);
+    expect(newFile.existsSync(), isTrue);
+    final persisted = (jsonDecode(store.value!) as List).single as Map;
+    expect(persisted['key'], newKey);
+    expect(persisted['sizeBytes'], 40);
+  });
 }
 
 Map<String, Object> _entryJson({required String key, required String path}) => {

@@ -97,6 +97,7 @@ class PlaybackCacheService {
   final Map<String, int> _generations = {};
   final Map<String, int> _leaseCounts = {};
   final Map<String, Future<void>> _commitTails = {};
+  final Set<String> _preservedRejectedPaths = {};
   Future<void> _pendingIndexWrite = Future<void>.value();
   bool _initialized = false;
   bool _disposed = false;
@@ -263,18 +264,18 @@ class PlaybackCacheService {
       quality: quality,
     );
     if (path == null) return null;
-    final safePath = await _validatedExistingFile(path);
     final entry = _index[key];
-    if (safePath == null ||
-        entry == null ||
-        entry.path != safePath ||
-        (_generations[key] ?? entry.generation) != entry.generation) {
+    final validated = entry == null ? null : await _validatedStableEntry(entry);
+    if (validated == null ||
+        path != validated.path ||
+        (_generations[key] ?? validated.generation) != validated.generation) {
       return null;
     }
+    _index[key] = validated;
     _leaseCounts[key] = (_leaseCounts[key] ?? 0) + 1;
     return PlaybackCacheLease._(
-      safePath,
-      toPlayableUri(safePath),
+      validated.path,
+      toPlayableUri(validated.path),
       () => _releaseLease(key),
     );
   }
@@ -326,10 +327,18 @@ class PlaybackCacheService {
         }
         return null;
       }
-      final safePath = await _validatedExistingFile(hit.path);
-      if (safePath == null) return null;
+      final persisted = _index[key];
+      final validated =
+          persisted == null ? null : await _validatedStableEntry(persisted);
+      if (validated == null) {
+        _index.remove(key);
+        await _deleteRejectedOwnedStablePath(updated);
+        await _saveIndex();
+        return null;
+      }
+      _index[key] = validated;
       debugPrint('[PlaybackCache] hit key=$key');
-      return safePath;
+      return validated.path;
     }
 
     final existing = _inflight[key];
@@ -367,7 +376,10 @@ class PlaybackCacheService {
         quality,
       );
       if (path == null || !_isCurrentOperation(operation)) return null;
-      return await _validatedExistingFile(path);
+      final entry = _index[operation.key];
+      final validated =
+          entry == null ? null : await _validatedStableEntry(entry);
+      return validated?.path == path ? validated!.path : null;
     } catch (error) {
       debugPrint(
           '[PlaybackCache] operation failed key=${operation.key}: $error');
@@ -428,12 +440,18 @@ class PlaybackCacheService {
       await _removeEntry(key);
       return null;
     }
-    if (await _validatedExistingFile(entry.path) == null) {
+    final validated = await _validatedStableEntry(entry);
+    if (validated == null) {
       _index.remove(key);
+      await _deleteRejectedOwnedStablePath(entry);
       await _saveIndex();
       return null;
     }
-    return entry;
+    if (validated.path != entry.path ||
+        validated.sizeBytes != entry.sizeBytes) {
+      _index[key] = validated;
+    }
+    return validated;
   }
 
   Future<String?> _download(
@@ -570,8 +588,15 @@ class PlaybackCacheService {
     }
     final stablePath = await _validatedDestination('$_root/$key$extension');
     final safeStage = await _validatedExistingFile(staged);
-    if (stablePath == null || safeStage == null) return null;
-
+    if (stablePath == null || safeStage == null) {
+      await _deleteSafe(staged);
+      return null;
+    }
+    if (await FileSystemEntity.type(stablePath, followLinks: false) ==
+        FileSystemEntityType.link) {
+      await _deleteSafe(staged);
+      return null;
+    }
     final previousEntry = _index[key];
     final backupPath = '$_root/$key.$generation.previous$extension';
     String? safeBackup;
@@ -591,9 +616,11 @@ class PlaybackCacheService {
       }
       await File(safeStage).rename(stablePath);
       installed = true;
-      final stable = await _validatedExistingFile(stablePath);
-      if (stable == null || !_isCurrentOperation(operation)) {
-        await _deleteSafe(stablePath);
+      final stableType =
+          await FileSystemEntity.type(stablePath, followLinks: false);
+      if (stableType != FileSystemEntityType.file ||
+          !_isCurrentOperation(operation)) {
+        await _deleteOwnedStablePath(key, stablePath);
         await _restorePrevious(stablePath, safeBackup);
         return null;
       }
@@ -601,11 +628,11 @@ class PlaybackCacheService {
       final now = _clock();
       _index[key] = _CacheEntry(
         key: key,
-        path: stable,
+        path: stablePath,
         remoteUrl: remoteUrl,
         createdAt: now,
         lastAccessedAt: now,
-        sizeBytes: await File(stable).length(),
+        sizeBytes: await File(stablePath).length(),
         quality: quality,
         platform: platform,
         songId: songId,
@@ -626,7 +653,7 @@ class PlaybackCacheService {
       }
       if (!_isCurrentOperation(operation) ||
           _index[key]?.generation != generation ||
-          await _validatedExistingFile(stablePath) == null) {
+          await _validatedStableEntry(_index[key]!) == null) {
         await _rollbackCommit(
           key,
           generation,
@@ -643,7 +670,7 @@ class PlaybackCacheService {
         except: stablePath,
       );
       debugPrint('[PlaybackCache] saved key=$key generation=$generation');
-      return await _validatedExistingFile(stablePath);
+      return (await _validatedStableEntry(_index[key]!))?.path;
     } catch (_) {
       if (installed) {
         if (_index[key]?.generation == generation) {
@@ -655,7 +682,7 @@ class PlaybackCacheService {
             previousEntry,
           );
         } else if (_index[key] == previousEntry) {
-          await _deleteSafe(stablePath);
+          await _deleteOwnedStablePath(key, stablePath);
           await _restorePrevious(stablePath, safeBackup);
         }
       } else {
@@ -675,11 +702,11 @@ class PlaybackCacheService {
   ) async {
     if (_index[key]?.generation != generation) return;
     _index.remove(key);
-    await _deleteSafe(stablePath);
+    await _deleteOwnedStablePath(key, stablePath);
     await _restorePrevious(stablePath, backupPath);
-    if (previousEntry != null &&
-        await _validatedExistingFile(previousEntry.path) != null) {
-      _index[key] = previousEntry;
+    if (previousEntry != null) {
+      final validatedPrevious = await _validatedStableEntry(previousEntry);
+      if (validatedPrevious != null) _index[key] = validatedPrevious;
     }
     try {
       await _saveIndex(allowDuringDispose: true);
@@ -711,7 +738,7 @@ class PlaybackCacheService {
       if (_index[key]?.generation != generation) return;
       final candidate = _normalizeAbsolute('$_root/$key$extension');
       if (candidate == normalizedExcept) continue;
-      await _deleteSafe(candidate);
+      await _deleteOwnedStablePath(key, candidate);
     }
   }
 
@@ -721,14 +748,17 @@ class PlaybackCacheService {
     final indexedPaths =
         _index.values.map((entry) => _normalizeAbsolute(entry.path)).toSet();
     await for (final entity in Directory(root).list(followLinks: false)) {
-      if (entity is! File) continue;
       final name = entity.uri.pathSegments.last;
       final match = _stableCacheName.firstMatch(name);
       if (match == null) continue;
       final key = match.group(1)!;
       final path = _normalizeAbsolute(entity.path);
-      if (indexedPaths.contains(path) || _isProtected(key)) continue;
-      await _deleteSafe(path);
+      if (indexedPaths.contains(path) ||
+          _preservedRejectedPaths.contains(path) ||
+          _isProtected(key)) {
+        continue;
+      }
+      await _deleteOwnedStablePath(key, path);
     }
   }
 
@@ -764,11 +794,89 @@ class PlaybackCacheService {
     return _inflight.containsKey(key) || (_leaseCounts[key] ?? 0) > 0;
   }
 
+  Future<_CacheEntry?> _validatedStableEntry(_CacheEntry entry) async {
+    final lexical = _exactStablePath(entry.key, entry.path);
+    if (lexical == null) return null;
+    try {
+      if (await FileSystemEntity.type(lexical, followLinks: false) !=
+          FileSystemEntityType.file) {
+        return null;
+      }
+      final length = await File(lexical).length();
+      return entry.copyWith(path: lexical, sizeBytes: length);
+    } on FileSystemException {
+      return null;
+    }
+  }
+
+  String? _exactStablePath(String key, String path) {
+    if (!RegExp(r'^[0-9a-f]{40}$').hasMatch(key)) return null;
+    final root = _root;
+    if (root == null) return null;
+    final lexical = _normalizeAbsolute(path);
+    if (File(lexical).parent.path != root) return null;
+    final name = File(lexical).uri.pathSegments.last;
+    final match = _stableCacheName.firstMatch(name);
+    if (match == null || match.group(1) != key) return null;
+    return lexical;
+  }
+
+  Future<void> _handleRejectedPersistedEntry(_CacheEntry entry) async {
+    final exactPath = _exactStablePath(entry.key, entry.path);
+    if (exactPath != null) {
+      final type = await FileSystemEntity.type(exactPath, followLinks: false);
+      if (type == FileSystemEntityType.link) {
+        await _deleteLexicalLink(exactPath);
+        return;
+      }
+    }
+    final lexical = _lexicalChild(entry.path);
+    if (lexical != null) _preservedRejectedPaths.add(lexical);
+  }
+
+  Future<void> _deleteRejectedOwnedStablePath(_CacheEntry entry) async {
+    final exactPath = _exactStablePath(entry.key, entry.path);
+    if (exactPath == null) return;
+    final type = await FileSystemEntity.type(exactPath, followLinks: false);
+    if (type == FileSystemEntityType.link) {
+      await _deleteLexicalLink(exactPath);
+    }
+  }
+
+  Future<void> _deleteOwnedStablePath(String key, String path) async {
+    final exactPath = _exactStablePath(key, path);
+    if (exactPath == null) return;
+    final type = await FileSystemEntity.type(exactPath, followLinks: false);
+    if (type == FileSystemEntityType.link) {
+      await _deleteLexicalLink(exactPath);
+      return;
+    }
+    if (type != FileSystemEntityType.file) return;
+    try {
+      await File(exactPath).delete();
+    } on FileSystemException {
+      // Exact stable cleanup is best-effort and never resolves another path.
+    }
+  }
+
+  Future<void> _deleteLexicalLink(String path) async {
+    final lexical = _lexicalChild(path);
+    if (lexical == null || File(lexical).parent.path != _root) return;
+    try {
+      if (await FileSystemEntity.type(lexical, followLinks: false) ==
+          FileSystemEntityType.link) {
+        await Link(lexical).delete();
+      }
+    } on FileSystemException {
+      // Rejected aliases are best-effort cleanup; targets are never followed.
+    }
+  }
+
   Future<String?> _validatedExistingFile(String path) async {
     final lexical = _lexicalChild(path);
     if (lexical == null) return null;
     try {
-      if (await FileSystemEntity.type(lexical, followLinks: true) !=
+      if (await FileSystemEntity.type(lexical, followLinks: false) !=
           FileSystemEntityType.file) {
         return null;
       }
@@ -790,6 +898,10 @@ class PlaybackCacheService {
       if (!_isRootOrChild(resolvedParent)) return null;
       final name = lexical.substring(parentPath.length + 1);
       final resolved = _normalizeAbsolute('$resolvedParent/$name');
+      if (await FileSystemEntity.type(resolved, followLinks: false) ==
+          FileSystemEntityType.link) {
+        return null;
+      }
       return _isRootChild(resolved) ? resolved : null;
     } on FileSystemException {
       return null;
@@ -830,7 +942,7 @@ class PlaybackCacheService {
   Future<void> _removeEntry(String key) async {
     if (_isProtected(key)) return;
     final entry = _index.remove(key);
-    if (entry != null) await _deleteSafe(entry.path);
+    if (entry != null) await _deleteOwnedStablePath(entry.key, entry.path);
   }
 
   Future<void> _enforceSizeCap() async {
@@ -849,6 +961,7 @@ class PlaybackCacheService {
 
   Future<void> _loadIndex() async {
     _index.clear();
+    _preservedRejectedPaths.clear();
     final raw = await _indexStore.read();
     if (raw == null || raw.isEmpty) return;
     try {
@@ -856,13 +969,16 @@ class PlaybackCacheService {
       for (final item in list) {
         if (item is Map) {
           final entry = _CacheEntry.fromJson(Map<String, dynamic>.from(item));
-          if (entry.key.isNotEmpty &&
-              await _validatedExistingFile(entry.path) != null) {
-            _index[entry.key] = entry;
-            _generations[entry.key] = entry.generation;
+          final validated = await _validatedStableEntry(entry);
+          if (validated != null) {
+            _index[validated.key] = validated;
+            _generations[validated.key] = validated.generation;
+          } else {
+            await _handleRejectedPersistedEntry(entry);
           }
         }
       }
+      await _saveIndex();
     } catch (error) {
       debugPrint('[PlaybackCache] index load failed: $error');
     }
@@ -963,17 +1079,19 @@ class _CacheEntry {
   });
 
   _CacheEntry copyWith({
+    String? path,
     DateTime? createdAt,
     DateTime? lastAccessedAt,
+    int? sizeBytes,
     int? revision,
   }) {
     return _CacheEntry(
       key: key,
-      path: path,
+      path: path ?? this.path,
       remoteUrl: remoteUrl,
       createdAt: createdAt ?? this.createdAt,
       lastAccessedAt: lastAccessedAt ?? this.lastAccessedAt,
-      sizeBytes: sizeBytes,
+      sizeBytes: sizeBytes ?? this.sizeBytes,
       quality: quality,
       platform: platform,
       songId: songId,
