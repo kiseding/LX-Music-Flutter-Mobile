@@ -218,9 +218,13 @@ class PlaybackCacheService {
   /// null. Callers do not own cancellation independently.
   void cancelKey(String key) {
     final operation = _inflight[key];
-    final next = (_generations[key] ?? 0) + 1;
-    _generations[key] = next;
-    operation?.token.cancel('switched track');
+    if (operation == null ||
+        operation.token.isCancelled ||
+        _generations[key] != operation.generation) {
+      return;
+    }
+    _generations[key] = operation.generation + 1;
+    operation.token.cancel('switched track');
     if (identical(_inflight[key], operation)) {
       _inflight.remove(key);
     }
@@ -294,11 +298,19 @@ class PlaybackCacheService {
     if (_disposed) return null;
     final hit = await _lookupValid(key);
     if (hit != null) {
-      _index[key] = hit.copyWith(lastAccessedAt: _clock());
+      final current = _index[key];
+      if (current == null || current.generation != hit.generation) return null;
+      final updated = current.copyWith(
+        lastAccessedAt: _clock(),
+        revision: current.revision + 1,
+      );
+      _index[key] = updated;
       try {
         await _saveIndex();
       } catch (_) {
-        _index[key] = hit;
+        if (_index[key]?.revision == updated.revision) {
+          _index[key] = current;
+        }
         return null;
       }
       final safePath = await _validatedExistingFile(hit.path);
@@ -891,6 +903,7 @@ class _CacheEntry {
   final String platform;
   final String songId;
   final int generation;
+  final int revision;
 
   const _CacheEntry({
     required this.key,
@@ -903,9 +916,14 @@ class _CacheEntry {
     required this.platform,
     required this.songId,
     required this.generation,
+    this.revision = 0,
   });
 
-  _CacheEntry copyWith({DateTime? createdAt, DateTime? lastAccessedAt}) {
+  _CacheEntry copyWith({
+    DateTime? createdAt,
+    DateTime? lastAccessedAt,
+    int? revision,
+  }) {
     return _CacheEntry(
       key: key,
       path: path,
@@ -917,6 +935,7 @@ class _CacheEntry {
       platform: platform,
       songId: songId,
       generation: generation,
+      revision: revision ?? this.revision,
     );
   }
 

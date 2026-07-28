@@ -104,3 +104,28 @@ TDD, exact idempotent leases, and persisted true LRU access timestamps.
   `acquireOrDownload` and holds/releases the lease for actual playback
   ownership. Task 4 intentionally does not modify `main.dart` or the audio
   handler.
+
+## Final Review Fixes
+
+- `cancelKey` now advances generation and cancels only when the key maps to an
+  actual uncancelled inflight operation whose generation is still current.
+  Calls after a committed cache hit are true no-ops, so later lease acquisition
+  retains the committed generation. Repeated cancellation still targets a
+  current replacement operation without weakening stale-generation cleanup.
+- Cache-hit access metadata now uses a per-entry in-memory revision. Each hit
+  installs a monotonically newer revision before its serialized index write; a
+  failed caller restores its prior entry only when compare-and-swap confirms no
+  newer revision has replaced it. Overlapping hits therefore preserve and
+  persist the newest `lastAccessedAt` without introducing a global metadata
+  lock.
+- TTL and size eviction observe the synchronously installed latest entry state.
+  The overlap regression verifies that a failed older write cannot make a
+  recently accessed file appear expired after a newer successful hit.
+
+## Final Review Verification
+
+- Focused playback-cache suite: 28 passed.
+- Full `flutter test`: 447 passed.
+- Targeted analysis: no issues.
+- Full analysis retains 22 unrelated existing findings.
+- `git diff --check`: clean.

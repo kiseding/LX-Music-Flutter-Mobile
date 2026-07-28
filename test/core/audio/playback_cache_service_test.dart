@@ -520,6 +520,88 @@ void main() {
     expect(calls, 1);
   });
 
+  test('cancelKey is a no-op after commit and reacquire keeps its lease',
+      () async {
+    final key = PlaybackCacheService.cacheKey(
+      platform: 'tx',
+      songId: 'idle-cancel',
+      quality: '320k',
+    );
+    final path = await cache.getOrDownload(
+      remoteUrl: 'https://cdn.example.com/idle-cancel.mp3',
+      platform: 'tx',
+      songId: 'idle-cancel',
+      quality: '320k',
+    );
+    expect(downloadCount, 1);
+
+    cache.cancelKey(key);
+    final lease = await cache.acquireOrDownload(
+      remoteUrl: 'https://cdn.example.com/idle-cancel.mp3',
+      platform: 'tx',
+      songId: 'idle-cancel',
+      quality: '320k',
+    );
+
+    expect(lease?.path, path);
+    expect(downloadCount, 1);
+    await lease?.release();
+  });
+
+  test('repeated cancel targets the current replacement, not stale work',
+      () async {
+    final firstStarted = Completer<void>();
+    final finishFirst = Completer<void>();
+    final secondStarted = Completer<void>();
+    final finishSecond = Completer<void>();
+    var calls = 0;
+    final generationCache = PlaybackCacheService(
+      cacheRootOverride: tempDir.path,
+      indexStore: MemoryPlaybackCacheIndexStore(),
+      downloader: (url, savePath, {cancelToken}) async {
+        calls++;
+        if (calls == 1) {
+          firstStarted.complete();
+          await finishFirst.future;
+        } else {
+          secondStarted.complete();
+          await finishSecond.future;
+        }
+        await File(savePath).writeAsBytes(List<int>.filled(32, calls));
+      },
+    );
+    await cache.dispose();
+    cache = generationCache;
+    final key = PlaybackCacheService.cacheKey(
+      platform: 'tx',
+      songId: 'replacement-cancel',
+      quality: '320k',
+    );
+
+    final stale = cache.getOrDownload(
+      remoteUrl: 'https://cdn.example.com/old.mp3',
+      platform: 'tx',
+      songId: 'replacement-cancel',
+      quality: '320k',
+    );
+    await firstStarted.future;
+    cache.cancelKey(key);
+    final replacement = cache.getOrDownload(
+      remoteUrl: 'https://cdn.example.com/new.mp3',
+      platform: 'tx',
+      songId: 'replacement-cancel',
+      quality: '320k',
+    );
+    await secondStarted.future;
+    finishFirst.complete();
+    expect(await stale, isNull);
+    cache.cancelKey(key);
+    finishSecond.complete();
+
+    expect(await replacement, isNull);
+    expect(tempDir.listSync().whereType<File>(), isEmpty);
+  });
+
   test('late cancelled downloader cannot replace a newer generation', () async {
     final firstStarted = Completer<void>();
     final finishFirst = Completer<void>();
@@ -850,6 +932,73 @@ void main() {
       ),
       path,
     );
+  });
+
+  test('overlapping hit failure cannot roll back newer access metadata',
+      () async {
+    var now = DateTime(2026, 1, 1);
+    var callsAtCurrentTime = 0;
+    final newerMetadataInstalled = Completer<void>();
+    final store = _ControlledIndexStore();
+    final metadataCache = PlaybackCacheService(
+      cacheRootOverride: tempDir.path,
+      indexStore: store,
+      clock: () {
+        callsAtCurrentTime++;
+        if (now == DateTime(2026, 1, 1, 2) &&
+            callsAtCurrentTime == 2 &&
+            !newerMetadataInstalled.isCompleted) {
+          newerMetadataInstalled.complete();
+        }
+        return now;
+      },
+      ttl: const Duration(minutes: 90),
+      downloader: (url, savePath, {cancelToken}) async {
+        await File(savePath).writeAsBytes(List<int>.filled(32, 1));
+      },
+    );
+    await cache.dispose();
+    cache = metadataCache;
+    final path = await cache.getOrDownload(
+      remoteUrl: 'https://cdn.example.com/metadata.mp3',
+      platform: 'tx',
+      songId: 'metadata-race',
+      quality: '320k',
+    );
+    now = now.add(const Duration(minutes: 60));
+    callsAtCurrentTime = 0;
+    store.blockWriteAfter(0);
+    store.failNextWrite();
+
+    final failedHit = cache.getOrDownload(
+      remoteUrl: 'https://cdn.example.com/metadata.mp3',
+      platform: 'tx',
+      songId: 'metadata-race',
+      quality: '320k',
+    );
+    await store.blockedWriteStarted.future;
+    now = now.add(const Duration(minutes: 60));
+    callsAtCurrentTime = 0;
+    final newerHit = cache.getOrDownload(
+      remoteUrl: 'https://cdn.example.com/metadata.mp3',
+      platform: 'tx',
+      songId: 'metadata-race',
+      quality: '320k',
+    );
+    await newerMetadataInstalled.future;
+    store.releaseBlockedWrite.complete();
+
+    expect(await failedHit, isNull);
+    expect(await newerHit, path);
+    final persisted = (jsonDecode(store.value!) as List).single as Map;
+    expect(persisted['lastAccessedAt'], now.millisecondsSinceEpoch);
+
+    now = now.add(const Duration(minutes: 60));
+    await cache.purgeExpired();
+    expect(File(path!).existsSync(), isTrue);
+    final afterPurge = (jsonDecode(store.value!) as List).single as Map;
+    expect(afterPurge['lastAccessedAt'],
+        DateTime(2026, 1, 1, 2).millisecondsSinceEpoch);
   });
 }
 
