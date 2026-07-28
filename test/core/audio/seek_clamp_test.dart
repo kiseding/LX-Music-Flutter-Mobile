@@ -19,7 +19,7 @@ void main() {
     expect(handler, contains('DarwinAssetOptions'));
   });
 
-  test('scrub path is a single pause-seek-play without settle polling', () {
+  test('seek path has no settle polling or timing compensation', () {
     final handler = File(
       'lib/core/audio/audio_handler.dart',
     ).readAsStringSync();
@@ -27,20 +27,6 @@ void main() {
     expect(handler, isNot(contains('hardSeekTo')));
     expect(handler, isNot(contains('seekToDisplay')));
     expect(handler, isNot(contains('seekBudgetForQuality')));
-
-    final provider = File(
-      'lib/features/player/presentation/player_provider.dart',
-    ).readAsStringSync();
-    final scrub = provider.substring(
-      provider.indexOf('Future<void> finish('),
-      provider.indexOf('final scrubCoordinatorProvider'),
-    );
-    expect(
-        scrub, contains('final confirmed = await h.seekConfirmed(position)'));
-    expect(scrub, contains('unfreeze(confirmed ?? h.player.position)'));
-    expect(scrub, isNot(contains('unfreeze(position)')));
-    expect(scrub, isNot(contains('waitForSettledPosition')));
-    expect(scrub, isNot(contains('seekToDisplay')));
   });
 
   test('play starts asynchronously instead of waiting for playback to end', () {
@@ -123,6 +109,25 @@ void main() {
         isNot(const Duration(minutes: 2)));
   });
 
+  test('native seek failure returns null and publishes actual engine state',
+      () async {
+    final player = _SeekAudioPlayer(
+      processingState: ProcessingState.ready,
+      engineDuration: const Duration(minutes: 3),
+      position: const Duration(seconds: 17),
+      failedSeekPosition: const Duration(seconds: 19),
+      seekError: StateError('native seek failed'),
+    );
+    final handler = LxAudioHandler(player: player);
+    addTearDown(player.dispose);
+
+    final confirmed = await handler.seekConfirmed(const Duration(minutes: 2));
+
+    expect(confirmed, isNull);
+    expect(handler.playbackState.value.updatePosition,
+        const Duration(seconds: 19));
+  });
+
   test('newer source generation wins while seek is in flight', () async {
     final seekGate = _Gate();
     final player = _SeekAudioPlayer(
@@ -145,6 +150,32 @@ void main() {
     expect((player.audioSource as ProgressiveAudioSource).tag.id, 'B');
     expect(player.position, Duration.zero);
   });
+
+  test('stale native seek failure cannot publish over newer source', () async {
+    final seekGate = _Gate();
+    final player = _SeekAudioPlayer(
+      processingState: ProcessingState.ready,
+      engineDuration: const Duration(minutes: 3),
+      failedSeekPosition: const Duration(seconds: 19),
+      seekError: StateError('native seek failed'),
+      seekGate: seekGate,
+    );
+    final handler = LxAudioHandler(player: player);
+    addTearDown(player.dispose);
+    await handler.setPlaylist([_item('A'), _item('B')]);
+
+    final staleSeek = handler.seekConfirmed(const Duration(seconds: 40));
+    await seekGate.started.future;
+    final newerSelection = handler.skipToQueueItem(1);
+    seekGate.release.complete();
+
+    expect(await staleSeek, isNull);
+    expect(handler.playbackState.value.updatePosition,
+        isNot(const Duration(seconds: 19)));
+    await newerSelection;
+    expect(handler.mediaItem.value?.id, 'B');
+    expect(handler.playbackState.value.updatePosition, Duration.zero);
+  });
 }
 
 MediaItem _item(String id) => MediaItem(
@@ -161,6 +192,8 @@ class _SeekAudioPlayer extends AudioPlayer {
   Duration? engineDuration;
   Duration enginePosition;
   final Duration? confirmedPosition;
+  final Duration? failedSeekPosition;
+  final Object? seekError;
   final _Gate? seekGate;
   final requestedPositions = <Duration>[];
   AudioSource? loadedSource;
@@ -171,6 +204,8 @@ class _SeekAudioPlayer extends AudioPlayer {
     this.engineDuration,
     Duration position = Duration.zero,
     this.confirmedPosition,
+    this.failedSeekPosition,
+    this.seekError,
     this.seekGate,
   })  : engineProcessingState = processingState,
         enginePosition = position;
@@ -198,6 +233,10 @@ class _SeekAudioPlayer extends AudioPlayer {
     if (gate != null && !gate.started.isCompleted) {
       gate.started.complete();
       await gate.release.future;
+    }
+    if (seekError != null) {
+      enginePosition = failedSeekPosition ?? enginePosition;
+      throw seekError!;
     }
     enginePosition = confirmedPosition ?? position;
   }

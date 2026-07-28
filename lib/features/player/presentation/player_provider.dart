@@ -101,7 +101,8 @@ final playModeProvider = StateProvider<PlayMode>((ref) {
 
 /// 播放位置唯一真相：just_audio position + seek 不连续事件。
 /// 进度条 / 时间 / 歌词全部只读这里，禁止各自维护另一套时钟。
-class PositionNotifier extends StateNotifier<Duration> {
+class PositionNotifier extends StateNotifier<Duration>
+    implements ScrubPosition {
   final AudioPlayer? _player;
   Timer? _timer;
   StreamSubscription<Duration>? _posSub;
@@ -136,10 +137,12 @@ class PositionNotifier extends StateNotifier<Duration> {
 
   Duration get position => state;
 
+  @override
   void freeze() {
     _frozen = true;
   }
 
+  @override
   void unfreeze(Duration position) {
     state = position;
     _frozen = false;
@@ -217,23 +220,44 @@ final sleepTimerEndProvider = Provider<DateTime?>((ref) {
 // 全局播放消息通知（用于展示 SnackBar）
 final playerMessageProvider = StateProvider<String?>((ref) => null);
 
+abstract interface class ScrubPlayback {
+  bool get playing;
+  Duration get position;
+  int get sourceGeneration;
+  int get userIntentGeneration;
+
+  Future<void> pauseForScrub();
+  Future<Duration?> seekConfirmed(Duration position);
+  Future<void> resumeAfterScrub();
+}
+
+abstract interface class ScrubPosition {
+  void freeze();
+  void unfreeze(Duration position);
+}
+
 class ScrubCoordinator {
-  final Ref _ref;
+  final ScrubPlayback _playback;
+  final ScrubPosition _position;
   int _generation = 0;
   Future<void> _pauseFuture = Future<void>.value();
 
-  ScrubCoordinator(this._ref);
+  ScrubCoordinator(this._playback, this._position);
 
   Future<int> begin() async {
     final generation = ++_generation;
-    _ref.read(playerPositionProvider.notifier).freeze();
+    _position.freeze();
 
-    final h =
-        audioHandler is LxAudioHandler ? audioHandler as LxAudioHandler : null;
-    _pauseFuture = h != null && h.player.playing
-        ? h.pauseInternal(clearIntent: false)
-        : Future<void>.value();
-    await _pauseFuture;
+    _pauseFuture =
+        _playback.playing ? _playback.pauseForScrub() : Future<void>.value();
+    try {
+      await _pauseFuture;
+    } catch (_) {
+      if (generation == _generation) {
+        _position.unfreeze(_playback.position);
+      }
+      rethrow;
+    }
     return generation;
   }
 
@@ -243,53 +267,81 @@ class ScrubCoordinator {
     required bool resumeAfter,
   }) async {
     if (generation != _generation) return;
-    await _pauseFuture;
-    if (generation != _generation) return;
-
-    // 冻结期间丢弃乐观 position 事件；UI 预览由本地 _seeking 负责。
-    final posNotifier = _ref.read(playerPositionProvider.notifier);
-    final h =
-        audioHandler is LxAudioHandler ? audioHandler as LxAudioHandler : null;
-
-    if (h != null) {
-      // await 平台 seek 完成（非乐观轮询）。精确 seek 依赖 ProgressiveAudioSource
-      // 的 preferPreciseDurationAndTiming。
-      final sourceGeneration = h.sourceGeneration;
-      final userIntentGeneration = h.userIntentGeneration;
-      final confirmed = await h.seekConfirmed(position);
+    int? sourceGeneration;
+    int? userIntentGeneration;
+    Duration? confirmed;
+    try {
+      await _pauseFuture;
+      if (generation != _generation) return;
+      sourceGeneration = _playback.sourceGeneration;
+      userIntentGeneration = _playback.userIntentGeneration;
+      confirmed = await _playback.seekConfirmed(position);
       if (generation != _generation) return;
       if (confirmed != null &&
           resumeAfter &&
-          h.ownsScrubTransaction(
-            sourceGeneration: sourceGeneration,
-            userIntentGeneration: userIntentGeneration,
-          )) {
-        await h.play();
+          sourceGeneration == _playback.sourceGeneration &&
+          userIntentGeneration == _playback.userIntentGeneration) {
+        await _playback.resumeAfterScrub();
       }
-      if (generation != _generation) return;
-      if (!h.ownsScrubTransaction(
-        sourceGeneration: sourceGeneration,
-        userIntentGeneration: resumeAfter && confirmed != null
-            ? h.userIntentGeneration
-            : userIntentGeneration,
-      )) {
-        posNotifier.unfreeze(h.player.position);
-        return;
+    } finally {
+      if (generation == _generation) {
+        final actual = sourceGeneration != null &&
+                sourceGeneration == _playback.sourceGeneration
+            ? confirmed ?? _playback.position
+            : _playback.position;
+        _position.unfreeze(actual);
       }
-      posNotifier.unfreeze(confirmed ?? h.player.position);
-      return;
-    } else {
-      await _ref.read(playerServiceProvider).seek(position);
     }
-
-    if (generation != _generation) return;
-    // 非 Lx handler 没有引擎确认接口，不能乐观发布请求目标。
-    posNotifier.unfreeze(posNotifier.position);
   }
 }
 
+class _HandlerScrubPlayback implements ScrubPlayback {
+  final LxAudioHandler? _handler;
+  final PlayerService _fallback;
+  final PositionNotifier _position;
+
+  _HandlerScrubPlayback(this._handler, this._fallback, this._position);
+
+  @override
+  bool get playing => _handler?.player.playing ?? false;
+
+  @override
+  Duration get position => _handler?.player.position ?? _position.position;
+
+  @override
+  int get sourceGeneration => _handler?.sourceGeneration ?? 0;
+
+  @override
+  int get userIntentGeneration => _handler?.userIntentGeneration ?? 0;
+
+  @override
+  Future<void> pauseForScrub() =>
+      _handler?.pauseInternal(clearIntent: false) ?? Future<void>.value();
+
+  @override
+  Future<Duration?> seekConfirmed(Duration position) async {
+    final handler = _handler;
+    if (handler != null) return handler.seekConfirmed(position);
+    await _fallback.seek(position);
+    return null;
+  }
+
+  @override
+  Future<void> resumeAfterScrub() => _handler?.play() ?? Future<void>.value();
+}
+
 final scrubCoordinatorProvider = Provider<ScrubCoordinator>((ref) {
-  return ScrubCoordinator(ref);
+  final position = ref.read(playerPositionProvider.notifier);
+  final handler =
+      audioHandler is LxAudioHandler ? audioHandler as LxAudioHandler : null;
+  return ScrubCoordinator(
+    _HandlerScrubPlayback(
+      handler,
+      ref.read(playerServiceProvider),
+      position,
+    ),
+    position,
+  );
 });
 
 final beginScrubProvider = Provider<Future<int> Function()>((ref) {

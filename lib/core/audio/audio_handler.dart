@@ -225,13 +225,6 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   int get sourceGeneration => _playGeneration;
   int get userIntentGeneration => _userIntentGeneration;
 
-  bool ownsScrubTransaction({
-    required int sourceGeneration,
-    required int userIntentGeneration,
-  }) =>
-      sourceGeneration == _playGeneration &&
-      userIntentGeneration == _userIntentGeneration;
-
   int _bumpGeneration() => ++_playGeneration;
 
   bool _isStale(int gen) => gen != _playGeneration;
@@ -449,7 +442,13 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         return null;
       }
 
-      await _player.seek(target);
+      try {
+        await _player.seek(target);
+      } catch (e) {
+        debugPrint('[AudioHandler] seek failed: $e');
+        if (ownsSeek()) _publishPlaybackState();
+        return null;
+      }
       if (!ownsSeek()) return null;
 
       var confirmed = _player.position;
