@@ -113,3 +113,20 @@ Implemented the single quality-resolution coordinator with strict RED/GREEN TDD.
 - Full `flutter test`: 427 passed.
 - Targeted analysis: no issues.
 - `git diff --check`: clean.
+
+## Approved Minor Fix
+
+- `KwSource.getMusicUrlExact` now rejects unsupported quality labels at its
+  public entry point, before token acquisition or construction of any endpoint
+  adapter.
+- A direct injected-call regression test records both token-loader and service
+  adapter creation. It failed with one token call before the guard and passes
+  with both counts at zero afterward.
+- Legacy `KwSource.getMusicUrl` behavior is unchanged: unknown or future quality
+  labels continue to use the `mp3` format mapping.
+
+## Minor Fix Verification
+
+- Focused music-source and resolution tests: 34 passed.
+- Targeted analysis: no issues.
+- `git diff --check`: clean.

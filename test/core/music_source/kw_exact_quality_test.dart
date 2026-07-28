@@ -1,5 +1,7 @@
+import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lx_music_flutter/core/music_source/platform/kw_source.dart';
+import 'package:lx_music_flutter/features/player/domain/music_item.dart';
 
 void main() {
   test('Kw exact attempt keys collapse server format aliases', () {
@@ -38,5 +40,35 @@ void main() {
     expect(KwSource.legacyFormatForQuality('future-quality'), 'mp3');
     expect(KwSource.legacyFormatForQuality('320k'), 'mp3');
     expect(KwSource.legacyFormatForQuality('flac'), 'flac');
+  });
+
+  test('Kw unsupported exact quality performs no token or adapter work',
+      () async {
+    var tokenCalls = 0;
+    var adapterCalls = 0;
+    final source = KwSource(
+      tokenLoader: () async {
+        tokenCalls++;
+        return null;
+      },
+      serviceDioFactory: (headers) {
+        adapterCalls++;
+        return Dio();
+      },
+    );
+    final music = MusicItem(
+      id: 'song',
+      name: 'Song',
+      singer: 'Singer',
+      source: 'kw',
+      platform: 'kw',
+    );
+
+    final result =
+        await source.getMusicUrlExact(music, quality: 'future-quality');
+
+    expect(result, isNull);
+    expect(tokenCalls, 0);
+    expect(adapterCalls, 0);
   });
 }

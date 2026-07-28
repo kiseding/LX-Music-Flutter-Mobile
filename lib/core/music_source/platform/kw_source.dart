@@ -14,6 +14,9 @@ const kuwoLegacyPlayEndpoint = 'https://www.kuwo.cn/url';
 const kuwoLyricEndpoint = 'https://newlyric.kuwo.cn/newlyric.lrc';
 const kuwoPlaylistEndpoint = 'https://nplserver.kuwo.cn/pl.svc';
 
+typedef KwTokenLoader = Future<Map<String, String>?> Function();
+typedef KwServiceDioFactory = Dio Function(Map<String, dynamic>? headers);
+
 class _KwToken {
   final String name;
   final String value;
@@ -28,8 +31,14 @@ class KwSource extends MusicPlatform {
   String get name => '酷我音乐';
 
   late final Dio _dio;
+  final KwTokenLoader? _tokenLoader;
+  final KwServiceDioFactory? _serviceDioFactory;
 
-  KwSource() {
+  KwSource({
+    KwTokenLoader? tokenLoader,
+    KwServiceDioFactory? serviceDioFactory,
+  })  : _tokenLoader = tokenLoader,
+        _serviceDioFactory = serviceDioFactory {
     _dio = createDio();
     _dio.options.baseUrl = kuwoSearchBaseUrl;
     _dio.options.headers.addAll({
@@ -178,8 +187,13 @@ class KwSource extends MusicPlatform {
 
   // 从首页提取 CSRF token（Kuwo 改用 Hm_Iuvt_* cookie）
   Future<_KwToken?> _fetchKwToken() async {
+    if (_tokenLoader != null) {
+      final token = await _tokenLoader();
+      if (token == null) return null;
+      return _KwToken(name: token['name']!, value: token['value']!);
+    }
     try {
-      final dio = createDioForService(headers: {
+      final dio = _createServiceDio({
         'User-Agent':
             'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1',
       });
@@ -227,6 +241,7 @@ class KwSource extends MusicPlatform {
   @override
   Future<String?> getMusicUrlExact(MusicItem music,
       {required String quality}) async {
+    if (exactAttemptKeyForQuality(quality) == null) return null;
     return _getMusicUrl(music, quality: quality, exact: true);
   }
 
@@ -253,7 +268,7 @@ class KwSource extends MusicPlatform {
     try {
       final kwToken = await _fetchKwToken();
       if (kwToken != null) {
-        final urlDio = createDioForService(headers: {
+        final urlDio = _createServiceDio({
           'User-Agent':
               'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1',
           'Referer': 'https://www.kuwo.cn/',
@@ -300,7 +315,7 @@ class KwSource extends MusicPlatform {
     // 方案2: antiserver 接口（返回纯文本 URL），分别尝试两种 rid 格式
     for (final ridFormat in ['MUSIC_$rid', rid]) {
       try {
-        final urlDio = createDioForService(headers: {
+        final urlDio = _createServiceDio({
           'User-Agent': 'okhttp/3.10.0',
         });
 
@@ -337,7 +352,7 @@ class KwSource extends MusicPlatform {
     // 方案3: 旧版 convert_url3 接口，分别尝试两种 rid 格式
     for (final ridFormat in ['MUSIC_$rid', rid]) {
       try {
-        final urlDio = createDioForService(headers: {
+        final urlDio = _createServiceDio({
           'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36',
           'Referer': 'https://www.kuwo.cn/',
         });
@@ -404,6 +419,11 @@ class KwSource extends MusicPlatform {
       default:
         return 'mp3';
     }
+  }
+
+  Dio _createServiceDio(Map<String, dynamic>? headers) {
+    return _serviceDioFactory?.call(headers) ??
+        createDioForService(headers: headers);
   }
 
   @override
