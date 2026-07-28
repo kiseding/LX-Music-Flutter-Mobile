@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:audio_service/audio_service.dart';
@@ -8,6 +9,20 @@ import 'package:lx_music_flutter/features/player/domain/player_service.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  audioHandler = BaseAudioHandler();
+
+  late AudioHandler originalAudioHandler;
+  late LxAudioHandler handler;
+
+  setUp(() {
+    originalAudioHandler = audioHandler;
+    handler = LxAudioHandler();
+  });
+
+  tearDown(() async {
+    audioHandler = originalAudioHandler;
+    await handler.player.dispose();
+  });
 
   test('player service has no independently mutable queue', () {
     final source = File('lib/features/player/domain/player_service.dart')
@@ -29,7 +44,6 @@ void main() {
   });
 
   test('playNext inserts a removed duplicate after the current item', () async {
-    final handler = LxAudioHandler();
     audioHandler = handler;
     const currentId = 'B';
     MediaItem item(String id) => MediaItem(id: id, title: id);
@@ -44,5 +58,90 @@ void main() {
     ));
 
     expect(handler.queueItems.map((item) => item.id), ['B', 'A', 'C']);
+  });
+
+  test('in-flight queue load follows active item after metadata move',
+      () async {
+    final resolverStarted = Completer<void>();
+    final releaseResolver = Completer<void>();
+    final errors = <String>[];
+    MediaItem item(String id) => MediaItem(id: id, title: id);
+    await handler.updateQueue([item('A'), item('B')]);
+    handler.onError = errors.add;
+    handler.urlResolver = (id, [extras]) async {
+      resolverStarted.complete();
+      await releaseResolver.future;
+      return null;
+    };
+
+    final load = handler.skipToQueueItem(1);
+    await resolverStarted.future;
+    await handler.updateQueue([item('B')]);
+    releaseResolver.complete();
+    await load;
+
+    expect(handler.currentQueueIndex, 0);
+    expect(handler.mediaItem.value?.id, 'B');
+    expect(errors, hasLength(1));
+  });
+
+  test('removing before current preserves current item and shifts index',
+      () async {
+    MediaItem item(String id) => MediaItem(id: id, title: id);
+    await handler.updateQueue([item('B')]);
+    await handler.updateQueue([item('A'), item('B'), item('C')]);
+
+    await handler.removeQueueItem(item('A'));
+
+    expect(handler.queueItems.map((item) => item.id), ['B', 'C']);
+    expect(handler.currentQueueIndex, 0);
+    expect(handler.mediaItem.value?.id, 'B');
+  });
+
+  test('removing current selects the item now at the same index', () async {
+    MediaItem item(String id) => MediaItem(id: id, title: id);
+    await handler.updateQueue([item('B')]);
+    await handler.updateQueue([item('A'), item('B'), item('C')]);
+
+    await handler.removeQueueItem(item('B'));
+
+    expect(handler.queueItems.map((item) => item.id), ['A', 'C']);
+    expect(handler.currentQueueIndex, 1);
+    expect(handler.mediaItem.value?.id, 'C');
+  });
+
+  test('removing current last item selects the preceding item', () async {
+    MediaItem item(String id) => MediaItem(id: id, title: id);
+    await handler.updateQueue([item('C')]);
+    await handler.updateQueue([item('A'), item('B'), item('C')]);
+
+    await handler.removeQueueItem(item('C'));
+
+    expect(handler.queueItems.map((item) => item.id), ['A', 'B']);
+    expect(handler.currentQueueIndex, 1);
+    expect(handler.mediaItem.value?.id, 'B');
+  });
+
+  test('removing a non-current last item preserves current state', () async {
+    MediaItem item(String id) => MediaItem(id: id, title: id);
+    await handler.updateQueue([item('B')]);
+    await handler.updateQueue([item('A'), item('B'), item('C')]);
+
+    await handler.removeQueueItem(item('C'));
+
+    expect(handler.queueItems.map((item) => item.id), ['A', 'B']);
+    expect(handler.currentQueueIndex, 1);
+    expect(handler.mediaItem.value?.id, 'B');
+  });
+
+  test('removing sole item clears authoritative queue state', () async {
+    final item = MediaItem(id: 'A', title: 'A');
+    await handler.updateQueue([item]);
+
+    await handler.removeQueueItem(item);
+
+    expect(handler.queueItems, isEmpty);
+    expect(handler.currentQueueIndex, -1);
+    expect(handler.mediaItem.value, isNull);
   });
 }

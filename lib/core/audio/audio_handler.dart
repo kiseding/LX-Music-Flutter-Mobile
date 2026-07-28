@@ -522,6 +522,11 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     _userWantsPlay = true;
     final item = _queue[index];
     final itemId = item.id;
+    int activeItemIndex() {
+      if (_isStale(gen) || _activeItemId != itemId) return -1;
+      return _queue.indexWhere((queueItem) => queueItem.id == itemId);
+    }
+
     _activeItemId = itemId;
     final cachedUrl = item.extras?['url']?.toString();
     final cachedQ = item.extras?['requestedQuality']?.toString();
@@ -557,9 +562,9 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
           }
         }
 
-        if (_isStale(gen)) return;
-        if (index >= _queue.length || _queue[index].id != itemId) return;
-        final refreshed = _queue[index].extras?['url']?.toString();
+        var transactionIndex = activeItemIndex();
+        if (transactionIndex < 0) return;
+        final refreshed = _queue[transactionIndex].extras?['url']?.toString();
         if ((url == null || url.isEmpty) &&
             refreshed != null &&
             refreshed.isNotEmpty &&
@@ -571,11 +576,14 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
           if (_player.playing) {
             await _player.pause();
           }
+          transactionIndex = activeItemIndex();
+          if (transactionIndex < 0) return;
           debugPrint('[AudioHandler] 无法获取播放链接: ${item.title} id=${item.id}');
           onError?.call('无法解析歌曲 "${item.title}" 的播放地址（源无效地址或本地缓存失败，已尝试降级音质）');
-          if (_queue.length > 1 && !_isStale(gen) && _currentIndex == index) {
+          if (_queue.length > 1 && _currentIndex == transactionIndex) {
             await Future.delayed(const Duration(seconds: 5));
-            if (!_isStale(gen) && _currentIndex == index) {
+            transactionIndex = activeItemIndex();
+            if (transactionIndex >= 0 && _currentIndex == transactionIndex) {
               await skipToNext();
             }
           }
@@ -583,7 +591,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         }
 
         final baseExtras =
-            Map<String, dynamic>.from(_queue[index].extras ?? {});
+            Map<String, dynamic>.from(_queue[transactionIndex].extras ?? {});
         baseExtras['url'] = url;
         baseExtras['requestedQuality'] =
             baseExtras['requestedQuality']?.toString() ?? preferredQuality;
@@ -605,8 +613,9 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
           }
           if (plat != null && plat.isNotEmpty) baseExtras['platform'] = plat;
         }
-        final updatedItem = _queue[index].copyWith(extras: baseExtras);
-        _queue[index] = updatedItem;
+        final updatedItem =
+            _queue[transactionIndex].copyWith(extras: baseExtras);
+        _queue[transactionIndex] = updatedItem;
         queue.add(List.from(_queue));
         mediaItem.add(updatedItem);
         _activeItemId = itemId;
@@ -626,11 +635,13 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         if (!_isStale(gen)) _schedulePreload();
       } catch (e) {
         debugPrint('[AudioHandler] 播放失败: $e');
-        if (!_isStale(gen) && _currentIndex == index) {
+        var transactionIndex = activeItemIndex();
+        if (transactionIndex >= 0 && _currentIndex == transactionIndex) {
           onError?.call('播放歌曲 "${item.title}" 失败: $e');
           if (_queue.length > 1) {
             await Future.delayed(const Duration(seconds: 2));
-            if (!_isStale(gen) && _currentIndex == index) {
+            transactionIndex = activeItemIndex();
+            if (transactionIndex >= 0 && _currentIndex == transactionIndex) {
               await skipToNext(seamless: seamless);
             }
           }
@@ -704,8 +715,32 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   Future<void> removeQueueItem(MediaItem mediaItem) async {
     final index = _queue.indexWhere((item) => item.id == mediaItem.id);
     if (index != -1) {
+      final currentId = this.mediaItem.value?.id;
+      final removedCurrent = currentId == mediaItem.id;
       _queue.removeAt(index);
-      queue.add(List.from(_queue));
+
+      if (_queue.isEmpty) {
+        _currentIndex = -1;
+        _activeItemId = null;
+        queue.add(const <MediaItem>[]);
+        this.mediaItem.add(null);
+        await stop();
+        return;
+      }
+
+      final retainedIndex = currentId == null
+          ? -1
+          : _queue.indexWhere((item) => item.id == currentId);
+      _currentIndex = removedCurrent
+          ? index.clamp(0, _queue.length - 1)
+          : retainedIndex >= 0
+              ? retainedIndex
+              : _currentIndex.clamp(0, _queue.length - 1);
+      final currentItem = _queue[_currentIndex];
+      _activeItemId = currentItem.id;
+      queue.add(List.unmodifiable(_queue));
+      this.mediaItem.add(currentItem);
+      _publishPlaybackState();
 
       if (_player.audioSource is ConcatenatingAudioSource) {
         final source = _player.audioSource as ConcatenatingAudioSource;
