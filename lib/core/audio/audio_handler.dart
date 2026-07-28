@@ -179,6 +179,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   String? _activeItemId;
   AudioServiceRepeatMode _repeatMode = AudioServiceRepeatMode.none;
   AudioServiceShuffleMode _shuffleMode = AudioServiceShuffleMode.none;
+  int _playbackPublicationToken = 0;
 
   // 注入 URL 解析器
   UrlResolver? urlResolver;
@@ -299,11 +300,16 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   }
 
   // 将播放状态广播给系统控制中心
-  void _publishPlaybackState({AudioProcessingState? override}) {
+  int _publishPlaybackState({
+    AudioProcessingState? override,
+    bool? playingOverride,
+  }) {
+    final playing = playingOverride ?? _player.playing;
+    final publicationToken = ++_playbackPublicationToken;
     playbackState.add(PlaybackState(
       controls: [
         MediaControl.skipToPrevious,
-        if (_player.playing) MediaControl.pause else MediaControl.play,
+        if (playing) MediaControl.pause else MediaControl.play,
         MediaControl.stop,
         MediaControl.skipToNext,
       ],
@@ -314,7 +320,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       },
       processingState:
           override ?? audioProcessingState(_player.processingState),
-      playing: _player.playing,
+      playing: playing,
       updatePosition: _player.position,
       bufferedPosition: _player.bufferedPosition,
       speed: _player.speed,
@@ -322,6 +328,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       repeatMode: _repeatMode,
       shuffleMode: _shuffleMode,
     ));
+    return publicationToken;
   }
 
   @override
@@ -461,7 +468,6 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   Future<void> _skipToPreviousInternal() async {
     if (_queue.isEmpty) return;
 
-    await _haltCurrentPlayback();
     final shuffle = _player.shuffleModeEnabled ||
         playbackState.value.shuffleMode == AudioServiceShuffleMode.all;
     final loop = shuffle ||
@@ -474,6 +480,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       loop: loop,
     );
     if (prevIndex < 0) return;
+    await _haltCurrentPlayback();
     await _loadQueueItem(prevIndex, preserveUserIntent: true);
   }
 
@@ -598,6 +605,8 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
     _currentIndex = index;
     mediaItem.add(item);
+    int? manualBufferingPublication;
+    var sourceTransitionFollows = false;
 
     try {
       String? url = currentUrl;
@@ -605,7 +614,10 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       if (url == null || url.isEmpty) {
         if (urlResolver != null) {
           // seamless 连播时保持 playing=true，只标 buffering，避免锁屏杀会话
-          _publishPlaybackState(override: AudioProcessingState.buffering);
+          manualBufferingPublication = _publishPlaybackState(
+            override: AudioProcessingState.buffering,
+            playingOverride: seamless ? true : null,
+          );
           // 强制按当前 preferredQuality 重新解析，忽略过期的 extras.url
           final resolveExtras = item.extras == null
               ? <String, dynamic>{}
@@ -686,6 +698,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
           audioSourceFor(url!, tag: updatedItem),
           initialPosition: Duration.zero,
         );
+        sourceTransitionFollows = true;
         if (_installedSourceOwnerToken != installToken) return;
         transactionIndex = activeItemIndex();
         if (transactionIndex < 0) {
@@ -716,6 +729,11 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
             await _skipToNextInternal(seamless: seamless);
           }
         }
+      }
+    } finally {
+      if (!sourceTransitionFollows &&
+          manualBufferingPublication == _playbackPublicationToken) {
+        _publishPlaybackState();
       }
     }
   }

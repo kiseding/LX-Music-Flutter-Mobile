@@ -66,9 +66,13 @@ void main() {
     );
   });
 
-  test('auto-next uses seamless and end-of-track position guard', () {
+  test('completion uses only the native completed processing state', () {
     final source = File('lib/core/audio/audio_handler.dart').readAsStringSync();
-    expect(source, contains('skipToNext(seamless: true)'));
-    expect(source, contains('pos >= dur - const Duration(milliseconds: 80)'));
+    expect(source, contains('state != ProcessingState.completed'));
+    expect(source, isNot(contains('skipToNext(seamless: true)')));
+    expect(
+      source,
+      isNot(contains('pos >= dur - const Duration(milliseconds: 80)')),
+    );
   });
 }

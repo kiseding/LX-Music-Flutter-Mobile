@@ -112,6 +112,132 @@ void main() {
     releaseResolver.complete();
     await loading;
   });
+
+  test('previous at queue start does not halt or latch buffering', () async {
+    final player = _PlaybackStateAudioPlayer();
+    final handler = LxAudioHandler(player: player);
+    addTearDown(player.dispose);
+    await handler.updateQueue([
+      const MediaItem(id: 'A', title: 'A'),
+      const MediaItem(id: 'B', title: 'B'),
+    ]);
+    player.emit(processingState: ProcessingState.ready, playing: true);
+    await pumpEventQueue();
+
+    await handler.skipToPrevious();
+
+    expect(player.pauseCalls, 0);
+    expect(handler.currentQueueIndex, 0);
+    expect(
+      handler.playbackState.value.processingState,
+      AudioProcessingState.ready,
+    );
+    expect(handler.playbackState.value.playing, isTrue);
+  });
+
+  test('single-item null resolver restores actual engine state', () async {
+    final player = _PlaybackStateAudioPlayer();
+    final handler = LxAudioHandler(player: player);
+    addTearDown(player.dispose);
+    handler.urlResolver = (id, [extras]) async => null;
+    player.emit(processingState: ProcessingState.ready, playing: true);
+    await pumpEventQueue();
+
+    await handler.setPlaylist([const MediaItem(id: 'A', title: 'A')]);
+
+    expect(
+      handler.playbackState.value.processingState,
+      AudioProcessingState.ready,
+    );
+    expect(handler.playbackState.value.playing, player.playing);
+  });
+
+  test('single-item resolver error restores actual engine state', () async {
+    final player = _PlaybackStateAudioPlayer();
+    final handler = LxAudioHandler(player: player);
+    addTearDown(player.dispose);
+    handler.urlResolver = (id, [extras]) async => throw StateError('resolve');
+    player.emit(processingState: ProcessingState.ready, playing: true);
+    await pumpEventQueue();
+
+    await handler.setPlaylist([const MediaItem(id: 'A', title: 'A')]);
+
+    expect(
+      handler.playbackState.value.processingState,
+      AudioProcessingState.ready,
+    );
+    expect(handler.playbackState.value.playing, isTrue);
+  });
+
+  test('stale resolver restores engine state while it owns buffering',
+      () async {
+    final player = _PlaybackStateAudioPlayer();
+    final handler = LxAudioHandler(player: player);
+    addTearDown(player.dispose);
+    final resolverStarted = Completer<void>();
+    final releaseResolver = Completer<void>();
+    handler.urlResolver = (id, [extras]) async {
+      resolverStarted.complete();
+      await releaseResolver.future;
+      return null;
+    };
+    await handler.updateQueue([
+      const MediaItem(id: 'A', title: 'A'),
+      const MediaItem(
+        id: 'B',
+        title: 'B',
+        extras: {'url': 'file:///tmp/B.mp3', 'requestedQuality': '320k'},
+      ),
+    ]);
+    player.emit(processingState: ProcessingState.ready, playing: true);
+    await pumpEventQueue();
+
+    final staleLoad = handler.skipToQueueItem(0);
+    await resolverStarted.future;
+    await handler.skipToQueueItem(1);
+    releaseResolver.complete();
+    await staleLoad;
+
+    expect(
+      handler.playbackState.value.processingState,
+      AudioProcessingState.ready,
+    );
+    expect(handler.playbackState.value.playing, player.playing);
+  });
+
+  test('seamless completion buffers as playing when engine completed false',
+      () async {
+    final player = _PlaybackStateAudioPlayer();
+    final handler = LxAudioHandler(player: player);
+    addTearDown(player.dispose);
+    final resolverStarted = Completer<void>();
+    final releaseResolver = Completer<void>();
+    handler.urlResolver = (id, [extras]) async {
+      resolverStarted.complete();
+      await releaseResolver.future;
+      return 'file:///tmp/$id.mp3';
+    };
+    await handler.setPlaylist([
+      const MediaItem(
+        id: 'A',
+        title: 'A',
+        extras: {'url': 'file:///tmp/A.mp3', 'requestedQuality': '320k'},
+      ),
+      const MediaItem(id: 'B', title: 'B'),
+    ]);
+
+    player.emit(processingState: ProcessingState.completed, playing: false);
+    await resolverStarted.future;
+
+    expect(
+      handler.playbackState.value.processingState,
+      AudioProcessingState.buffering,
+    );
+    expect(handler.playbackState.value.playing, isTrue);
+
+    releaseResolver.complete();
+    await pumpEventQueue();
+  });
 }
 
 class _PlaybackStateAudioPlayer extends AudioPlayer {
@@ -121,6 +247,7 @@ class _PlaybackStateAudioPlayer extends AudioPlayer {
   bool _playing = false;
   double _speed = 1.0;
   bool _shuffleModeEnabled = false;
+  int pauseCalls = 0;
 
   void emit({
     required ProcessingState processingState,
@@ -184,6 +311,12 @@ class _PlaybackStateAudioPlayer extends AudioPlayer {
   @override
   Future<void> play() async {
     _playing = true;
+  }
+
+  @override
+  Future<void> pause() async {
+    pauseCalls++;
+    _playing = false;
   }
 
   @override
