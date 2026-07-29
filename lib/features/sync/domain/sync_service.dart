@@ -1,8 +1,9 @@
 import 'dart:async';
 import 'package:dio/dio.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../../../core/storage/secure_token_store.dart';
 import '../../playlist/domain/playlist.dart';
 import '../../player/domain/music_item.dart';
-import '../../../core/storage/storage_service.dart';
 import '../../../core/network/outbound_url.dart';
 
 enum SyncStatus {
@@ -35,6 +36,8 @@ class SyncConflict {
 /// HTTPS 同步服务，参考桌面版 lx-music-sync-server 协议。
 class SyncService {
   final Dio _dio;
+  final SecureTokenStore _secureStore;
+  final Future<SharedPreferences> Function() _preferences;
   String? _serverUrl;
   String? _token;
   DateTime? _lastSyncTime;
@@ -49,7 +52,13 @@ class SyncService {
       StreamController<SyncStatus>.broadcast();
   Stream<SyncStatus> get statusStream => _statusController.stream;
 
-  SyncService({Dio? dio}) : _dio = dio ?? Dio();
+  SyncService({
+    Dio? dio,
+    SecureTokenStore? secureStore,
+    Future<SharedPreferences> Function()? preferences,
+  })  : _dio = dio ?? Dio(),
+        _secureStore = secureStore ?? FlutterSecureTokenStore(),
+        _preferences = preferences ?? SharedPreferences.getInstance;
 
   // ---- 连接管理 ----
 
@@ -185,8 +194,9 @@ class SyncService {
       );
 
       if (response.statusCode == 200) {
-        _token = response.data['token'];
-        await _saveToken(_token!);
+        final token = response.data['token'] as String;
+        await _saveToken(token);
+        _token = token;
         return true;
       }
       return false;
@@ -212,13 +222,24 @@ class SyncService {
   // ---- Token 持久化 ----
 
   Future<void> _saveToken(String token) async {
-    final storage = await StorageService.instance;
-    await storage.setString('sync_token', token);
+    await _secureStore.write('sync_token', token);
+    if (await _secureStore.read('sync_token') != token) {
+      throw StateError('Secure token verification failed');
+    }
   }
 
   Future<String?> loadSavedToken() async {
-    final storage = await StorageService.instance;
-    return storage.getString('sync_token');
+    final migrator = LegacyTokenMigrator(
+      secureStore: _secureStore,
+      preferences: await _preferences(),
+    );
+    return migrator.readAndMigrate('sync_token');
+  }
+
+  Future<void> forgetSavedToken() async {
+    final preferences = await _preferences();
+    await _secureStore.delete('sync_token');
+    await preferences.remove('sync_token');
   }
 
   // ---- 工具方法 ----
