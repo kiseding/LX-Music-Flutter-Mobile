@@ -216,8 +216,9 @@ class PlaybackUrlResolver<T> {
     if (result == null || !isPlayableUrl(result.url)) return null;
 
     final songId = songIdFor(music);
-    final qualityKey =
-        result.actualQuality.isNotEmpty ? result.actualQuality : preferredQuality;
+    final qualityKey = result.actualQuality.isNotEmpty
+        ? result.actualQuality
+        : preferredQuality;
     final key = PlaybackCacheService.cacheKey(
       platform: result.platform,
       songId: songId,
@@ -295,7 +296,15 @@ class PlaybackLeaseSession {
 
   Future<void> commitAuthoritative(PlaybackCacheLease? lease) async {
     final previous = _active;
-    if (identical(_pending, lease)) _pending = null;
+    final pending = _pending;
+    if (identical(pending, lease)) {
+      _pending = null;
+    } else if (lease == null) {
+      _pending = null;
+      if (pending != null && !identical(pending, previous)) {
+        await pending.release();
+      }
+    }
     if (identical(previous, lease)) {
       _active = lease;
       return;
@@ -311,7 +320,9 @@ class PlaybackLeaseSession {
   }) async {
     if (generation != currentGeneration()) {
       await discardPending(lease);
-      if (lease != null && !identical(lease, _pending) && !identical(lease, _active)) {
+      if (lease != null &&
+          !identical(lease, _pending) &&
+          !identical(lease, _active)) {
         await lease.release();
       }
       return false;
@@ -557,6 +568,27 @@ class PlaybackCacheService {
       if (lease != null) return lease;
     }
     return null;
+  }
+
+  /// Reacquires a lease for an already indexed exact stable cache file.
+  /// This never downloads and rejects paths not owned by this cache instance.
+  Future<PlaybackCacheLease?> acquireExisting(String path) async {
+    if (_disposed) return null;
+    await init();
+    if (_disposed) return null;
+    final localPath =
+        path.startsWith('file://') ? Uri.tryParse(path)?.toFilePath() : path;
+    if (localPath == null) return null;
+    final normalized = _normalizeAbsolute(localPath);
+    if (!_isRootChild(normalized)) return null;
+    final name = File(normalized).uri.pathSegments.last;
+    final match = _stableCacheName.firstMatch(name);
+    if (match == null) return null;
+    final key = match.group(1)!;
+    return _withKeyTransaction(
+      key,
+      () => _acquireLeaseLocked(key, normalized),
+    );
   }
 
   Future<PlaybackCacheLease?> _acquireLeaseLocked(

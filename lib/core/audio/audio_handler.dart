@@ -283,15 +283,18 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
   final PlaybackLeaseSession _leaseSession = PlaybackLeaseSession();
   final Map<String, PlaybackResolution> _pendingResolutions = {};
+  Future<PlaybackCacheLease?> Function(String path)? _acquireExistingCache;
   void Function(String key)? _cancelCacheKey;
   void Function()? _cancelAllTrackedCacheWork;
   String? _foregroundCacheKey;
 
   /// Production wiring: cancel obsolete cache downloads on track switch.
   void attachPlaybackCache({
+    Future<PlaybackCacheLease?> Function(String path)? acquireExisting,
     void Function(String key)? cancelCacheKey,
     void Function()? cancelAllTrackedCacheWork,
   }) {
+    _acquireExistingCache = acquireExisting;
     _cancelCacheKey = cancelCacheKey;
     _cancelAllTrackedCacheWork = cancelAllTrackedCacheWork;
   }
@@ -324,16 +327,12 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
   Future<void> _releasePlaybackLeases() => _leaseSession.releaseAll();
 
-  Future<void> _commitResolvedLease({
+  Future<void> _commitStagedLease({
     required String mediaId,
     required int generation,
+    required PlaybackCacheLease? lease,
   }) async {
-    final resolution = _pendingResolutions.remove(mediaId);
-    if (resolution == null) {
-      // String-only test resolvers and reused extras URLs leave leases alone.
-      return;
-    }
-    final lease = resolution.leaseOrNull;
+    _pendingResolutions.remove(mediaId);
     await _leaseSession.commitIfGeneration(
       generation: generation,
       currentGeneration: () => _playGeneration,
@@ -341,10 +340,30 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     );
   }
 
-  Future<void> _discardResolvedLease(String mediaId) async {
+  Future<void> _discardStagedLease(
+    String mediaId,
+    PlaybackCacheLease? lease,
+  ) async {
     final resolution = _pendingResolutions.remove(mediaId);
-    final lease = resolution?.leaseOrNull;
-    if (lease != null) await _leaseSession.discardPending(lease);
+    final resolvedLease = resolution?.leaseOrNull;
+    if (resolvedLease != null) {
+      await _leaseSession.discardPending(resolvedLease);
+    }
+    if (lease != null && !identical(lease, resolvedLease)) {
+      await _leaseSession.discardPending(lease);
+    }
+  }
+
+  Future<PlaybackCacheLease?> _acquireExistingCacheLease(String url) async {
+    final uri = Uri.tryParse(url);
+    if (uri == null || uri.scheme != 'file') return null;
+    final acquire = _acquireExistingCache;
+    if (acquire == null) return null;
+    try {
+      return await acquire(uri.toFilePath());
+    } on FormatException {
+      return null;
+    }
   }
 
   LxAudioHandler({AudioPlayer? player}) : _player = player ?? AudioPlayer() {
@@ -1063,6 +1082,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       var manualBufferingPublication = bufferingPublication;
       var sourceInstallAttempted = false;
       var sourceTransitionFollows = false;
+      PlaybackCacheLease? stagedLease;
 
       try {
         String? url = currentUrl;
@@ -1087,7 +1107,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
         var transactionIndex = activeItemIndex();
         if (transactionIndex < 0) {
-          await _discardResolvedLease(itemId);
+          await _discardStagedLease(itemId, stagedLease);
           return;
         }
         final refreshed = _queue[transactionIndex].extras?['url']?.toString();
@@ -1099,7 +1119,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         }
 
         if (url == null || url.isEmpty) {
-          await _discardResolvedLease(itemId);
+          await _discardStagedLease(itemId, stagedLease);
           if (_player.playing) {
             preservingPauseOwner ??= await _commands.pausePreservingIntent();
           }
@@ -1149,15 +1169,28 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
         // URL 解析在协调器外；提交结果时必须仍拥有源请求。
         if (_isStale(gen)) {
-          await _discardResolvedLease(itemId);
+          await _discardStagedLease(itemId, stagedLease);
           return;
         }
         var recoverAuthoritative = false;
         transactionIndex = activeItemIndex();
         if (transactionIndex < 0 ||
             !_commands.ownsSourceRequest(commandToken)) {
-          await _discardResolvedLease(itemId);
+          await _discardStagedLease(itemId, stagedLease);
           return;
+        }
+        stagedLease = _pendingResolutions[itemId]?.leaseOrNull ??
+            await _acquireExistingCacheLease(url);
+        if (_isStale(gen) ||
+            !_commands.ownsSourceRequest(commandToken) ||
+            activeItemIndex() < 0) {
+          await _discardStagedLease(itemId, stagedLease);
+          return;
+        }
+        if (stagedLease != null) {
+          _leaseSession.holdPending(stagedLease);
+        } else if (Uri.tryParse(url)?.scheme != 'file') {
+          _leaseSession.holdPending(null);
         }
         sourceInstallAttempted = true;
         final commitResult = await _commands.commitSource(
@@ -1166,20 +1199,24 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         );
         sourceTransitionFollows = true;
         if (commitResult is SourceCommitStale) {
-          await _discardResolvedLease(itemId);
+          await _discardStagedLease(itemId, stagedLease);
           if (commitResult.nativeInstallApplied && recoverStaleInstall) {
             await _recoverAuthoritativeSource(provenance: startProvenance);
           }
           return;
         }
         if (commitResult is SourceCommitFailed) {
-          await _discardResolvedLease(itemId);
+          await _discardStagedLease(itemId, stagedLease);
           Error.throwWithStackTrace(
             commitResult.error,
             commitResult.stackTrace,
           );
         }
-        await _commitResolvedLease(mediaId: itemId, generation: gen);
+        await _commitStagedLease(
+          mediaId: itemId,
+          generation: gen,
+          lease: stagedLease,
+        );
         _installedSourceOwnerToken = commandToken;
         transactionIndex = activeItemIndex();
         if (transactionIndex < 0) {
@@ -1201,7 +1238,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         }
       } catch (e) {
         debugPrint('[AudioHandler] 播放失败: $e');
-        await _discardResolvedLease(itemId);
+        await _discardStagedLease(itemId, stagedLease);
         var transactionIndex = activeItemIndex();
         if (transactionIndex >= 0 && _currentIndex == transactionIndex) {
           onError?.call('播放歌曲 "${item.title}" 失败: $e');

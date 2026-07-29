@@ -252,6 +252,35 @@ void main() {
     expect(File(first.path).existsSync(), isFalse);
   });
 
+  test('acquireExisting re-leases the exact indexed stable cache path',
+      () async {
+    final initial = await cache.acquireOrDownload(
+      remoteUrl: 'https://cdn.example.com/reacquire.mp3',
+      platform: 'tx',
+      songId: 'reacquire',
+      quality: '320k',
+    );
+    expect(initial, isNotNull);
+    final path = initial!.path;
+    await initial.release();
+
+    final reacquired = await cache.acquireExisting(path);
+
+    expect(reacquired?.path, path);
+    expect(downloadCount, 1);
+    await reacquired?.release();
+  });
+
+  test('acquireExisting refuses a local path not owned by the cache', () async {
+    final local = File('${tempDir.parent.path}/not-playback-cache.mp3');
+    await local.writeAsBytes(List<int>.filled(32, 1));
+    addTearDown(() async {
+      if (await local.exists()) await local.delete();
+    });
+
+    expect(await cache.acquireExisting(local.path), isNull);
+  });
+
   test('leased and inflight entries are excluded from size eviction', () async {
     final firstStarted = Completer<void>();
     final finishFirst = Completer<void>();

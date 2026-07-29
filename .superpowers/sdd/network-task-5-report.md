@@ -2,10 +2,8 @@
 
 ## Status
 
-Implemented cache-or-stream playback integration with strict RED/GREEN TDD.
-Production playback migrates from unleased `getOrDownload` to leased
-`acquireOrDownload`, with validated HTTPS streaming fallback and generation-safe
-lease transfer around authoritative source commits.
+Implemented cache-or-stream playback integration with strict RED/GREEN TDD,
+including re-acquisition for cached URL reuse after preload or stop.
 
 ## Implementation
 
@@ -29,6 +27,17 @@ lease transfer around authoritative source commits.
   production resolver, commits after authoritative source install, discards on
   stale/failure paths, cancels foreground/tracked cache keys on generation
   change, and releases all leases on stop/empty playlist.
+- Added `PlaybackCacheService.acquireExisting(path)`. It initializes the cache,
+  rejects non-root/non-stable paths, derives the candidate key only from an
+  exact stable basename, then enters that key's transaction gate. The existing
+  locked validator proves the path is the indexed exact stable file and current
+  generation before incrementing the lease count; it never downloads.
+- `LxAudioHandler` receives `acquireExisting` from `main.dart`. Before every
+  authoritative reused `file://` source install, it re-acquires and holds a
+  validated cache lease. The lease is committed only after source installation;
+  stale or failed installs discard it. The prior active lease remains until the
+  replacement commits. Streaming clears unrelated pending ownership before it
+  becomes authoritative.
 - Existing string `UrlResolver` tests remain unchanged.
 
 ## TDD Evidence
@@ -41,23 +50,31 @@ lease transfer around authoritative source commits.
   cancel, preload cancel, non-exclusive sibling work, lease transfer/release,
   stop/removal release, no double release, stale pending discard, streaming
   commit release, and generation races.
+- RED: cache reacquisition tests failed because `PlaybackCacheService` had no
+  `acquireExisting`; handler reuse tests failed because `attachPlaybackCache`
+  had no re-acquisition callback. The streaming-pending regression initially
+  showed that a pending lease remained after a streaming commit.
+- GREEN: cache tests prove an indexed stable path can be re-leased without a
+  second download and an unrelated local path is refused. Handler tests cover
+  preload-style persisted file URL reuse, stop then replay re-leasing, delayed
+  old-active release after source commit, local path rejection by the injected
+  cache boundary, failed source-install release, and streaming pending cleanup.
 
 ## Verification
 
-- `flutter test test/core/audio/playback_resolution_test.dart`: 12 passed.
-- `flutter test test/core/audio test/core/network test/features/player/domain/player_service_queue_test.dart`: 345 passed.
-- Targeted `flutter analyze` for changed files: no issues.
+- Focused cache and lease-resolution suites: 70 passed.
+- Full suite: 505 passed.
+- Targeted analysis of the five changed Dart files: no issues.
+- Full analysis retains 23 existing diagnostics, including an unrelated
+  `cloud_provider.dart` invalid assignment.
 - `git diff --check`: clean.
 
 ## Concerns
 
-- Reused extras `file://` URLs do not re-acquire a lease. A long-idle
-  re-play of a previously preloaded path may race with TTL/LRU after all
-  leases are released. Foreground exclusive resolve re-acquires a lease when
-  extras are cleared (quality change / forced re-resolve).
-- Preload still uses the string `urlResolver` path and releases leases
-  immediately; durable cache files remain, but concurrent preload of many
-  tracks no longer pins them against eviction.
-- Handler cancel on generation change cancels all tracked resolver keys plus
-  the last foreground cache key. Shared inflight keys between preload and
-  foreground still follow `cancelKey` semantics (all shared callers cancel).
+- Preload still releases its lease immediately after durable cache storage by
+  design. Authoritative replay now re-acquires before source ownership, but an
+  entry can still be evicted during the idle preload-to-replay interval; in
+  that case the cache rejects the path and the handler continues without a
+  lease rather than leasing an arbitrary local file.
+- Handler cancellation retains existing shared-key semantics: foreground
+  cancellation cancels all callers sharing an inflight key.

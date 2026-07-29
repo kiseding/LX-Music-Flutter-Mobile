@@ -1,6 +1,9 @@
 import 'dart:async';
 
+import 'package:audio_service/audio_service.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:just_audio/just_audio.dart';
+import 'package:lx_music_flutter/core/audio/audio_handler.dart';
 import 'package:lx_music_flutter/core/audio/playback_cache_service.dart';
 import 'package:lx_music_flutter/core/network/play_url_result.dart';
 import 'package:lx_music_flutter/features/player/domain/music_item.dart';
@@ -54,6 +57,8 @@ class _FakeLease {
 }
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   group('PlaybackUrlResolver', () {
     test('validated remote URL streams when cache write fails', () async {
       final cancelled = <String>[];
@@ -77,7 +82,8 @@ void main() {
       );
 
       expect(result, isA<StreamingPlayback>());
-      expect((result as StreamingPlayback).remoteUrl, 'https://cdn.example/a.mp3');
+      expect(
+          (result as StreamingPlayback).remoteUrl, 'https://cdn.example/a.mp3');
       expect(result.playableUrl, 'https://cdn.example/a.mp3');
       expect(result.qualityExtras['remoteUrl'], 'https://cdn.example/a.mp3');
       expect(result.qualityExtras['actualQuality'], '320k');
@@ -356,13 +362,17 @@ void main() {
     test('streaming commit keeps previous lease until releaseAll', () async {
       final released = <String>[];
       final active = _FakeLease('/tmp/active.mp3', 'active', released.add);
+      final pending = _FakeLease('/tmp/pending.mp3', 'pending', released.add);
       final activeLease = active.asLease();
+      final pendingLease = pending.asLease();
       final session = PlaybackLeaseSession();
 
       await session.commitAuthoritative(activeLease);
+      session.holdPending(pendingLease);
       await session.commitAuthoritative(null);
-      expect(released, ['active']);
+      expect(released, containsAllInOrder(['pending', 'active']));
       expect(session.activeLease, isNull);
+      expect(session.pendingLease, isNull);
     });
 
     test('generation race: only matching commit adopts lease', () async {
@@ -395,4 +405,160 @@ void main() {
       expect(second.releaseCount, 0);
     });
   });
+
+  group('LxAudioHandler cached file reuse', () {
+    test('preloaded cached file is re-leased before authoritative reuse',
+        () async {
+      final player = _ReuseAudioPlayer();
+      final handler = LxAudioHandler(player: player);
+      addTearDown(player.dispose);
+      final lease = _FakeLease('/cache/preloaded.mp3', 'preloaded', (_) {});
+      final acquired = <String>[];
+      handler.attachPlaybackCache(
+        acquireExisting: (path) async {
+          acquired.add(path);
+          return lease.asLease();
+        },
+      );
+
+      await handler.setPlaylist([_cachedItem('preloaded', lease.path)]);
+
+      expect(acquired, [lease.path]);
+      expect(player.sourceInstallCount, 1);
+      expect(lease.releaseCount, 0);
+    });
+
+    test('stop then replay re-leases a persisted cached file URL', () async {
+      final player = _ReuseAudioPlayer();
+      final handler = LxAudioHandler(player: player);
+      addTearDown(player.dispose);
+      final path = '/cache/replay.mp3';
+      final leases = <_FakeLease>[];
+      handler.attachPlaybackCache(
+        acquireExisting: (candidate) async {
+          final lease = _FakeLease(candidate, 'lease-${leases.length}', (_) {});
+          leases.add(lease);
+          return lease.asLease();
+        },
+      );
+
+      await handler.setPlaylist([_cachedItem('replay', path)]);
+      await handler.stop();
+      await handler.setPlaylist([_cachedItem('replay', path)]);
+
+      expect(leases, hasLength(2));
+      expect(leases.first.releaseCount, 1);
+      expect(leases.last.releaseCount, 0);
+    });
+
+    test('old active lease releases only after replacement source commits',
+        () async {
+      final player = _ReuseAudioPlayer();
+      final handler = LxAudioHandler(player: player);
+      addTearDown(player.dispose);
+      final releasedAtInstall = <int>[];
+      final old = _FakeLease('/cache/old.mp3', 'old', (_) {
+        releasedAtInstall.add(player.sourceInstallCount);
+      });
+      final replacement = _FakeLease('/cache/new.mp3', 'new', (_) {});
+      handler.attachPlaybackCache(
+        acquireExisting: (path) async =>
+            path == old.path ? old.asLease() : replacement.asLease(),
+      );
+
+      await handler.setPlaylist([
+        _cachedItem('old', old.path),
+        _cachedItem('new', replacement.path),
+      ]);
+      await handler.skipToQueueItem(1);
+
+      expect(player.sourceInstallCount, 2);
+      expect(releasedAtInstall, [2]);
+      expect(old.releaseCount, 1);
+      expect(replacement.releaseCount, 0);
+    });
+
+    test('local file outside the cache does not acquire a lease', () async {
+      final player = _ReuseAudioPlayer();
+      final handler = LxAudioHandler(player: player);
+      addTearDown(player.dispose);
+      var acquireCalls = 0;
+      handler.attachPlaybackCache(
+        acquireExisting: (path) async {
+          acquireCalls++;
+          return null;
+        },
+      );
+
+      await handler.setPlaylist([_cachedItem('local', '/tmp/local.mp3')]);
+
+      expect(acquireCalls, 1);
+      expect(player.sourceInstallCount, 1);
+    });
+
+    test('failed cached source install releases the newly acquired lease',
+        () async {
+      final player = _ReuseAudioPlayer()
+        ..sourceInstallError = StateError('fail');
+      final handler = LxAudioHandler(player: player);
+      addTearDown(player.dispose);
+      final lease = _FakeLease('/cache/fails.mp3', 'fails', (_) {});
+      handler.attachPlaybackCache(
+        acquireExisting: (path) async => lease.asLease(),
+      );
+
+      await handler.setPlaylist([_cachedItem('fails', lease.path)]);
+
+      expect(lease.releaseCount, 1);
+    });
+  });
+}
+
+MediaItem _cachedItem(String id, String path) => MediaItem(
+      id: id,
+      title: id,
+      extras: {
+        'url': PlaybackCacheService.toPlayableUri(path),
+        'requestedQuality': '320k',
+      },
+    );
+
+class _ReuseAudioPlayer extends AudioPlayer {
+  bool _playing = false;
+  Object? sourceInstallError;
+  var sourceInstallCount = 0;
+
+  @override
+  bool get playing => _playing;
+
+  @override
+  ProcessingState get processingState => ProcessingState.ready;
+
+  @override
+  Future<Duration?> setAudioSource(
+    AudioSource source, {
+    bool preload = true,
+    int? initialIndex,
+    Duration? initialPosition,
+  }) async {
+    sourceInstallCount++;
+    final error = sourceInstallError;
+    if (error != null) throw error;
+    return null;
+  }
+
+  @override
+  Future<void> play() async {
+    _playing = true;
+  }
+
+  @override
+  Future<void> pause() async {
+    _playing = false;
+  }
+
+  @override
+  Future<void> stop() async {
+    _playing = false;
+  }
 }
