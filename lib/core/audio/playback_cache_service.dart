@@ -77,6 +77,24 @@ class PlaybackCacheLease {
   }
 }
 
+sealed class PlaybackCachePathClassification {
+  const PlaybackCachePathClassification();
+}
+
+class NonCacheLocalPlaybackPath extends PlaybackCachePathClassification {
+  const NonCacheLocalPlaybackPath();
+}
+
+class RejectedPlaybackCachePath extends PlaybackCachePathClassification {
+  const RejectedPlaybackCachePath();
+}
+
+class LeasedPlaybackCachePath extends PlaybackCachePathClassification {
+  final PlaybackCacheLease lease;
+
+  const LeasedPlaybackCachePath(this.lease);
+}
+
 /// Cache-or-stream outcome for a single playable media URL resolution.
 sealed class PlaybackResolution {
   const PlaybackResolution();
@@ -573,34 +591,72 @@ class PlaybackCacheService {
   /// Reacquires a lease for an already indexed exact stable cache file.
   /// This never downloads and rejects paths not owned by this cache instance.
   Future<PlaybackCacheLease?> acquireExisting(String path) async {
-    if (_disposed) return null;
+    final classification = await classifyExisting(path);
+    return switch (classification) {
+      LeasedPlaybackCachePath(:final lease) => lease,
+      _ => null,
+    };
+  }
+
+  /// Classifies a local file path at this cache's boundary. Cache-shaped files
+  /// under the cache root are never treated as ordinary local media.
+  Future<PlaybackCachePathClassification> classifyExisting(String path) async {
+    if (_disposed) return const RejectedPlaybackCachePath();
     await init();
-    if (_disposed) return null;
+    if (_disposed) return const RejectedPlaybackCachePath();
     final localPath =
         path.startsWith('file://') ? Uri.tryParse(path)?.toFilePath() : path;
-    if (localPath == null) return null;
+    if (localPath == null) return const NonCacheLocalPlaybackPath();
     final normalized = _normalizeAbsolute(localPath);
-    if (!_isRootChild(normalized)) return null;
+    if (!_isRootChild(normalized)) return const NonCacheLocalPlaybackPath();
     final name = File(normalized).uri.pathSegments.last;
     final match = _stableCacheName.firstMatch(name);
-    if (match == null) return null;
+    if (match == null) return const NonCacheLocalPlaybackPath();
     final key = match.group(1)!;
     return _withKeyTransaction(
       key,
-      () => _acquireLeaseLocked(key, normalized),
+      () async {
+        final lease = await _acquireLeaseLocked(
+          key,
+          normalized,
+          persistAccessedAt: true,
+        );
+        return lease == null
+            ? const RejectedPlaybackCachePath()
+            : LeasedPlaybackCachePath(lease);
+      },
     );
   }
 
   Future<PlaybackCacheLease?> _acquireLeaseLocked(
-      String key, String path) async {
+    String key,
+    String path, {
+    bool persistAccessedAt = false,
+  }) async {
     final entry = _index[key];
     final validated = entry == null ? null : await _validatedStableEntry(entry);
     if (validated == null ||
         path != validated.path ||
-        (_generations[key] ?? validated.generation) != validated.generation) {
+         (_generations[key] ?? validated.generation) != validated.generation) {
       return null;
     }
-    _index[key] = validated;
+    if (persistAccessedAt) {
+      final updated = validated.copyWith(
+        lastAccessedAt: _clock(),
+        revision: validated.revision + 1,
+      );
+      _index[key] = updated;
+      try {
+        await _saveIndex();
+      } catch (_) {
+        if (_index[key]?.revision == updated.revision) {
+          _index[key] = validated;
+        }
+        return null;
+      }
+    } else {
+      _index[key] = validated;
+    }
     _leaseCounts[key] = (_leaseCounts[key] ?? 0) + 1;
     return PlaybackCacheLease._(
       validated.path,

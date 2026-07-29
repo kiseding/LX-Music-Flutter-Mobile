@@ -271,6 +271,97 @@ void main() {
     await reacquired?.release();
   });
 
+  test('acquireExisting persists last access before leasing a valid cache file',
+      () async {
+    var now = DateTime(2026, 1, 1);
+    final store = MemoryPlaybackCacheIndexStore();
+    final lruCache = PlaybackCacheService(
+      cacheRootOverride: tempDir.path,
+      indexStore: store,
+      clock: () => now,
+      downloader: (url, savePath, {cancelToken}) async {
+        await File(savePath).writeAsBytes(List<int>.filled(32, 1));
+      },
+    );
+    await cache.dispose();
+    cache = lruCache;
+
+    final initial = await cache.acquireOrDownload(
+      remoteUrl: 'https://cdn.example.com/reacquire-lru.mp3',
+      platform: 'tx',
+      songId: 'reacquire-lru',
+      quality: '320k',
+    );
+    final path = initial!.path;
+    await initial.release();
+    now = now.add(const Duration(minutes: 1));
+
+    final lease = await cache.acquireExisting(path);
+    final persisted = (jsonDecode(store.value!) as List).cast<Map>();
+    final entry = persisted.firstWhere((item) => item['path'] == path);
+
+    expect(lease, isNotNull);
+    expect(entry['lastAccessedAt'], now.millisecondsSinceEpoch);
+    await lease?.release();
+  });
+
+  test('acquireExisting rejects the lease when access persistence fails',
+      () async {
+    final store = _ControlledIndexStore();
+    final failureCache = PlaybackCacheService(
+      cacheRootOverride: tempDir.path,
+      indexStore: store,
+      downloader: (url, savePath, {cancelToken}) async {
+        await File(savePath).writeAsBytes(List<int>.filled(32, 1));
+      },
+    );
+    await cache.dispose();
+    cache = failureCache;
+
+    final initial = await cache.acquireOrDownload(
+      remoteUrl: 'https://cdn.example.com/reacquire-write-failure.mp3',
+      platform: 'tx',
+      songId: 'reacquire-write-failure',
+      quality: '320k',
+    );
+    final path = initial!.path;
+    await initial.release();
+    store.failNextWrite();
+
+    expect(await cache.acquireExisting(path), isNull);
+    expect(File(path).existsSync(), isTrue);
+  });
+
+  test('classifies an evicted stable cache path as rejected', () async {
+    final initial = await cache.acquireOrDownload(
+      remoteUrl: 'https://cdn.example.com/evicted.mp3',
+      platform: 'tx',
+      songId: 'evicted',
+      quality: '320k',
+    );
+    final path = initial!.path;
+    await initial.release();
+    await File(path).delete();
+
+    expect(
+      await cache.classifyExisting(path),
+      isA<RejectedPlaybackCachePath>(),
+    );
+  });
+
+  test('classifies an ordinary local file as non-cache local media', () async {
+    final local = File('${tempDir.parent.path}/ordinary-local.mp3');
+    await local.writeAsBytes(List<int>.filled(32, 1));
+    addTearDown(() async {
+      if (await local.exists()) await local.delete();
+    });
+
+    expect(
+      await cache.classifyExisting(local.path),
+      isA<NonCacheLocalPlaybackPath>(),
+    );
+  });
+
   test('acquireExisting refuses a local path not owned by the cache', () async {
     final local = File('${tempDir.parent.path}/not-playback-cache.mp3');
     await local.writeAsBytes(List<int>.filled(32, 1));

@@ -86,6 +86,7 @@ void main() async {
       },
     );
     lxHandler.attachPlaybackCache(
+      classifyExisting: playbackCache.classifyExisting,
       acquireExisting: playbackCache.acquireExisting,
       cancelCacheKey: playbackCache.cancelKey,
       cancelAllTrackedCacheWork: playbackResolver.cancelAllTracked,

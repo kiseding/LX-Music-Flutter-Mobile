@@ -496,6 +496,43 @@ void main() {
       expect(player.sourceInstallCount, 1);
     });
 
+    test('rejected cache candidate is not installed and re-resolves once',
+        () async {
+      final player = _ReuseAudioPlayer();
+      final handler = LxAudioHandler(player: player);
+      addTearDown(player.dispose);
+      var resolveCalls = 0;
+      handler.attachPlaybackCache(
+        classifyExisting: (path) async => const RejectedPlaybackCachePath(),
+      );
+      handler.urlResolver = (id, [extras]) async {
+        resolveCalls++;
+        expect(extras?['url'], isNull);
+        expect(extras?['remoteUrl'], isNull);
+        return null;
+      };
+
+      await handler.setPlaylist([
+        _cachedItem('rejected', '/cache/rejected-stable.mp3'),
+      ]);
+
+      expect(resolveCalls, 1);
+      expect(player.sourceInstallCount, 0);
+    });
+
+    test('ordinary local file installs without a cache lease', () async {
+      final player = _ReuseAudioPlayer();
+      final handler = LxAudioHandler(player: player);
+      addTearDown(player.dispose);
+      handler.attachPlaybackCache(
+        classifyExisting: (path) async => const NonCacheLocalPlaybackPath(),
+      );
+
+      await handler.setPlaylist([_cachedItem('local-boundary', '/tmp/local.mp3')]);
+
+      expect(player.sourceInstallCount, 1);
+    });
+
     test('failed cached source install releases the newly acquired lease',
         () async {
       final player = _ReuseAudioPlayer()

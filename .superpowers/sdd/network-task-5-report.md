@@ -7,6 +7,18 @@ including re-acquisition for cached URL reuse after preload or stop.
 
 ## Implementation
 
+- Added `PlaybackCachePathClassification` at the cache boundary. A local path
+  is now classified as ordinary non-cache media, a validated cache lease, or a
+  rejected cache-shaped candidate. Rejected stable paths include evicted,
+  missing, index-invalid, and persistence-rejected cache entries.
+- `acquireExisting` delegates to the boundary classifier. Valid reacquisition
+  updates and persists `lastAccessedAt` inside the owning key transaction
+  before incrementing its lease count; a write failure restores metadata and
+  refuses the lease without deleting the durable file.
+- The audio handler uses the classifier before installing reused `file://`
+  URLs. Ordinary local files remain playable without a lease. A rejected cache
+  candidate clears stale cache URL metadata and invokes normal resolution once;
+  it is never installed unleased, and the cleared extras prevent a retry loop.
 - Added sealed `PlaybackResolution` with `CachedPlayback(lease)` and
   `StreamingPlayback(remoteUrl)`, both exposing `playableUrl` and quality
   extras for queue metadata.
@@ -42,6 +54,13 @@ including re-acquisition for cached URL reuse after preload or stop.
 
 ## TDD Evidence
 
+- RED: focused cache and handler tests failed to compile because the cache
+  boundary classifier and handler injection did not exist.
+- GREEN: tests prove an evicted stable-looking cache path is rejected, an
+  ordinary local file installs unleased, valid preload/reuse remains leased,
+  rejected reuse clears stale extras and resolves once without source install,
+  failed source installation releases its staged lease, and `acquireExisting`
+  persists LRU access time or refuses the lease when that write fails.
 - RED: `playback_resolution_test.dart` failed to compile because
   `PlaybackResolution`, `PlaybackUrlResolver`, `PlaybackLeaseSession`, and
   `PlaybackCacheLease.test` did not exist.
@@ -62,19 +81,19 @@ including re-acquisition for cached URL reuse after preload or stop.
 
 ## Verification
 
-- Focused cache and lease-resolution suites: 70 passed.
-- Full suite: 505 passed.
-- Targeted analysis of the five changed Dart files: no issues.
-- Full analysis retains 23 existing diagnostics, including an unrelated
-  `cloud_provider.dart` invalid assignment.
+- Focused cache and lease-resolution suites: 76 passed.
+- Full suite: blocked after 500 passing tests by pre-existing cloud test API errors.
+- Targeted analysis of the changed audio files and tests: no issues.
+- Full analysis reports 29 diagnostics, including four pre-existing cloud test
+  errors and warnings/infos outside this change.
 - `git diff --check`: clean.
 
 ## Concerns
 
 - Preload still releases its lease immediately after durable cache storage by
-  design. Authoritative replay now re-acquires before source ownership, but an
-  entry can still be evicted during the idle preload-to-replay interval; in
-  that case the cache rejects the path and the handler continues without a
-  lease rather than leasing an arbitrary local file.
+  design. Authoritative replay reclassifies before source ownership; if the
+  cache file was evicted or otherwise rejected, stale cache metadata is cleared
+  and normal resolution gets one chance to recover rather than installing it
+  unleased.
 - Handler cancellation retains existing shared-key semantics: foreground
   cancellation cancels all callers sharing an inflight key.
