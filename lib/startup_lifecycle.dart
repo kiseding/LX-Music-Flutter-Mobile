@@ -8,7 +8,7 @@ final resourceDisposalTrackerProvider = Provider<ResourceDisposalTracker>(
 );
 
 final class ResourceDisposalTracker {
-  final List<Future<void>> _pending = [];
+  final List<_PendingDisposal> _pending = [];
   final List<_TrackedDisposal> _resources = [];
 
   void Function() register(Future<void> Function() dispose) {
@@ -18,20 +18,52 @@ final class ResourceDisposalTracker {
   }
 
   void track(Future<void> disposal) {
-    _pending.add(disposal);
+    _pending.add(_PendingDisposal(disposal));
   }
 
   Future<void> disposeAndDrain() async {
-    for (final resource in _resources.reversed) {
-      track(resource.dispose());
-    }
-    _resources.clear();
-    while (_pending.isNotEmpty) {
-      final pending = List<Future<void>>.of(_pending);
+    _DisposalFailure? firstFailure;
+    while (_resources.isNotEmpty || _pending.isNotEmpty) {
+      while (_resources.isNotEmpty) {
+        track(_resources.removeLast().dispose());
+      }
+
+      final pending = List<_PendingDisposal>.of(_pending);
       _pending.clear();
-      await Future.wait(pending);
+      await Future.wait(pending.map((disposal) => disposal.completion));
+      for (final disposal in pending) {
+        firstFailure ??= disposal.failure;
+      }
+    }
+
+    if (firstFailure case final failure?) {
+      Error.throwWithStackTrace(failure.error, failure.stackTrace);
     }
   }
+}
+
+final class _PendingDisposal {
+  _PendingDisposal(Future<void> disposal) {
+    completion = _capture(disposal);
+  }
+
+  late final Future<void> completion;
+  _DisposalFailure? failure;
+
+  Future<void> _capture(Future<void> disposal) async {
+    try {
+      await disposal;
+    } catch (error, stackTrace) {
+      failure = _DisposalFailure(error, stackTrace);
+    }
+  }
+}
+
+final class _DisposalFailure {
+  const _DisposalFailure(this.error, this.stackTrace);
+
+  final Object error;
+  final StackTrace stackTrace;
 }
 
 final class _TrackedDisposal {
@@ -40,7 +72,7 @@ final class _TrackedDisposal {
   final Future<void> Function() _dispose;
   Future<void>? _future;
 
-  Future<void> dispose() => _future ??= _dispose();
+  Future<void> dispose() => _future ??= Future<void>.sync(_dispose);
 }
 
 final class StartupLifecycle {
@@ -62,11 +94,25 @@ final class StartupLifecycle {
   Future<void> dispose() => _disposeFuture ??= _dispose();
 
   Future<void> _dispose() async {
+    _DisposalFailure? firstFailure;
     try {
       await disposals.disposeAndDrain();
-    } finally {
+    } catch (error, stackTrace) {
+      firstFailure = _DisposalFailure(error, stackTrace);
+    }
+    try {
       container.dispose();
+    } catch (error, stackTrace) {
+      firstFailure ??= _DisposalFailure(error, stackTrace);
+    }
+    try {
       await disposals.disposeAndDrain();
+    } catch (error, stackTrace) {
+      firstFailure ??= _DisposalFailure(error, stackTrace);
+    }
+
+    if (firstFailure case final failure?) {
+      Error.throwWithStackTrace(failure.error, failure.stackTrace);
     }
   }
 }
@@ -88,7 +134,16 @@ class OwnedProviderScope extends StatefulWidget {
 class _OwnedProviderScopeState extends State<OwnedProviderScope> {
   @override
   void dispose() {
-    unawaited(widget.lifecycle.dispose());
+    unawaited(widget.lifecycle.dispose().catchError((error, stackTrace) {
+      FlutterError.reportError(
+        FlutterErrorDetails(
+          exception: error,
+          stack: stackTrace,
+          library: 'startup lifecycle',
+          context: ErrorDescription('while disposing the root provider scope'),
+        ),
+      );
+    }));
     super.dispose();
   }
 

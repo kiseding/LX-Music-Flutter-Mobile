@@ -12,6 +12,162 @@ import 'package:lx_music_flutter/startup_lifecycle.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  test('dispose drains resources registered synchronously by a disposer',
+      () async {
+    final calls = <String, int>{};
+    final tracker = ResourceDisposalTracker();
+    tracker.register(() {
+      calls.update('outer', (count) => count + 1, ifAbsent: () => 1);
+      tracker.register(() async {
+        calls.update('inner', (count) => count + 1, ifAbsent: () => 1);
+      });
+      return Future<void>.value();
+    });
+
+    await tracker.disposeAndDrain();
+    await tracker.disposeAndDrain();
+
+    expect(calls, {'outer': 1, 'inner': 1});
+  });
+
+  test('dispose reaches a fixed point before and after container teardown',
+      () async {
+    final events = <String>[];
+    final tracker = ResourceDisposalTracker();
+    tracker.register(() async {
+      await Future<void>.delayed(Duration.zero);
+      tracker.register(() async {
+        events.add('during-drain-resource');
+      });
+      tracker.track(Future<void>.microtask(() {
+        events.add('during-drain-future');
+      }));
+    });
+    final provider = Provider<void>((ref) {
+      ref.onDispose(() {
+        tracker.register(() async {
+          await Future<void>.delayed(Duration.zero);
+          tracker.register(() async {
+            events.add('post-container-resource');
+          });
+          tracker.track(Future<void>.microtask(() {
+            events.add('post-container-future');
+          }));
+        });
+      });
+    });
+    final container = ProviderContainer();
+    container.read(provider);
+
+    await StartupLifecycle(container, tracker).dispose();
+
+    expect(
+      events,
+      containsAll(<String>[
+        'during-drain-resource',
+        'during-drain-future',
+        'post-container-resource',
+        'post-container-future',
+      ]),
+    );
+  });
+
+  test('synchronous disposer failure does not stop remaining cleanup',
+      () async {
+    final failure = StateError('synchronous disposal failed');
+    final events = <String>[];
+    final tracker = ResourceDisposalTracker();
+    tracker.track(Future<void>.microtask(() => events.add('pending')));
+    tracker.register(() async {
+      events.add('later-resource');
+    });
+    tracker.register(() {
+      events.add('throwing-resource');
+      throw failure;
+    });
+
+    await expectLater(tracker.disposeAndDrain(), throwsA(same(failure)));
+
+    expect(
+      events,
+      ['throwing-resource', 'later-resource', 'pending'],
+    );
+  });
+
+  test('asynchronous disposer failure does not stop callback-started cleanup',
+      () async {
+    final failure = StateError('asynchronous disposal failed');
+    final events = <String>[];
+    final tracker = ResourceDisposalTracker();
+    tracker.register(() async {
+      await Future<void>.delayed(Duration.zero);
+      tracker.register(() async {
+        events.add('callback-resource');
+      });
+      tracker.track(Future<void>.microtask(() {
+        events.add('callback-future');
+      }));
+      throw failure;
+    });
+
+    await expectLater(tracker.disposeAndDrain(), throwsA(same(failure)));
+
+    expect(events, containsAll(['callback-resource', 'callback-future']));
+  });
+
+  test('repeated dispose shares one drain and reports failure after cleanup',
+      () async {
+    final releaseCleanup = Completer<void>();
+    final failure = StateError('cleanup failed');
+    var failingCalls = 0;
+    var cleanupCalls = 0;
+    final tracker = ResourceDisposalTracker();
+    tracker.track(releaseCleanup.future);
+    tracker.register(() async {
+      cleanupCalls++;
+    });
+    tracker.register(() {
+      failingCalls++;
+      throw failure;
+    });
+    final lifecycle = StartupLifecycle(ProviderContainer(), tracker);
+
+    final first = lifecycle.dispose();
+    final second = lifecycle.dispose();
+    var completed = false;
+    first.whenComplete(() => completed = true).ignore();
+
+    expect(identical(first, second), isTrue);
+    await Future<void>.delayed(Duration.zero);
+    expect(completed, isFalse);
+    releaseCleanup.complete();
+    await expectLater(first, throwsA(same(failure)));
+    await expectLater(lifecycle.dispose(), throwsA(same(failure)));
+    expect(failingCalls, 1);
+    expect(cleanupCalls, 1);
+  });
+
+  testWidgets('owned provider scope reports asynchronous cleanup failure',
+      (tester) async {
+    final failure = StateError('root teardown failed');
+    final reported = <FlutterErrorDetails>[];
+    final previousOnError = FlutterError.onError;
+    FlutterError.onError = reported.add;
+    addTearDown(() => FlutterError.onError = previousOnError);
+    final tracker = ResourceDisposalTracker();
+    tracker.register(() async => throw failure);
+    final lifecycle = StartupLifecycle(ProviderContainer(), tracker);
+
+    await tester.pumpWidget(
+      OwnedProviderScope(lifecycle: lifecycle, child: const SizedBox()),
+    );
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump();
+
+    expect(reported, hasLength(1));
+    expect(reported.single.exception, same(failure));
+  });
+
   test('startup failure disposes container and drains tracked resources once',
       () async {
     final release = Completer<void>();

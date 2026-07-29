@@ -205,3 +205,56 @@ future and a final drain captures callback-started cleanup. Missing or null
 version 1 `playlists` is rejected, while both supported playlist shapes are
 strictly decoded and passed to one `replaceAll`. Playback-cache implementation
 files remain unchanged.
+
+## Final Disposal Tracker Remediation
+
+### RED Evidence
+
+```text
+flutter test test/startup_lifecycle_test.dart
+00:00 +0 -1: dispose drains resources registered synchronously by a disposer [E]
+Concurrent modification during iteration: ReversedListIterable<_TrackedDisposal>
+00:00 +0 -2: dispose reaches a fixed point before and after container teardown [E]
+Actual post-container events omitted post-container-resource
+00:00 +0 -3: synchronous disposer failure does not stop remaining cleanup [E]
+Actual events omitted later-resource
+00:00 +0 -4: asynchronous disposer failure does not stop callback-started cleanup [E]
+Actual callback-started events were empty
+00:00 +0 -5: repeated dispose shares one drain and reports failure after cleanup [E]
+The disposal future completed before blocked cleanup
+00:00 +0 -6: owned provider scope reports asynchronous cleanup failure [E]
+The unawaited disposal error reached the test zone unhandled
+```
+
+These failures reproduced list mutation dropping disposer-time registration,
+failure-short-circuited cleanup, incomplete post-container draining, premature
+error completion, and the unhandled root teardown error.
+
+### GREEN Evidence
+
+```text
+flutter test test/startup_lifecycle_test.dart
+9 tests passed
+
+flutter test test/features/playlist test/features/sync test/features/settings test/widget_test.dart
+90 tests passed
+
+flutter analyze
+22 pre-existing findings; no new findings
+
+dart format --output=none --set-exit-if-changed lib/startup_lifecycle.dart test/startup_lifecycle_test.dart
+Formatted 2 files (0 changed)
+
+git diff --check
+passed
+```
+
+The tracker now removes registered resources in reverse dependency order and
+drains snapshots of pending futures until both queues remain empty. Each
+resource is invoked once, including synchronous throws, and each async failure
+is observed independently so later and callback-started cleanup still runs.
+`StartupLifecycle.dispose` remains one cached future, retains the first cleanup
+error and original stack, disposes the container, completes the post-container
+fixed point, then reports failure. Root widget teardown catches that future and
+reports it through `FlutterError`; awaited startup-failure cleanup continues to
+surface disposal failures to its caller.
