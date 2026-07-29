@@ -2,8 +2,10 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../../core/audio/playback_cache_service.dart';
 import '../../../core/network/app_http_client.dart';
@@ -13,6 +15,32 @@ import '../../../core/network/play_url_result.dart';
 import '../../../core/storage/storage_service.dart';
 import '../../player/domain/music_item.dart';
 import 'download_task.dart';
+
+enum DownloadNetwork { wifi, mobile, none }
+
+abstract interface class DownloadTaskStorage {
+  List<Map<String, dynamic>> load();
+  Future<void> save(List<Map<String, dynamic>> tasks);
+}
+
+final class _StorageAdapter implements DownloadTaskStorage {
+  _StorageAdapter(this.storage);
+  final StorageService storage;
+
+  @override
+  List<Map<String, dynamic>> load() => storage.getJsonList('download_tasks');
+
+  @override
+  Future<void> save(List<Map<String, dynamic>> tasks) async {
+    await storage.setJsonList('download_tasks', tasks);
+  }
+}
+
+typedef DownloadExecutor = Future<void> Function(
+  DownloadTask task,
+  CancelToken cancelToken,
+  void Function(double progress) onProgress,
+);
 
 Future<PlayUrlResult?> downloadWithFreshLinkRetry({
   CancelToken? cancelToken,
@@ -82,19 +110,69 @@ class DownloadService {
   final StreamController<List<DownloadTask>> _tasksController =
       StreamController<List<DownloadTask>>.broadcast();
   final Map<String, CancelToken> _cancelTokens = {};
+  final Set<String> _activeTaskIds = <String>{};
+  final int _maxConcurrent;
+  final bool _wifiOnly;
+  final DownloadExecutor? _downloader;
+  final String Function() _taskIdFactory;
+  final Duration _progressPersistenceInterval;
+  final Future<DownloadNetwork> Function() _currentNetwork;
+  late final StreamSubscription<DownloadNetwork>? _connectivitySubscription;
+  Future<void> _persistenceTail = Future<void>.value();
+  DateTime _lastProgressPersistence = DateTime.fromMillisecondsSinceEpoch(0);
 
   String? _downloadDir;
-  final int _maxConcurrent = 3;
-  int _currentDownloading = 0;
   MusicSourceService? _musicSourceService;
-  StorageService? _storage;
+  DownloadTaskStorage? _storage;
   bool _initialized = false;
 
   List<DownloadTask> get tasks => List.unmodifiable(_tasks);
   Stream<List<DownloadTask>> get tasksStream => _tasksController.stream;
   int get maxCacheSizeMB => 2048;
+  Set<String> get activeTaskIds => Set.unmodifiable(_activeTaskIds);
+  Future<void> get idle async {
+    while (_activeTaskIds.isNotEmpty) {
+      await Future<void>.delayed(Duration.zero);
+    }
+  }
 
-  DownloadService({Dio? dio}) : _dio = dio ?? _createDownloadDio();
+  Future<void> get persistenceIdle => _persistenceTail;
+
+  DownloadService({
+    Dio? dio,
+    int maxConcurrent = 3,
+    bool wifiOnly = false,
+    Stream<DownloadNetwork>? connectivity,
+    Future<DownloadNetwork> Function()? currentNetwork,
+    String Function()? taskIdFactory,
+    DownloadExecutor? downloader,
+    DownloadTaskStorage? storage,
+    Duration progressPersistenceInterval = const Duration(seconds: 2),
+  })  : assert(maxConcurrent > 0),
+        _dio = dio ?? _createDownloadDio(),
+        _maxConcurrent = maxConcurrent,
+        _wifiOnly = wifiOnly,
+        _downloader = downloader,
+        _storage = storage,
+        _taskIdFactory = taskIdFactory ?? const Uuid().v4,
+        _currentNetwork = currentNetwork ?? _platformNetwork,
+        _progressPersistenceInterval = progressPersistenceInterval {
+    _connectivitySubscription = connectivity?.listen(_onNetworkChanged);
+  }
+
+  static Future<DownloadNetwork> _platformNetwork() async {
+    final result = await Connectivity().checkConnectivity();
+    return _networkFrom(result);
+  }
+
+  static DownloadNetwork _networkFrom(List<ConnectivityResult> results) {
+    if (results.contains(ConnectivityResult.wifi) ||
+        results.contains(ConnectivityResult.ethernet)) {
+      return DownloadNetwork.wifi;
+    }
+    if (results.contains(ConnectivityResult.none)) return DownloadNetwork.none;
+    return DownloadNetwork.mobile;
+  }
 
   static Dio _createDownloadDio() {
     return AppHttpClient.create(
@@ -113,15 +191,20 @@ class DownloadService {
 
   Future<void> init() async {
     if (_initialized) return;
-    _storage = await StorageService.instance;
+    _storage ??= _StorageAdapter(await StorageService.instance);
     _loadFromStorage();
-    await _initDownloadDir();
+    if (_downloader == null) await _initDownloadDir();
     // 上次异常退出时可能卡在 downloading
     var demoted = false;
     for (var i = 0; i < _tasks.length; i++) {
       final t = _tasks[i];
       if (t.status == DownloadStatus.downloading) {
-        _tasks[i] = t.copyWith(status: DownloadStatus.pending, progress: 0.0);
+        _tasks[i] = t.copyWith(
+          status: DownloadStatus.pending,
+          progress: 0.0,
+          clearSavePath: true,
+          clearErrorMsg: true,
+        );
         demoted = true;
       }
     }
@@ -134,7 +217,7 @@ class DownloadService {
   }
 
   void _loadFromStorage() {
-    final saved = _storage!.getJsonList('download_tasks');
+    final saved = _storage!.load();
     if (saved.isEmpty) return;
     _tasks.clear();
     for (final json in saved) {
@@ -144,9 +227,10 @@ class DownloadService {
   }
 
   Future<void> _saveToStorage() async {
-    _storage ??= await StorageService.instance;
-    final data = _tasks.map((t) => t.toJson()).toList();
-    await _storage!.setJsonList('download_tasks', data);
+    _storage ??= _StorageAdapter(await StorageService.instance);
+    final data = _tasks.map((t) => t.toJson()).toList(growable: false);
+    _persistenceTail = _persistenceTail.then((_) => _storage!.save(data));
+    return _persistenceTail;
   }
 
   Future<void> _initDownloadDir() async {
@@ -161,12 +245,12 @@ class DownloadService {
       return;
     }
 
-    if (_downloadDir == null) {
+    if (_downloader == null && _downloadDir == null) {
       await _initDownloadDir();
     }
 
     final task = DownloadTask(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      id: _taskIdFactory(),
       musicId: music.id,
       name: music.name,
       singer: music.singer,
@@ -196,8 +280,6 @@ class DownloadService {
   }
 
   Future<void> _startDownload(DownloadTask task) async {
-    if (_currentDownloading >= _maxConcurrent) return;
-
     final latest = _taskById(task.id);
     if (latest == null) return;
     if (latest.status != DownloadStatus.pending &&
@@ -205,11 +287,10 @@ class DownloadService {
       return;
     }
 
-    if (_downloadDir == null) {
+    if (_downloader == null && _downloadDir == null) {
       await _initDownloadDir();
     }
 
-    _currentDownloading++;
     final cancelToken = CancelToken();
     _cancelTokens[task.id] = cancelToken;
     _updateTask(task.id, status: DownloadStatus.downloading, errorMsg: '');
@@ -218,6 +299,16 @@ class DownloadService {
     final partPath = '$_downloadDir/$baseName.part';
 
     try {
+      if (_downloader != null) {
+        await _downloader(latest, cancelToken, (progress) {
+          _updateTask(task.id, progress: progress, persistProgress: true);
+        });
+        if (!cancelToken.isCancelled &&
+            _taskById(task.id)?.status == DownloadStatus.downloading) {
+          _updateTask(task.id, status: DownloadStatus.completed, progress: 1.0);
+        }
+        return;
+      }
       final music = _musicFromTask(latest);
       // 丢弃任务里缓存的 CDN 直链：签名会过期，重试时复用会 403。
       // 每次下载/重试都向源重新解析（与播放路径一致）。
@@ -368,8 +459,10 @@ class DownloadService {
         );
       }
     } finally {
-      _cancelTokens.remove(task.id);
-      _currentDownloading = (_currentDownloading - 1).clamp(0, _maxConcurrent);
+      if (identical(_cancelTokens[task.id], cancelToken)) {
+        _cancelTokens.remove(task.id);
+        _activeTaskIds.remove(task.id);
+      }
       _processQueue();
     }
   }
@@ -458,19 +551,47 @@ class DownloadService {
   }
 
   void _processQueue() {
-    final slots = _maxConcurrent - _currentDownloading;
+    final slots = _maxConcurrent - _activeTaskIds.length;
+    if (slots <= 0) return;
+    if (_wifiOnly) {
+      _currentNetwork().then((network) {
+        if (network == DownloadNetwork.wifi) _processQueueAllowed();
+      });
+      return;
+    }
+    _processQueueAllowed();
+  }
+
+  void _processQueueAllowed() {
+    final slots = _maxConcurrent - _activeTaskIds.length;
     if (slots <= 0) return;
     final pendingTasks = _tasks
         .where((t) => t.status == DownloadStatus.pending)
         .take(slots)
         .toList();
     for (final task in pendingTasks) {
+      if (!_activeTaskIds.add(task.id)) continue;
       unawaited(_startDownload(task));
+    }
+  }
+
+  void _onNetworkChanged(DownloadNetwork network) {
+    if (!_wifiOnly) return;
+    if (network == DownloadNetwork.wifi) {
+      _processQueueAllowed();
+      return;
+    }
+    for (final entry in _cancelTokens.entries.toList()) {
+      _cancelTokens.remove(entry.key);
+      _activeTaskIds.remove(entry.key);
+      entry.value.cancel('wifi policy');
+      _updateTask(entry.key, status: DownloadStatus.pending, progress: 0.0);
     }
   }
 
   void pauseTask(String taskId) {
     final token = _cancelTokens.remove(taskId);
+    _activeTaskIds.remove(taskId);
     token?.cancel('paused');
     _updateTask(taskId, status: DownloadStatus.paused);
   }
@@ -495,6 +616,7 @@ class DownloadService {
 
   void cancelTask(String taskId) {
     final token = _cancelTokens.remove(taskId);
+    _activeTaskIds.remove(taskId);
     token?.cancel('cancelled');
     final task = _taskById(taskId);
     if (task != null) {
@@ -512,6 +634,7 @@ class DownloadService {
     final task = _taskById(taskId);
     if (task == null) return;
     final token = _cancelTokens.remove(taskId);
+    _activeTaskIds.remove(taskId);
     token?.cancel('retry');
     unawaited(_safeDelete(_partPathFor(task.musicId)));
     _updateTask(
@@ -556,6 +679,7 @@ class DownloadService {
     int? fileSize,
     String? url,
     String? quality,
+    bool persistProgress = false,
   }) {
     final index = _tasks.indexWhere((t) => t.id == taskId);
     if (index < 0) return;
@@ -575,7 +699,17 @@ class DownloadService {
       quality: quality,
     );
     _tasksController.add(_tasks);
-    unawaited(_saveToStorage());
+    final terminal = status == DownloadStatus.completed ||
+        status == DownloadStatus.failed ||
+        status == DownloadStatus.paused;
+    final now = DateTime.now();
+    if (!persistProgress ||
+        terminal ||
+        now.difference(_lastProgressPersistence) >=
+            _progressPersistenceInterval) {
+      if (persistProgress) _lastProgressPersistence = now;
+      unawaited(_saveToStorage());
+    }
   }
 
   Future<List<DownloadTask>> getDownloadedTasks() async {
@@ -776,6 +910,8 @@ class DownloadService {
       t.cancel('disposed');
     }
     _cancelTokens.clear();
+    _connectivitySubscription?.cancel();
+    unawaited(_saveToStorage());
     _dio.close();
     _tasksController.close();
   }

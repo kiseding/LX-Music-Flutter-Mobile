@@ -1,3 +1,4 @@
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../domain/download_service.dart';
 import '../domain/download_task.dart';
@@ -6,7 +7,32 @@ import '../../search/presentation/search_provider.dart';
 import '../../settings/presentation/settings_provider.dart';
 
 final downloadServiceProvider = Provider<DownloadService>((ref) {
-  final service = DownloadService();
+  final wifiOnly = ref.watch(wifiOnlyDownloadProvider);
+  final connectivity = Connectivity();
+  final service = DownloadService(
+    wifiOnly: wifiOnly,
+    connectivity: connectivity.onConnectivityChanged.map((results) {
+      if (results.contains(ConnectivityResult.wifi) ||
+          results.contains(ConnectivityResult.ethernet)) {
+        return DownloadNetwork.wifi;
+      }
+      if (results.contains(ConnectivityResult.none)) {
+        return DownloadNetwork.none;
+      }
+      return DownloadNetwork.mobile;
+    }),
+    currentNetwork: () async {
+      final results = await connectivity.checkConnectivity();
+      if (results.contains(ConnectivityResult.wifi) ||
+          results.contains(ConnectivityResult.ethernet)) {
+        return DownloadNetwork.wifi;
+      }
+      if (results.contains(ConnectivityResult.none)) {
+        return DownloadNetwork.none;
+      }
+      return DownloadNetwork.mobile;
+    },
+  );
   final musicSourceService = ref.watch(musicSourceServiceProvider);
   service.setMusicSourceService(musicSourceService);
   final sub = service.tasksStream.listen((_) {
@@ -55,13 +81,15 @@ final downloadSongProvider = Provider<Future<void> Function(MusicItem)>((ref) {
       AudioQualityOption.lossless24: 'flac24bit',
       AudioQualityOption.hires: 'hires',
     };
-    await downloadService.addTask(music, quality: qualityMap[qualityOption] ?? '320k');
+    await downloadService.addTask(music,
+        quality: qualityMap[qualityOption] ?? '320k');
     ref.read(downloadVersionProvider.notifier).state++;
   };
 });
 
 // 下载操作（暂停/恢复/取消/重试/删除），操作后刷新 UI
-final downloadActionProvider = Provider<void Function(String action, String taskId)>((ref) {
+final downloadActionProvider =
+    Provider<void Function(String action, String taskId)>((ref) {
   return (String action, String taskId) {
     final downloadService = ref.read(downloadServiceProvider);
     switch (action) {
