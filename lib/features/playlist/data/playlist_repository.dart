@@ -1,0 +1,309 @@
+import 'dart:convert';
+
+import '../../player/domain/music_item.dart';
+import '../domain/playlist.dart';
+
+final class PlaylistSnapshot {
+  PlaylistSnapshot({
+    required this.schemaVersion,
+    required List<Playlist> playlists,
+  }) : playlists = List.unmodifiable([
+          for (final playlist in playlists)
+            playlist.copyWith(songs: List.unmodifiable(playlist.songs)),
+        ]) {
+    if (schemaVersion != 1) {
+      throw const FormatException('schemaVersion must be 1');
+    }
+  }
+
+  final int schemaVersion;
+  final List<Playlist> playlists;
+}
+
+abstract interface class PlaylistRepository {
+  Future<PlaylistSnapshot> load();
+  Future<void> save(PlaylistSnapshot snapshot);
+}
+
+final class PlaylistSnapshotCodec {
+  const PlaylistSnapshotCodec();
+
+  String encode(PlaylistSnapshot snapshot) {
+    if (snapshot.schemaVersion != 1) {
+      throw const FormatException('schemaVersion must be 1');
+    }
+
+    final ids = <String>{};
+    final names = <String>{};
+    return jsonEncode({
+      'schemaVersion': 1,
+      'playlists': List.unmodifiable([
+        for (var index = 0; index < snapshot.playlists.length; index++)
+          _encodePlaylist(snapshot.playlists[index], index, ids, names),
+      ]),
+    });
+  }
+
+  PlaylistSnapshot decode(String source) {
+    final dynamic decoded;
+    try {
+      decoded = jsonDecode(source);
+    } on FormatException catch (error) {
+      throw FormatException('root: ${error.message}');
+    }
+    final root = _object(decoded, 'root');
+    _onlyKeys(root, const {'schemaVersion', 'playlists'}, 'root');
+    if (_integer(root['schemaVersion'], 'schemaVersion') != 1) {
+      throw const FormatException('schemaVersion must be 1');
+    }
+
+    final values = _list(root['playlists'], 'playlists');
+    final ids = <String>{};
+    final names = <String>{};
+    final playlists = <Playlist>[];
+    for (var index = 0; index < values.length; index++) {
+      playlists
+          .add(_decodePlaylist(values[index], 'playlists[$index]', ids, names));
+    }
+    return PlaylistSnapshot(schemaVersion: 1, playlists: playlists);
+  }
+
+  Map<String, dynamic> _encodePlaylist(
+    Playlist playlist,
+    int index,
+    Set<String> ids,
+    Set<String> names,
+  ) {
+    final path = 'playlists[$index]';
+    _uniqueNonEmpty(playlist.id, '$path.id', ids);
+    _uniqueNonEmpty(playlist.name, '$path.name', names);
+    _timestamp(playlist.createdAt, '$path.createdAt');
+    _timestamp(playlist.updatedAt, '$path.updatedAt');
+    return {
+      'id': playlist.id,
+      'name': playlist.name,
+      'description': playlist.description,
+      'coverUrl': playlist.coverUrl,
+      'songs': List.unmodifiable([
+        for (var songIndex = 0; songIndex < playlist.songs.length; songIndex++)
+          _encodeSong(playlist.songs[songIndex], '$path.songs[$songIndex]'),
+      ]),
+      'createdAt': playlist.createdAt.millisecondsSinceEpoch,
+      'updatedAt': playlist.updatedAt.millisecondsSinceEpoch,
+    };
+  }
+
+  Map<String, dynamic> _encodeSong(MusicItem song, String path) {
+    _nonEmpty(song.id, '$path.id');
+    _nonEmpty(song.name, '$path.name');
+    _nonEmpty(song.singer, '$path.singer');
+    _nonEmpty(song.source, '$path.source');
+    if (song.duration.isNegative) {
+      throw FormatException('$path.duration must be a non-negative integer');
+    }
+    return song.toJson();
+  }
+
+  Playlist _decodePlaylist(
+    dynamic value,
+    String path,
+    Set<String> ids,
+    Set<String> names,
+  ) {
+    final json = _object(value, path);
+    _onlyKeys(json, _playlistKeys, path);
+    final id = _nonEmpty(_string(json['id'], '$path.id'), '$path.id');
+    final name = _nonEmpty(_string(json['name'], '$path.name'), '$path.name');
+    _unique(id, '$path.id', ids);
+    _unique(name, '$path.name', names);
+    final songs = _list(json['songs'], '$path.songs');
+
+    return Playlist(
+      id: id,
+      name: name,
+      description: _nullableString(json['description'], '$path.description'),
+      coverUrl: _nullableString(json['coverUrl'], '$path.coverUrl'),
+      songs: List.unmodifiable([
+        for (var index = 0; index < songs.length; index++)
+          _decodeSong(songs[index], '$path.songs[$index]'),
+      ]),
+      createdAt: _date(json['createdAt'], '$path.createdAt'),
+      updatedAt: _date(json['updatedAt'], '$path.updatedAt'),
+    );
+  }
+
+  MusicItem _decodeSong(dynamic value, String path) {
+    final json = _object(value, path);
+    _onlyKeys(json, _songKeys, path);
+    final id = _nonEmpty(_string(json['id'], '$path.id'), '$path.id');
+    final name = _nonEmpty(_string(json['name'], '$path.name'), '$path.name');
+    final singer =
+        _nonEmpty(_string(json['singer'], '$path.singer'), '$path.singer');
+    final source =
+        _nonEmpty(_string(json['source'], '$path.source'), '$path.source');
+    final duration = _integer(json['duration'], '$path.duration');
+    if (duration < 0) {
+      throw FormatException('$path.duration must be a non-negative integer');
+    }
+
+    final validated = <String, dynamic>{
+      'id': id,
+      'name': name,
+      'singer': singer,
+      'source': source,
+      'duration': duration,
+    };
+    _copyOptionalString(json, validated, 'album', path);
+    _copyOptionalString(json, validated, 'platform', path);
+    _copyOptionalString(json, validated, 'artwork', path);
+    _copyOptionalString(json, validated, 'url', path);
+    _copyOptionalString(json, validated, 'lyricsUrl', path);
+    _copyOptionalString(json, validated, 'songmid', path);
+    _copyOptionalString(json, validated, 'hash', path);
+    if (json.containsKey('isPlayable')) {
+      if (json['isPlayable'] is! bool) {
+        throw FormatException('$path.isPlayable must be a boolean');
+      }
+      validated['isPlayable'] = json['isPlayable'];
+    }
+    if (json.containsKey('meta')) {
+      if (json['meta'] != null && json['meta'] is! Map) {
+        throw FormatException('$path.meta must be an object or null');
+      }
+      if (json['meta'] != null) {
+        validated['meta'] = _jsonObject(json['meta'], '$path.meta');
+      }
+    }
+    return MusicItem.fromJson(validated);
+  }
+
+  void _copyOptionalString(
+    Map<String, dynamic> source,
+    Map<String, dynamic> destination,
+    String key,
+    String path,
+  ) {
+    if (!source.containsKey(key)) return;
+    destination[key] = _nullableString(source[key], '$path.$key');
+  }
+
+  DateTime _date(dynamic value, String path) {
+    final milliseconds = _integer(value, path);
+    try {
+      return DateTime.fromMillisecondsSinceEpoch(milliseconds, isUtc: true);
+    } on ArgumentError {
+      throw FormatException('$path must be a valid millisecond timestamp');
+    }
+  }
+
+  int _timestamp(DateTime value, String path) {
+    try {
+      return value.millisecondsSinceEpoch;
+    } on ArgumentError {
+      throw FormatException('$path must be a valid millisecond timestamp');
+    }
+  }
+
+  Map<String, dynamic> _object(dynamic value, String path) {
+    if (value is! Map) throw FormatException('$path must be an object');
+    if (value.keys.any((key) => key is! String)) {
+      throw FormatException('$path must use string keys');
+    }
+    return Map<String, dynamic>.from(value);
+  }
+
+  Map<String, dynamic> _jsonObject(dynamic value, String path) {
+    final object = _object(value, path);
+    for (final entry in object.entries) {
+      _jsonValue(entry.value, '$path.${entry.key}');
+    }
+    return object;
+  }
+
+  void _jsonValue(dynamic value, String path) {
+    if (value == null || value is String || value is bool || value is num) {
+      return;
+    }
+    if (value is List) {
+      for (var index = 0; index < value.length; index++) {
+        _jsonValue(value[index], '$path[$index]');
+      }
+      return;
+    }
+    if (value is Map) {
+      _jsonObject(value, path);
+      return;
+    }
+    throw FormatException('$path must be a JSON value');
+  }
+
+  List<dynamic> _list(dynamic value, String path) {
+    if (value is! List) throw FormatException('$path must be a list');
+    return value;
+  }
+
+  String _string(dynamic value, String path) {
+    if (value is! String) throw FormatException('$path must be a string');
+    return value;
+  }
+
+  String? _nullableString(dynamic value, String path) {
+    if (value != null && value is! String) {
+      throw FormatException('$path must be a string or null');
+    }
+    return value as String?;
+  }
+
+  int _integer(dynamic value, String path) {
+    if (value is! int) throw FormatException('$path must be an integer');
+    return value;
+  }
+
+  String _nonEmpty(String value, String path) {
+    if (value.trim().isEmpty) throw FormatException('$path must be non-empty');
+    return value;
+  }
+
+  void _uniqueNonEmpty(String value, String path, Set<String> values) {
+    _nonEmpty(value, path);
+    _unique(value, path, values);
+  }
+
+  void _unique(String value, String path, Set<String> values) {
+    if (!values.add(value)) throw FormatException('$path must be unique');
+  }
+
+  void _onlyKeys(Map<String, dynamic> value, Set<String> allowed, String path) {
+    for (final key in value.keys) {
+      if (!allowed.contains(key)) {
+        throw FormatException('$path.$key is not supported');
+      }
+    }
+  }
+
+  static const _playlistKeys = {
+    'id',
+    'name',
+    'description',
+    'coverUrl',
+    'songs',
+    'createdAt',
+    'updatedAt',
+  };
+  static const _songKeys = {
+    'id',
+    'name',
+    'singer',
+    'album',
+    'duration',
+    'source',
+    'platform',
+    'artwork',
+    'url',
+    'lyricsUrl',
+    'isPlayable',
+    'songmid',
+    'hash',
+    'meta',
+  };
+}
