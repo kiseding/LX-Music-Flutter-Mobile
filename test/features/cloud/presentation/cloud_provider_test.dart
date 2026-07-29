@@ -122,6 +122,8 @@ final class ControlledCloudApiClient extends CloudApiClient {
   void completeVerify(CloudVerification verification) {
     verifyCompleter.complete(verification);
   }
+
+  void failVerify(Object error) => verifyCompleter.completeError(error);
 }
 
 void main() {
@@ -264,5 +266,23 @@ void main() {
 
     expect(await login, isFalse);
     expect(notifier.state.error, contains('invalidated'));
+  });
+
+  test('a stale refresh safety failure remains visible after a newer command',
+      () async {
+    final api = ControlledCloudApiClient(initiallyLoggedIn: true);
+    final notifier = CloudSessionNotifier(api, autoRefresh: false);
+
+    final refresh = notifier.refresh();
+    await api.verifyStarted.future;
+    await notifier.setBaseUrl('https://new.example');
+    api.failVerify(const CloudSessionSafetyError(
+      'Cloud session became stale and was invalidated. Please sign in again.',
+    ));
+    await refresh;
+
+    expect(notifier.state.error, contains('invalidated'));
+    expect(notifier.state.loggedIn, isTrue);
+    expect(notifier.state.baseUrl, 'https://new.example');
   });
 }

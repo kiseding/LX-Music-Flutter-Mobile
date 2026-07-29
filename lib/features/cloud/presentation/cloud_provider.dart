@@ -89,8 +89,14 @@ class CloudSessionNotifier extends StateNotifier<CloudSessionState> {
 
     final verifiedToken = _api.token;
     final verifiedRevision = _api.sessionRevision;
-    final verification =
-        _api.isLoggedIn ? await _api.verify() : CloudVerification.noSession;
+    CloudVerification verification;
+    try {
+      verification =
+          _api.isLoggedIn ? await _api.verify() : CloudVerification.noSession;
+    } on CloudSessionSafetyError catch (error) {
+      state = _sessionState(error: error.toString());
+      return;
+    }
     if (!_current(generation)) return;
 
     if (verification == CloudVerification.unauthorized && _api.isLoggedIn) {

@@ -513,19 +513,17 @@ class CloudApiClient {
           options: _authOptions());
       final data = resp.data;
       if (data is Map && data['valid'] == true) {
-        try {
-          await _persistSession(
-            token: token,
-            username: data['username']?.toString() ?? _username,
-            role: data['role']?.toString() ?? _role,
-            expectedRevision: revision,
-          );
-        } catch (_) {
-          return CloudVerification.unavailable;
-        }
+        await _persistSession(
+          token: token,
+          username: data['username']?.toString() ?? _username,
+          role: data['role']?.toString() ?? _role,
+          expectedRevision: revision,
+        );
         return CloudVerification.valid;
       }
       return CloudVerification.unavailable;
+    } on CloudSessionSafetyError {
+      rethrow;
     } on DioException catch (error) {
       return error.response?.statusCode == 401
           ? CloudVerification.unauthorized

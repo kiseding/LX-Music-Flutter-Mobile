@@ -98,3 +98,35 @@ GREEN:
   - PASS: no issues.
 - `git diff --check`
   - PASS.
+
+## Safety Propagation Follow-up
+
+- `CloudApiClient.verify()` now rethrows `CloudSessionSafetyError` from a
+  successful verification response whose stale persistence cannot secure its
+  credential. Other persistence failures continue to return
+  `CloudVerification.unavailable`.
+- `CloudSessionNotifier.refresh()` catches that typed safety failure before its
+  normal stale-generation suppression and publishes the actionable credential
+  safety message. It does not clear durable state.
+- 401, outage, malformed-response, and no-session verification outcomes remain
+  represented by `CloudVerification` and retain their prior behavior.
+
+## Safety Propagation TDD
+
+- RED: delayed a successful verify persistence write, advanced the session
+  revision, and forced stale-token deletion to fail. Before the change,
+  `verify()` returned `CloudVerification.unavailable`; the regression required
+  `CloudSessionSafetyError` while retaining the durable token, metadata, and
+  invalidation marker.
+- RED: a controlled refresh completed with `CloudSessionSafetyError` after a
+  newer base URL command. Before the provider catch, the error escaped instead
+  of being surfaced.
+- GREEN: the client rethrows only the safety error and the notifier shows its
+  message even for the now-stale refresh generation.
+
+## Safety Propagation Verification
+
+- `flutter test test/features/cloud/domain/cloud_api_client_test.dart test/features/cloud/presentation/cloud_provider_test.dart`
+  - PASS: 42 tests.
+- `flutter analyze lib/features/cloud/domain/cloud_api_client.dart lib/features/cloud/presentation/cloud_provider.dart test/features/cloud/domain/cloud_api_client_test.dart test/features/cloud/presentation/cloud_provider_test.dart`
+  - PASS: no issues.

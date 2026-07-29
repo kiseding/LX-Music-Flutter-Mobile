@@ -1003,6 +1003,46 @@ void main() {
   });
 
   test(
+      'a stale verify persistence safety failure is reported without clearing durable state',
+      () async {
+    SharedPreferences.setMockInitialValues({
+      'cloud_api_base': 'https://cloud.example',
+      'cloud_api_username': 'old-user',
+      'cloud_api_role': 'user',
+    });
+    final releaseWrite = Completer<void>();
+    final secure = FakeSecureTokenStore(failDelete: true)
+      ..values['cloud_api_token'] = 'old-token'
+      ..pauseWrite = releaseWrite
+      ..writeStarted = Completer<void>();
+    final client = CloudApiClient(
+      dio: responseDio(data: {
+        'valid': true,
+        'username': 'old-user',
+        'role': 'user',
+      }),
+      secureStore: secure,
+    );
+    await client.load();
+
+    final verify = client.verify();
+    await secure.writeStarted!.future;
+    await client.setBaseUrl('https://new.example');
+    releaseWrite.complete();
+
+    await expectLater(verify, throwsA(isA<CloudSessionSafetyError>()));
+    expect(await secure.read('cloud_api_token'), 'old-token');
+    expect(client.token, 'old-token');
+    expect(client.username, 'old-user');
+    expect(client.role, 'user');
+    expect(
+      (await SharedPreferences.getInstance())
+          .getString('cloud_api_token_invalidated'),
+      'true',
+    );
+  });
+
+  test(
       'stale login deletes its token when restoration cannot recover the prior token',
       () async {
     SharedPreferences.setMockInitialValues({
