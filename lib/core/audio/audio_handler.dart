@@ -246,11 +246,23 @@ class PlaybackStartProvenance {
 }
 
 class _PreloadRequest {
-  const _PreloadRequest(this.generation, this.index, this.mediaId);
+  const _PreloadRequest(this.generation, this.index, this.item);
 
   final int generation;
   final int index;
-  final String mediaId;
+  final MediaItem item;
+
+  String get mediaId => item.id;
+}
+
+class _ForegroundResolutionRequest {
+  const _ForegroundResolutionRequest(this.generation, this.index, this.item);
+
+  final int generation;
+  final int index;
+  final MediaItem item;
+
+  String get mediaId => item.id;
 }
 
 class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
@@ -292,6 +304,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   final PlaybackLeaseSession _leaseSession = PlaybackLeaseSession();
   final Map<String, PlaybackResolution> _pendingResolutions = {};
   final Map<int, _PreloadRequest> _preloadRequests = {};
+  _ForegroundResolutionRequest? _foregroundResolutionRequest;
   int _nextPreloadRequestToken = 0;
   Future<PlaybackCachePathClassification> Function(String path)?
       _classifyExistingCache;
@@ -321,13 +334,29 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     required int generation,
     required PlaybackResolution resolution,
   }) {
-    if (generation != _playGeneration ||
-        mediaId != _activeItemId ||
-        mediaItem.value?.id != mediaId) {
+    final request = _foregroundResolutionRequest;
+    final valid = request != null &&
+        request.generation == generation &&
+        generation == _playGeneration &&
+        request.mediaId == mediaId &&
+        mediaId == _activeItemId &&
+        _currentIndex == request.index &&
+        _currentIndex >= 0 &&
+        _currentIndex < _queue.length &&
+        identical(_queue[request.index], request.item) &&
+        identical(mediaItem.value, request.item);
+    if (!valid) {
       unawaited(resolution.leaseOrNull?.release());
       return false;
     }
-    patchQueueItemExtras(mediaId, resolution.qualityExtras);
+    if (!patchQueueItemExtrasAt(
+      index: request.index,
+      expectedItem: request.item,
+      patch: resolution.qualityExtras,
+    )) {
+      unawaited(resolution.leaseOrNull?.release());
+      return false;
+    }
     final previous = _pendingResolutions.remove(mediaId);
     final previousLease = previous?.leaseOrNull;
     if (previousLease != null &&
@@ -358,14 +387,20 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         request.generation == _playGeneration &&
         request.index < _queue.length &&
         request.mediaId == mediaId &&
-        _queue[request.index].id == mediaId &&
-        _currentIndex != request.index &&
-        mediaItem.value?.id != mediaId;
+        identical(_queue[request.index], request.item) &&
+        _currentIndex != request.index;
     if (!valid) {
       unawaited(resolution.leaseOrNull?.release());
       return false;
     }
-    patchQueueItemExtras(mediaId, resolution.qualityExtras);
+    if (!patchQueueItemExtrasAt(
+      index: request.index,
+      expectedItem: request.item,
+      patch: resolution.qualityExtras,
+    )) {
+      unawaited(resolution.leaseOrNull?.release());
+      return false;
+    }
     unawaited(resolution.leaseOrNull?.release());
     return true;
   }
@@ -518,6 +553,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   int _bumpGeneration() {
     _discardAllPendingResolutions();
     _preloadRequests.clear();
+    _foregroundResolutionRequest = null;
     return ++_playGeneration;
   }
 
@@ -1073,7 +1109,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
               ? <String, dynamic>{}
               : Map<String, dynamic>.from(item.extras!);
           final requestToken = ++_nextPreloadRequestToken;
-          _preloadRequests[requestToken] = _PreloadRequest(gen, idx, itemId);
+          _preloadRequests[requestToken] = _PreloadRequest(gen, idx, item);
           rawExtras['_preloadRequestToken'] = requestToken;
           final url = await resolver(item.id, rawExtras);
           if (url == null || url.isEmpty) continue;
@@ -1082,9 +1118,10 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
               request.generation != _playGeneration ||
               request.index >= _queue.length ||
               request.mediaId != itemId ||
-              _queue[request.index].id != itemId ||
+              !identical(_queue[request.index], request.item) ||
               _currentIndex == request.index ||
-              mediaItem.value?.id == itemId) {
+              (_currentIndex == request.index &&
+                  identical(mediaItem.value, request.item))) {
             continue;
           }
           final extras = Map<String, dynamic>.from(_queue[idx].extras ?? {});
@@ -1183,6 +1220,8 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       if (!preserveUserIntent) _userWantsPlay = true;
       final item = _queue[index];
       final itemId = item.id;
+      _foregroundResolutionRequest =
+          _ForegroundResolutionRequest(gen, index, item);
       final commandToken = sourceCommandToken ??
           _commands.requestSource(
             mediaId: itemId,
@@ -1683,6 +1722,26 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       curExtras.addAll(patch);
       mediaItem.add(current.copyWith(extras: curExtras));
     }
+  }
+
+  /// Applies metadata only if the exact queue occurrence still owns [index].
+  /// The legacy ID-based method above remains for callers without an occurrence.
+  bool patchQueueItemExtrasAt({
+    required int index,
+    required MediaItem expectedItem,
+    required Map<String, dynamic> patch,
+  }) {
+    if (index < 0 || index >= _queue.length) return false;
+    if (!identical(_queue[index], expectedItem)) return false;
+    final extras = Map<String, dynamic>.from(expectedItem.extras ?? {});
+    extras.addAll(patch);
+    final updatedItem = expectedItem.copyWith(extras: extras);
+    _queue[index] = updatedItem;
+    queue.add(List.from(_queue));
+    if (_currentIndex == index && identical(mediaItem.value, expectedItem)) {
+      mediaItem.add(updatedItem);
+    }
+    return true;
   }
 
   /// 设置页改音质后调用：清掉队列里过期的 url，并让当前曲按新音质重解析。

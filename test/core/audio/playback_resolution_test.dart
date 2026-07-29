@@ -636,7 +636,8 @@ void main() {
       expect(lease.releaseCount, 1);
     });
 
-    test('stopping a pending cached resolution releases it and replay reacquires',
+    test(
+        'stopping a pending cached resolution releases it and replay reacquires',
         () async {
       final player = _GatedReuseAudioPlayer();
       final handler = LxAudioHandler(player: player);
@@ -877,6 +878,154 @@ void main() {
       expect(lease.releaseCount, 0);
       await handler.stop();
       expect(lease.releaseCount, 1);
+    });
+
+    test('foreground resolution patches the active duplicate occurrence only',
+        () async {
+      final player = _ReuseAudioPlayer();
+      final handler = LxAudioHandler(player: player);
+      addTearDown(player.dispose);
+      handler.urlResolver = (id, [extras]) async {
+        final resolution = const StreamingPlayback(
+          'https://cdn.example/duplicate.mp3',
+          {
+            'url': 'https://cdn.example/duplicate.mp3',
+            'actualQuality': 'flac',
+          },
+        );
+        expect(
+          handler.acceptResolvedPlayback(
+            mediaId: id,
+            generation: extras!['_playbackGeneration'] as int,
+            resolution: resolution,
+          ),
+          isTrue,
+        );
+        return resolution.playableUrl;
+      };
+
+      await handler.setPlaylist(
+        [_unresolvedItem('duplicate'), _unresolvedItem('duplicate')],
+        initialIndex: 1,
+      );
+
+      expect(handler.queueItems[0].extras?['actualQuality'], isNull);
+      expect(handler.queueItems[1].extras?['actualQuality'], 'flac');
+      expect(handler.mediaItem.value?.extras?['actualQuality'], 'flac');
+    });
+
+    test('preload resolution patches the requested second duplicate occurrence',
+        () async {
+      final player = _ReuseAudioPlayer();
+      final handler = LxAudioHandler(player: player);
+      addTearDown(player.dispose);
+      var preloadCount = 0;
+      handler.urlResolver = (id, [extras]) async {
+        final requestToken = extras?['_preloadRequestToken'];
+        if (requestToken is! int) return 'https://cdn.example/$id.mp3';
+        preloadCount++;
+        if (preloadCount == 1) return 'https://cdn.example/first.mp3';
+        final resolution = const StreamingPlayback(
+          'https://cdn.example/second.mp3',
+          {
+            'url': 'https://cdn.example/second.mp3',
+            'actualQuality': 'flac',
+          },
+        );
+        expect(
+          handler.acceptPreloadedPlayback(
+            mediaId: id,
+            requestToken: requestToken,
+            resolution: resolution,
+          ),
+          isTrue,
+        );
+        return resolution.playableUrl;
+      };
+
+      await handler.setPlaylist([
+        _cachedItem('current', '/tmp/current.mp3'),
+        _unresolvedItem('duplicate'),
+        _unresolvedItem('duplicate'),
+      ]);
+      await pumpEventQueue();
+
+      expect(handler.queueItems[1].extras?['actualQuality'], isNull);
+      expect(handler.queueItems[2].extras?['actualQuality'], 'flac');
+    });
+
+    test('stale foreground resolution cannot patch a replaced duplicate',
+        () async {
+      final player = _ReuseAudioPlayer();
+      final handler = LxAudioHandler(player: player);
+      addTearDown(player.dispose);
+      final started = Completer<int>();
+      final result = Completer<String?>();
+      handler.urlResolver = (id, [extras]) async {
+        started.complete(extras!['_playbackGeneration'] as int);
+        return result.future;
+      };
+
+      final loading = handler.setPlaylist([_unresolvedItem('duplicate')]);
+      final generation = await started.future;
+      await handler.updateQueue([_unresolvedItem('duplicate')]);
+      final lease = _FakeLease('/cache/duplicate.mp3', 'duplicate', (_) {});
+
+      final accepted = handler.acceptResolvedPlayback(
+        mediaId: 'duplicate',
+        generation: generation,
+        resolution: CachedPlayback(lease.asLease(), {
+          'url': PlaybackCacheService.toPlayableUri(lease.path),
+          'actualQuality': 'flac',
+        }),
+      );
+      result.complete(null);
+      await loading;
+
+      expect(accepted, isFalse);
+      expect(lease.releaseCount, 1);
+      expect(handler.queueItems.single.extras?['actualQuality'], isNull);
+    });
+
+    test('stale foreground resolution cannot patch a moved duplicate',
+        () async {
+      final player = _ReuseAudioPlayer();
+      final handler = LxAudioHandler(player: player);
+      addTearDown(player.dispose);
+      final started = Completer<int>();
+      final result = Completer<String?>();
+      handler.urlResolver = (id, [extras]) async {
+        started.complete(extras!['_playbackGeneration'] as int);
+        return result.future;
+      };
+
+      final loading = handler.setPlaylist(
+        [
+          _cachedItem('duplicate', '/tmp/first.mp3'),
+          _unresolvedItem('duplicate')
+        ],
+        initialIndex: 1,
+      );
+      final generation = await started.future;
+      final first = handler.queueItems[0];
+      final active = handler.queueItems[1];
+      await handler.updateQueue([active, first]);
+
+      final accepted = handler.acceptResolvedPlayback(
+        mediaId: 'duplicate',
+        generation: generation,
+        resolution:
+            const StreamingPlayback('https://cdn.example/duplicate.mp3', {
+          'url': 'https://cdn.example/duplicate.mp3',
+          'actualQuality': 'flac',
+        }),
+      );
+      result.complete(null);
+      await loading;
+
+      expect(accepted, isFalse);
+      expect(handler.queueItems[0].extras?['actualQuality'], isNull);
+      expect(handler.queueItems[1].extras?['actualQuality'], isNull);
     });
 
     test('late preload cannot overwrite an item after it becomes current',
