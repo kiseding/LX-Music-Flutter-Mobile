@@ -1,10 +1,12 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'playlist_repository.dart';
 
+@visibleForTesting
 abstract interface class PlaylistOpenFile {
   Future<void> flush();
   Future<void> close();
@@ -24,6 +26,7 @@ final class _RandomAccessPlaylistFile implements PlaylistOpenFile {
   }
 }
 
+@visibleForTesting
 class PlaylistFileSystem {
   const PlaylistFileSystem();
 
@@ -53,8 +56,8 @@ final class FilePlaylistRepository implements PlaylistRepository {
     required this.preferences,
     this.codec = const PlaylistSnapshotCodec(),
     DateTime Function()? clock,
-    PlaylistFileSystem? fileSystem,
-    Future<bool> Function(String key)? removePreference,
+    @visibleForTesting PlaylistFileSystem? fileSystem,
+    @visibleForTesting Future<bool> Function(String key)? removePreference,
   })  : _clock = clock ?? DateTime.now,
         _files = fileSystem ?? const PlaylistFileSystem(),
         _removePreference = removePreference ?? preferences.remove;
@@ -78,8 +81,10 @@ final class FilePlaylistRepository implements PlaylistRepository {
     final current = await _decodeFile(paths.current);
     if (current != null) {
       if (await _files.exists(paths.recovery)) {
-        if (_decodeLegacy(preferences.getString(_legacyKey)) != null &&
-            await _removePreference(_legacyKey)) {
+        final legacySource = preferences.getString(_legacyKey);
+        if (legacySource == null ||
+            (_decodeLegacy(legacySource) != null &&
+                await _removePreference(_legacyKey))) {
           await _files.delete(paths.recovery);
         }
       }
