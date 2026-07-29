@@ -180,10 +180,14 @@ class CloudApiClient {
   }
 
   Future<T> _runBaseUrlMutation<T>(Future<T> Function() operation) {
-    final previous = _baseUrlMutation;
-    final completed = Completer<void>();
-    _baseUrlMutation = completed.future;
-    return previous.then((_) => operation()).whenComplete(completed.complete);
+    final result = _baseUrlMutation
+        .catchError((Object _) {})
+        .then((_) => operation());
+    _baseUrlMutation = result.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace __) {},
+    );
+    return result;
   }
 
   Future<void> _persistBaseUrlLocked({
@@ -313,10 +317,14 @@ class CloudApiClient {
   }
 
   Future<T> _runSessionMutation<T>(Future<T> Function() operation) {
-    final previous = _sessionMutation;
-    final completed = Completer<void>();
-    _sessionMutation = completed.future;
-    return previous.then((_) => operation()).whenComplete(completed.complete);
+    final result = _sessionMutation
+        .catchError((Object _) {})
+        .then((_) => operation());
+    _sessionMutation = result.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace __) {},
+    );
+    return result;
   }
 
   Future<void> _persistSession({

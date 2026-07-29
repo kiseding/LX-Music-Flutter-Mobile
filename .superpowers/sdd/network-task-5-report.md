@@ -256,3 +256,31 @@ including re-acquisition for cached URL reuse after preload or stop.
 - The fix intentionally covers the reported direct selection and authoritative
   recovery paths. Other legacy ID-based queue operations remain unchanged where
   their public APIs provide only an ID rather than an occurrence identity.
+
+## Cloud Persistence Queue Recovery
+
+- Base URL and session mutation runners now chain each operation after a
+  recovered prior tail. The caller receives the operation's original result or
+  error, while the runner stores a settled completion future as the next tail.
+- This preserves FIFO serialization without allowing a failed persistence
+  operation to prevent subsequent work. Revision ownership, stale-operation
+  guards, and persistence compensation paths are unchanged.
+
+## Cloud Persistence Queue TDD
+
+- RED: regression coverage was added for a failed base URL write followed by a
+  successful durable update, a failed session persistence followed by successful
+  login and clear, and a stale failed base URL mutation followed by its newer
+  authoritative update. The pre-existing completer queue implementation already
+  satisfied the observable recovery behavior, so the focused suite passed and
+  established the regression contract before the runners were made explicit.
+- GREEN: the explicit recovered-tail runners preserve the same tests while
+  ensuring tail error handlers consume failures without unhandled futures.
+
+## Cloud Persistence Queue Verification
+
+- `flutter test test/features/cloud/domain/cloud_api_client_test.dart`: 39
+  passed.
+- `flutter analyze lib/features/cloud/domain/cloud_api_client.dart test/features/cloud/domain/cloud_api_client_test.dart`:
+  no issues.
+- `git diff --check`: clean.

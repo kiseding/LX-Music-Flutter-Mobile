@@ -15,7 +15,7 @@ final class FakeSecureTokenStore implements SecureTokenStore {
   });
 
   final Map<String, String> values = {};
-  final bool failWrite;
+  bool failWrite;
   final bool failDelete;
   final String? readAfterWrite;
   final String? failWriteValue;
@@ -359,6 +359,46 @@ void main() {
     expect(client.configurationError, contains('could not be saved'));
   });
 
+  test('a failed base URL persistence does not poison a later update',
+      () async {
+    final preferences = DelayedBaseUrlPreferences({});
+    final client = CloudApiClient(
+      baseUrlPreferences: () async => preferences,
+    );
+    await client.setBaseUrl('https://old.example');
+    preferences.failSetValue = 'https://failed.example';
+
+    await expectLater(
+      client.setBaseUrl('https://failed.example'),
+      throwsStateError,
+    );
+    preferences.failSetValue = null;
+
+    await client.setBaseUrl('https://recovered.example');
+
+    expect(client.baseUrl, 'https://recovered.example');
+    expect(preferences.values['cloud_api_base'], 'https://recovered.example');
+  });
+
+  test('a stale failed base URL mutation leaves the newer update authoritative',
+      () async {
+    final preferences = DelayedBaseUrlPreferences({})
+      ..pause('https://stale.example')
+      ..failSetValue = 'https://stale.example';
+    final client = CloudApiClient(
+      baseUrlPreferences: () async => preferences,
+    );
+
+    final stale = client.setBaseUrl('https://stale.example');
+    await preferences.startedFor('https://stale.example');
+    final current = client.setBaseUrl('https://current.example');
+    preferences.release('https://stale.example');
+    await Future.wait<void>([stale, current]);
+
+    expect(client.baseUrl, 'https://current.example');
+    expect(preferences.values['cloud_api_base'], 'https://current.example');
+  });
+
   test('path-prefixed base constructs the expected login endpoint', () async {
     SharedPreferences.setMockInitialValues({});
     final dio = Dio();
@@ -584,6 +624,32 @@ void main() {
     expect(client.token, 'old-token');
     expect(client.username, 'old-user');
     expect(client.role, 'user');
+  });
+
+  test('a failed session persistence does not poison a later login or clear',
+      () async {
+    SharedPreferences.setMockInitialValues({
+      'cloud_api_base': 'https://cloud.example',
+    });
+    final secure = FakeSecureTokenStore(failWrite: true);
+    final client = CloudApiClient(
+      dio: responseDio(data: {
+        'token': 'new-token',
+        'username': 'new-user',
+        'role': 'admin',
+      }),
+      secureStore: secure,
+    );
+    await client.load();
+
+    await expectLater(client.login('new-user', 'password'), throwsStateError);
+    secure.failWrite = false;
+
+    await client.login('new-user', 'password');
+    await client.clearSession();
+
+    expect(await secure.read('cloud_api_token'), isNull);
+    expect(client.isLoggedIn, isFalse);
   });
 
   test('login restores the secure token when preferences acquisition fails',
