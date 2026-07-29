@@ -937,21 +937,11 @@ void main() {
   test('overlapping hit failure cannot roll back newer access metadata',
       () async {
     var now = DateTime(2026, 1, 1);
-    var callsAtCurrentTime = 0;
-    final newerMetadataInstalled = Completer<void>();
     final store = _ControlledIndexStore();
     final metadataCache = PlaybackCacheService(
       cacheRootOverride: tempDir.path,
       indexStore: store,
-      clock: () {
-        callsAtCurrentTime++;
-        if (now == DateTime(2026, 1, 1, 2) &&
-            callsAtCurrentTime == 2 &&
-            !newerMetadataInstalled.isCompleted) {
-          newerMetadataInstalled.complete();
-        }
-        return now;
-      },
+      clock: () => now,
       ttl: const Duration(minutes: 90),
       downloader: (url, savePath, {cancelToken}) async {
         await File(savePath).writeAsBytes(List<int>.filled(32, 1));
@@ -966,7 +956,6 @@ void main() {
       quality: '320k',
     );
     now = now.add(const Duration(minutes: 60));
-    callsAtCurrentTime = 0;
     store.blockWriteAfter(0);
     store.failNextWrite();
 
@@ -978,14 +967,15 @@ void main() {
     );
     await store.blockedWriteStarted.future;
     now = now.add(const Duration(minutes: 60));
-    callsAtCurrentTime = 0;
+    var newerCompleted = false;
     final newerHit = cache.getOrDownload(
       remoteUrl: 'https://cdn.example.com/metadata.mp3',
       platform: 'tx',
       songId: 'metadata-race',
       quality: '320k',
-    );
-    await newerMetadataInstalled.future;
+    )..whenComplete(() => newerCompleted = true);
+    await Future<void>.delayed(Duration.zero);
+    expect(newerCompleted, isFalse);
     store.releaseBlockedWrite.complete();
 
     expect(await failedHit, isNull);
@@ -1482,6 +1472,312 @@ void main() {
     final persisted = (jsonDecode(store.value!) as List).single as Map;
     expect(persisted['key'], newKey);
     expect(persisted['sizeBytes'], 40);
+  });
+
+  test('malformed top-level index preserves persisted data and stable files',
+      () async {
+    final firstKey = List.filled(40, '5').join();
+    final secondKey = List.filled(40, '6').join();
+    final first = File('${tempDir.path}/$firstKey.mp3')
+      ..writeAsBytesSync(List<int>.filled(32, 5));
+    final second = File('${tempDir.path}/$secondKey.flac')
+      ..writeAsBytesSync(List<int>.filled(32, 6));
+    final store = MemoryPlaybackCacheIndexStore()..value = '{invalid-json';
+    final integrityCache = _cacheForPersistedPath(tempDir, store);
+    await cache.dispose();
+    cache = integrityCache;
+
+    await cache.init();
+
+    expect(store.value, '{invalid-json');
+    expect(first.existsSync(), isTrue);
+    expect(second.existsSync(), isTrue);
+  });
+
+  test('mixed valid and malformed records repair without deleting claims',
+      () async {
+    final validKey = List.filled(40, '7').join();
+    final malformedKey = List.filled(40, '8').join();
+    final valid = File('${tempDir.path}/$validKey.mp3')
+      ..writeAsBytesSync(List<int>.filled(35, 7));
+    final potentiallyOwned = File('${tempDir.path}/$malformedKey.flac')
+      ..writeAsBytesSync(List<int>.filled(36, 8));
+    final store = MemoryPlaybackCacheIndexStore()
+      ..value = jsonEncode([
+        _entryJson(key: validKey, path: valid.path),
+        {
+          'key': malformedKey,
+          'path': potentiallyOwned.path,
+          'sizeBytes': 'not-an-integer',
+        },
+      ]);
+    final integrityCache = _cacheForPersistedPath(tempDir, store);
+    await cache.dispose();
+    cache = integrityCache;
+
+    await cache.init();
+
+    final repaired = (jsonDecode(store.value!) as List).cast<Map>();
+    expect(repaired, hasLength(1));
+    expect(repaired.single['key'], validKey);
+    expect(repaired.single['sizeBytes'], 35);
+    expect(valid.existsSync(), isTrue);
+    expect(potentiallyOwned.existsSync(), isTrue);
+  });
+
+  test('clean startup after malformed load resumes orphan cleanup', () async {
+    final orphanKey = List.filled(40, '9').join();
+    final orphan = File('${tempDir.path}/$orphanKey.mp3')
+      ..writeAsBytesSync(List<int>.filled(32, 9));
+    final store = MemoryPlaybackCacheIndexStore()..value = '{invalid-json';
+    final failedLoad = _cacheForPersistedPath(tempDir, store);
+    await cache.dispose();
+    cache = failedLoad;
+    await cache.init();
+    expect(orphan.existsSync(), isTrue);
+    await cache.dispose();
+
+    store.value = '[]';
+    cache = _cacheForPersistedPath(tempDir, store);
+    await cache.init();
+
+    expect(orphan.existsSync(), isFalse);
+  });
+
+  test('lease acquisition losing to ttl purge retries to a valid file',
+      () async {
+    var now = DateTime(2026, 1, 1);
+    final validationStarted = Completer<void>();
+    final releaseValidation = Completer<void>();
+    var pauseNextValidation = false;
+    var calls = 0;
+    final gatedCache = PlaybackCacheService(
+      cacheRootOverride: tempDir.path,
+      indexStore: MemoryPlaybackCacheIndexStore(),
+      ttl: const Duration(days: 1),
+      clock: () => now,
+      beforeLeaseValidation: (key) async {
+        if (!pauseNextValidation) return;
+        pauseNextValidation = false;
+        validationStarted.complete();
+        await releaseValidation.future;
+      },
+      downloader: (url, savePath, {cancelToken}) async {
+        calls++;
+        await File(savePath).writeAsBytes(List<int>.filled(32, calls));
+      },
+    );
+    await cache.dispose();
+    cache = gatedCache;
+    await cache.getOrDownload(
+      remoteUrl: 'https://cdn.example.com/lease-race.mp3',
+      platform: 'tx',
+      songId: 'lease-race',
+      quality: '320k',
+    );
+    pauseNextValidation = true;
+
+    final leaseFuture = cache.acquireOrDownload(
+      remoteUrl: 'https://cdn.example.com/lease-race.mp3',
+      platform: 'tx',
+      songId: 'lease-race',
+      quality: '320k',
+    );
+    await validationStarted.future;
+    now = now.add(const Duration(days: 2));
+    await cache.purgeExpired();
+    releaseValidation.complete();
+    final lease = await leaseFuture;
+
+    expect(lease, isNotNull);
+    expect(File(lease!.path).existsSync(), isTrue);
+    expect(calls, 2);
+    await lease.release();
+  });
+
+  test('lease acquisition losing to size purge retries to a valid file',
+      () async {
+    var now = DateTime(2026, 1, 1);
+    final validationStarted = Completer<void>();
+    final releaseValidation = Completer<void>();
+    var pauseNextValidation = false;
+    var calls = 0;
+    final gatedCache = PlaybackCacheService(
+      cacheRootOverride: tempDir.path,
+      indexStore: MemoryPlaybackCacheIndexStore(),
+      maxBytes: 48,
+      clock: () => now,
+      beforeLeaseValidation: (key) async {
+        if (!pauseNextValidation) return;
+        pauseNextValidation = false;
+        validationStarted.complete();
+        await releaseValidation.future;
+      },
+      downloader: (url, savePath, {cancelToken}) async {
+        calls++;
+        await File(savePath).writeAsBytes(List<int>.filled(32, calls));
+      },
+    );
+    await cache.dispose();
+    cache = gatedCache;
+    await cache.getOrDownload(
+      remoteUrl: 'https://cdn.example.com/lease-size.mp3',
+      platform: 'tx',
+      songId: 'lease-size',
+      quality: '320k',
+    );
+    pauseNextValidation = true;
+
+    final leaseFuture = cache.acquireOrDownload(
+      remoteUrl: 'https://cdn.example.com/lease-size.mp3',
+      platform: 'tx',
+      songId: 'lease-size',
+      quality: '320k',
+    );
+    await validationStarted.future;
+    now = now.add(const Duration(minutes: 1));
+    await cache.getOrDownload(
+      remoteUrl: 'https://cdn.example.com/pressure.mp3',
+      platform: 'tx',
+      songId: 'pressure',
+      quality: '320k',
+    );
+    releaseValidation.complete();
+    final lease = await leaseFuture;
+
+    expect(lease, isNotNull);
+    expect(File(lease!.path).existsSync(), isTrue);
+    expect(calls, 3);
+    await lease.release();
+  });
+
+  test('failed hit persistence serializes before ttl purge', () async {
+    var now = DateTime(2026, 1, 1);
+    final store = _ControlledIndexStore();
+    final gatedCache = PlaybackCacheService(
+      cacheRootOverride: tempDir.path,
+      indexStore: store,
+      ttl: const Duration(minutes: 90),
+      clock: () => now,
+      downloader: (url, savePath, {cancelToken}) async {
+        await File(savePath).writeAsBytes(List<int>.filled(32, 1));
+      },
+    );
+    await cache.dispose();
+    cache = gatedCache;
+    final path = await cache.getOrDownload(
+      remoteUrl: 'https://cdn.example.com/hit-purge.mp3',
+      platform: 'tx',
+      songId: 'hit-purge',
+      quality: '320k',
+    );
+    now = now.add(const Duration(minutes: 60));
+    store.blockWriteAfter(0);
+    store.failNextWrite();
+
+    final hit = cache.getOrDownload(
+      remoteUrl: 'https://cdn.example.com/hit-purge.mp3',
+      platform: 'tx',
+      songId: 'hit-purge',
+      quality: '320k',
+    );
+    await store.blockedWriteStarted.future;
+    now = now.add(const Duration(minutes: 60));
+    var purgeCompleted = false;
+    final purge = cache.purgeExpired()
+      ..whenComplete(() => purgeCompleted = true);
+    await Future<void>.delayed(Duration.zero);
+    expect(purgeCompleted, isFalse);
+    store.releaseBlockedWrite.complete();
+
+    expect(await hit, isNull);
+    await purge;
+    expect(File(path!).existsSync(), isFalse);
+    expect(jsonDecode(store.value!) as List, isEmpty);
+  });
+
+  test('commit serializes before purge and preserves committed generation',
+      () async {
+    final store = _ControlledIndexStore();
+    var writesAtStart = 0;
+    final gatedCache = PlaybackCacheService(
+      cacheRootOverride: tempDir.path,
+      indexStore: store,
+      downloader: (url, savePath, {cancelToken}) async {
+        await File(savePath).writeAsBytes(List<int>.filled(32, 1));
+      },
+    );
+    await cache.dispose();
+    cache = gatedCache;
+    await cache.init();
+    writesAtStart = store.writes;
+    store.blockWriteAfter(0);
+
+    final download = cache.getOrDownload(
+      remoteUrl: 'https://cdn.example.com/commit-purge.mp3',
+      platform: 'tx',
+      songId: 'commit-purge',
+      quality: '320k',
+    );
+    await store.blockedWriteStarted.future;
+    var purgeCompleted = false;
+    final purge = cache.purgeExpired()
+      ..whenComplete(() => purgeCompleted = true);
+    await Future<void>.delayed(Duration.zero);
+    expect(purgeCompleted, isFalse);
+    store.releaseBlockedWrite.complete();
+
+    final path = await download;
+    await purge;
+    expect(path, isNotNull);
+    expect(File(path!).existsSync(), isTrue);
+    expect(store.writes, greaterThan(writesAtStart));
+    final persisted = (jsonDecode(store.value!) as List).single as Map;
+    expect(persisted['path'], path);
+  });
+
+  test('post-commit size eviction is persisted for restart', () async {
+    final store = MemoryPlaybackCacheIndexStore();
+    final cappedCache = PlaybackCacheService(
+      cacheRootOverride: tempDir.path,
+      indexStore: store,
+      maxBytes: 48,
+      downloader: (url, savePath, {cancelToken}) async {
+        await File(savePath).writeAsBytes(List<int>.filled(32, 1));
+      },
+    );
+    await cache.dispose();
+    cache = cappedCache;
+    final first = await cache.getOrDownload(
+      remoteUrl: 'https://cdn.example.com/persist-first.mp3',
+      platform: 'tx',
+      songId: 'persist-first',
+      quality: '320k',
+    );
+    final second = await cache.getOrDownload(
+      remoteUrl: 'https://cdn.example.com/persist-second.mp3',
+      platform: 'tx',
+      songId: 'persist-second',
+      quality: '320k',
+    );
+    expect(File(first!).existsSync(), isFalse);
+    expect(File(second!).existsSync(), isTrue);
+    final beforeRestart = (jsonDecode(store.value!) as List).cast<Map>();
+    expect(beforeRestart, hasLength(1));
+    expect(beforeRestart.single['path'], second);
+    await cache.dispose();
+
+    cache = PlaybackCacheService(
+      cacheRootOverride: tempDir.path,
+      indexStore: store,
+      maxBytes: 48,
+      downloader: (url, savePath, {cancelToken}) async {},
+    );
+    await cache.init();
+
+    final persisted = (jsonDecode(store.value!) as List).cast<Map>();
+    expect(persisted, hasLength(1));
+    expect(persisted.single['path'], second);
   });
 }
 

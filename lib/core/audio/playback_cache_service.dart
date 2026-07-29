@@ -16,6 +16,7 @@ typedef PlaybackDownloader = Future<void> Function(
   String savePath, {
   CancelToken? cancelToken,
 });
+typedef PlaybackCacheKeyHook = Future<void> Function(String key);
 
 abstract class PlaybackCacheIndexStore {
   Future<String?> read();
@@ -86,6 +87,7 @@ class PlaybackCacheService {
   final String? cacheRootOverride;
   final PlaybackCacheIndexStore _indexStore;
   final DateTime Function() _clock;
+  final PlaybackCacheKeyHook? _beforeLeaseValidation;
   final Duration ttl;
   final int maxBytes;
 
@@ -96,9 +98,11 @@ class PlaybackCacheService {
   final Set<_InflightOperation> _activeOperations = {};
   final Map<String, int> _generations = {};
   final Map<String, int> _leaseCounts = {};
-  final Map<String, Future<void>> _commitTails = {};
+  final Map<String, Future<void>> _keyTransactionTails = {};
   final Set<String> _preservedRejectedPaths = {};
+  final Set<String> _uncertainLoadKeys = {};
   Future<void> _pendingIndexWrite = Future<void>.value();
+  bool _loadIntegrity = true;
   bool _initialized = false;
   bool _disposed = false;
   Future<void>? _disposeFuture;
@@ -109,12 +113,14 @@ class PlaybackCacheService {
     this.cacheRootOverride,
     PlaybackCacheIndexStore? indexStore,
     DateTime Function()? clock,
+    PlaybackCacheKeyHook? beforeLeaseValidation,
     this.ttl = defaultTtl,
     this.maxBytes = defaultMaxBytes,
   })  : _dio = dio ?? _createDownloadDio(),
         _downloader = downloader,
         _indexStore = indexStore ?? PrefsPlaybackCacheIndexStore(),
-        _clock = clock ?? DateTime.now;
+        _clock = clock ?? DateTime.now,
+        _beforeLeaseValidation = beforeLeaseValidation;
 
   static Dio _createDownloadDio() {
     return AppHttpClient.create(
@@ -186,23 +192,33 @@ class PlaybackCacheService {
     await directory.create(recursive: true);
     _root = _normalizeAbsolute(await directory.resolveSymbolicLinks());
     await _loadIndex();
-    await _cleanupUnindexedStableFiles();
+    if (_loadIntegrity) await _cleanupUnindexedStableFiles();
     _initialized = true;
-    await purgeExpired();
+    if (_loadIntegrity) await purgeExpired();
   }
 
   Future<void> dispose() {
     if (_disposeFuture != null) return _disposeFuture!;
     _disposed = true;
-    for (final operation in _inflight.values.toList()) {
+    final operations = _inflight.values.toList();
+    for (final operation in operations) {
       operation.token.cancel('disposed');
-      _generations[operation.key] = operation.generation + 1;
     }
-    _inflight.clear();
-    return _disposeFuture = _drainForDispose();
+    return _disposeFuture = _drainForDispose(operations);
   }
 
-  Future<void> _drainForDispose() async {
+  Future<void> _drainForDispose(
+      List<_InflightOperation> cancelledOperations) async {
+    for (final operation in cancelledOperations) {
+      await _withKeyTransaction(operation.key, () async {
+        if ((_generations[operation.key] ?? 0) <= operation.generation) {
+          _generations[operation.key] = operation.generation + 1;
+        }
+        if (identical(_inflight[operation.key], operation)) {
+          _inflight.remove(operation.key);
+        }
+      });
+    }
     final initialization = _initializing;
     if (initialization != null) {
       try {
@@ -237,11 +253,13 @@ class PlaybackCacheService {
         _generations[key] != operation.generation) {
       return;
     }
-    _generations[key] = operation.generation + 1;
     operation.token.cancel('switched track');
-    if (identical(_inflight[key], operation)) {
-      _inflight.remove(key);
-    }
+    unawaited(_withKeyTransaction(key, () async {
+      if ((_generations[key] ?? 0) <= operation.generation) {
+        _generations[key] = operation.generation + 1;
+      }
+      if (identical(_inflight[key], operation)) _inflight.remove(key);
+    }));
   }
 
   Future<PlaybackCacheLease?> acquireOrDownload({
@@ -256,14 +274,27 @@ class PlaybackCacheService {
       songId: songId,
       quality: quality,
     );
-    final path = await _getOrDownloadPath(
-      key: key,
-      remoteUrl: remoteUrl,
-      platform: platform,
-      songId: songId,
-      quality: quality,
-    );
-    if (path == null) return null;
+    for (var attempt = 0; attempt < 2; attempt++) {
+      final path = await _getOrDownloadPath(
+        key: key,
+        remoteUrl: remoteUrl,
+        platform: platform,
+        songId: songId,
+        quality: quality,
+      );
+      if (path == null) return null;
+      await _beforeLeaseValidation?.call(key);
+      final lease = await _withKeyTransaction(
+        key,
+        () => _acquireLeaseLocked(key, path),
+      );
+      if (lease != null) return lease;
+    }
+    return null;
+  }
+
+  Future<PlaybackCacheLease?> _acquireLeaseLocked(
+      String key, String path) async {
     final entry = _index[key];
     final validated = entry == null ? null : await _validatedStableEntry(entry);
     if (validated == null ||
@@ -310,10 +341,33 @@ class PlaybackCacheService {
     if (_disposed) return null;
     await init();
     if (_disposed) return null;
-    final hit = await _lookupValid(key);
+    final decision = await _withKeyTransaction(
+      key,
+      () => _getOrStartLocked(
+        key: key,
+        remoteUrl: remoteUrl,
+        platform: platform,
+        songId: songId,
+        quality: quality,
+      ),
+    );
+    if (decision.path != null) return decision.path;
+    return decision.future;
+  }
+
+  Future<_PathDecision> _getOrStartLocked({
+    required String key,
+    required String remoteUrl,
+    required String platform,
+    required String songId,
+    required String quality,
+  }) async {
+    final hit = await _lookupValidLocked(key);
     if (hit != null) {
       final current = _index[key];
-      if (current == null || current.generation != hit.generation) return null;
+      if (current == null || current.generation != hit.generation) {
+        return const _PathDecision();
+      }
       final updated = current.copyWith(
         lastAccessedAt: _clock(),
         revision: current.revision + 1,
@@ -325,7 +379,7 @@ class PlaybackCacheService {
         if (_index[key]?.revision == updated.revision) {
           _index[key] = current;
         }
-        return null;
+        return const _PathDecision();
       }
       final persisted = _index[key];
       final validated =
@@ -334,15 +388,15 @@ class PlaybackCacheService {
         _index.remove(key);
         await _deleteRejectedOwnedStablePath(updated);
         await _saveIndex();
-        return null;
+        return const _PathDecision();
       }
       _index[key] = validated;
       debugPrint('[PlaybackCache] hit key=$key');
-      return validated.path;
+      return _PathDecision(path: validated.path);
     }
 
     final existing = _inflight[key];
-    if (existing != null) return existing.future;
+    if (existing != null) return _PathDecision(future: existing.future);
 
     final generation = (_generations[key] ?? 0) + 1;
     _generations[key] = generation;
@@ -357,7 +411,7 @@ class PlaybackCacheService {
       songId,
       quality,
     );
-    return operation.future;
+    return _PathDecision(future: operation.future);
   }
 
   Future<String?> _finalizeOperation(
@@ -375,24 +429,33 @@ class PlaybackCacheService {
         songId,
         quality,
       );
-      if (path == null || !_isCurrentOperation(operation)) return null;
-      final entry = _index[operation.key];
-      final validated =
-          entry == null ? null : await _validatedStableEntry(entry);
-      return validated?.path == path ? validated!.path : null;
+      if (path == null) return null;
+      return await _withKeyTransaction(operation.key, () async {
+        if (!_isCurrentOperation(operation)) return null;
+        final entry = _index[operation.key];
+        final validated =
+            entry == null ? null : await _validatedStableEntry(entry);
+        return validated?.path == path ? validated!.path : null;
+      });
     } catch (error) {
       debugPrint(
           '[PlaybackCache] operation failed key=${operation.key}: $error');
       return null;
     } finally {
-      if (identical(_inflight[operation.key], operation)) {
-        _inflight.remove(operation.key);
-      }
+      await _withKeyTransaction(operation.key, () async {
+        if (identical(_inflight[operation.key], operation)) {
+          _inflight.remove(operation.key);
+        }
+      });
       _activeOperations.remove(operation);
     }
   }
 
-  Future<void> _releaseLease(String key) async {
+  Future<void> _releaseLease(String key) {
+    return _withKeyTransaction(key, () async => _releaseLeaseLocked(key));
+  }
+
+  void _releaseLeaseLocked(String key) {
     final count = _leaseCounts[key] ?? 0;
     if (count <= 1) {
       _leaseCounts.remove(key);
@@ -404,14 +467,18 @@ class PlaybackCacheService {
   Future<void> purgeExpired() async {
     if (_root == null || _disposed) return;
     final now = _clock();
-    final expired = _index.entries
-        .where((entry) =>
-            !_isProtected(entry.key) &&
-            now.difference(entry.value.lastAccessedAt) > ttl)
-        .map((entry) => entry.key)
-        .toList();
-    for (final key in expired) {
-      await _removeEntry(key);
+    final expired = _index.values.toList();
+    for (final candidate in expired) {
+      await _withKeyTransaction(candidate.key, () async {
+        final current = _index[candidate.key];
+        if (current == null ||
+            current.generation != candidate.generation ||
+            _isProtected(candidate.key) ||
+            now.difference(current.lastAccessedAt) <= ttl) {
+          return;
+        }
+        await _removeEntryLocked(candidate.key, expected: current);
+      });
     }
     await _cleanupUnindexedStableFiles();
     await _enforceSizeCap();
@@ -420,24 +487,26 @@ class PlaybackCacheService {
 
   Future<void> debugBackdateEntry(String key, {required int daysAgo}) async {
     if (_disposed) return;
-    final entry = _index[key];
-    if (entry == null) return;
-    final backdated = _clock().subtract(Duration(days: daysAgo));
-    _index[key] = entry.copyWith(
-      createdAt: backdated,
-      lastAccessedAt: backdated,
-    );
-    await _saveIndex();
+    await _withKeyTransaction(key, () async {
+      final entry = _index[key];
+      if (entry == null) return;
+      final backdated = _clock().subtract(Duration(days: daysAgo));
+      _index[key] = entry.copyWith(
+        createdAt: backdated,
+        lastAccessedAt: backdated,
+      );
+      await _saveIndex();
+    });
   }
 
-  Future<_CacheEntry?> _lookupValid(String key) async {
+  Future<_CacheEntry?> _lookupValidLocked(String key) async {
     final entry = _index[key];
     if (entry == null) return null;
     if (_clock().difference(entry.lastAccessedAt) > ttl && !_isProtected(key)) {
       return null;
     }
     if (entry.path.endsWith('.audio')) {
-      await _removeEntry(key);
+      await _removeEntryLocked(key, expected: entry);
       return null;
     }
     final validated = await _validatedStableEntry(entry);
@@ -544,9 +613,9 @@ class PlaybackCacheService {
         await _deleteSafe(safeStage);
         return null;
       }
-      return await _serializeCommit(
+      final committed = await _withKeyTransaction(
         key,
-        () => _commitStaged(
+        () => _commitStagedLocked(
           operation,
           staged,
           detectedExt,
@@ -556,22 +625,37 @@ class PlaybackCacheService {
           quality,
         ),
       );
+      if (committed != null) {
+        await _purgeUnprotectedWithoutSaving();
+        await _saveIndex(allowDuringDispose: true);
+      }
+      return committed;
     } on DioException catch (error) {
       if (!CancelToken.isCancel(error)) {
         debugPrint('[PlaybackCache] download failed key=$key: $error');
       }
-      await _deleteSafe(partPath);
-      if (stagePath != null) await _deleteSafe(stagePath);
+      await _withKeyTransaction(
+        key,
+        () => _cleanupTransientFilesLocked(partPath, stagePath),
+      );
       return null;
     } catch (error) {
       debugPrint('[PlaybackCache] download error key=$key: $error');
-      await _deleteSafe(partPath);
-      if (stagePath != null) await _deleteSafe(stagePath);
+      await _withKeyTransaction(
+        key,
+        () => _cleanupTransientFilesLocked(partPath, stagePath),
+      );
       return null;
     }
   }
 
-  Future<String?> _commitStaged(
+  Future<void> _cleanupTransientFilesLocked(
+      String partPath, String? stagePath) async {
+    await _deleteSafe(partPath);
+    if (stagePath != null) await _deleteSafe(stagePath);
+  }
+
+  Future<String?> _commitStagedLocked(
     _InflightOperation operation,
     String staged,
     String extension,
@@ -638,11 +722,10 @@ class PlaybackCacheService {
         songId: songId,
         generation: generation,
       );
-      await _purgeUnprotectedWithoutSaving();
       try {
         await _saveIndex(allowDuringDispose: true);
       } catch (_) {
-        await _rollbackCommit(
+        await _rollbackCommitLocked(
           key,
           generation,
           stablePath,
@@ -654,7 +737,7 @@ class PlaybackCacheService {
       if (!_isCurrentOperation(operation) ||
           _index[key]?.generation != generation ||
           await _validatedStableEntry(_index[key]!) == null) {
-        await _rollbackCommit(
+        await _rollbackCommitLocked(
           key,
           generation,
           stablePath,
@@ -664,7 +747,7 @@ class PlaybackCacheService {
         return null;
       }
       if (safeBackup != null) await _deleteSafe(safeBackup);
-      await _deleteStableSiblingsOwnedBy(
+      await _deleteStableSiblingsOwnedByLocked(
         key,
         generation,
         except: stablePath,
@@ -674,7 +757,7 @@ class PlaybackCacheService {
     } catch (_) {
       if (installed) {
         if (_index[key]?.generation == generation) {
-          await _rollbackCommit(
+          await _rollbackCommitLocked(
             key,
             generation,
             stablePath,
@@ -693,7 +776,7 @@ class PlaybackCacheService {
     }
   }
 
-  Future<void> _rollbackCommit(
+  Future<void> _rollbackCommitLocked(
     String key,
     int generation,
     String stablePath,
@@ -715,20 +798,24 @@ class PlaybackCacheService {
 
   Future<void> _purgeUnprotectedWithoutSaving() async {
     final now = _clock();
-    final expired = _index.entries
-        .where((entry) =>
-            !_isProtected(entry.key) &&
-            now.difference(entry.value.lastAccessedAt) > ttl)
-        .map((entry) => entry.key)
-        .toList();
-    for (final key in expired) {
-      await _removeEntry(key);
+    final expired = _index.values.toList();
+    for (final candidate in expired) {
+      await _withKeyTransaction(candidate.key, () async {
+        final current = _index[candidate.key];
+        if (current == null ||
+            current.generation != candidate.generation ||
+            _isProtected(candidate.key) ||
+            now.difference(current.lastAccessedAt) <= ttl) {
+          return;
+        }
+        await _removeEntryLocked(candidate.key, expected: current);
+      });
     }
     await _cleanupUnindexedStableFiles();
     await _enforceSizeCap();
   }
 
-  Future<void> _deleteStableSiblingsOwnedBy(
+  Future<void> _deleteStableSiblingsOwnedByLocked(
     String key,
     int generation, {
     required String except,
@@ -744,21 +831,25 @@ class PlaybackCacheService {
 
   Future<void> _cleanupUnindexedStableFiles() async {
     final root = _root;
-    if (root == null) return;
-    final indexedPaths =
-        _index.values.map((entry) => _normalizeAbsolute(entry.path)).toSet();
+    if (root == null || !_loadIntegrity) return;
     await for (final entity in Directory(root).list(followLinks: false)) {
       final name = entity.uri.pathSegments.last;
       final match = _stableCacheName.firstMatch(name);
       if (match == null) continue;
       final key = match.group(1)!;
       final path = _normalizeAbsolute(entity.path);
-      if (indexedPaths.contains(path) ||
-          _preservedRejectedPaths.contains(path) ||
-          _isProtected(key)) {
-        continue;
-      }
-      await _deleteOwnedStablePath(key, path);
+      await _withKeyTransaction(key, () async {
+        final indexed = _index.values.any(
+          (entry) => _normalizeAbsolute(entry.path) == path,
+        );
+        if (indexed ||
+            _preservedRejectedPaths.contains(path) ||
+            _uncertainLoadKeys.contains(key) ||
+            _isProtected(key)) {
+          return;
+        }
+        await _deleteOwnedStablePath(key, path);
+      });
     }
   }
 
@@ -771,14 +862,16 @@ class PlaybackCacheService {
     }
   }
 
-  Future<T> _serializeCommit<T>(String key, Future<T> Function() action) {
-    final previous = _commitTails[key] ?? Future<void>.value();
+  Future<T> _withKeyTransaction<T>(String key, Future<T> Function() action) {
+    final previous = _keyTransactionTails[key] ?? Future<void>.value();
     final result = previous.then((_) => action());
     final tail =
         result.then<void>((_) {}, onError: (Object _, StackTrace __) {});
-    _commitTails[key] = tail;
+    _keyTransactionTails[key] = tail;
     tail.whenComplete(() {
-      if (identical(_commitTails[key], tail)) _commitTails.remove(key);
+      if (identical(_keyTransactionTails[key], tail)) {
+        _keyTransactionTails.remove(key);
+      }
     });
     return result;
   }
@@ -939,49 +1032,87 @@ class PlaybackCacheService {
     }
   }
 
-  Future<void> _removeEntry(String key) async {
+  Future<void> _removeEntryLocked(String key, {_CacheEntry? expected}) async {
     if (_isProtected(key)) return;
+    if (expected != null && !identical(_index[key], expected)) return;
     final entry = _index.remove(key);
     if (entry != null) await _deleteOwnedStablePath(entry.key, entry.path);
   }
 
   Future<void> _enforceSizeCap() async {
-    var total =
-        _index.values.fold<int>(0, (sum, entry) => sum + entry.sizeBytes);
-    if (total <= maxBytes) return;
     final ordered = _index.values.toList()
       ..sort((a, b) => a.lastAccessedAt.compareTo(b.lastAccessedAt));
-    for (final entry in ordered) {
-      if (total <= maxBytes) break;
-      if (_isProtected(entry.key)) continue;
-      total -= entry.sizeBytes;
-      await _removeEntry(entry.key);
+    for (final candidate in ordered) {
+      await _withKeyTransaction(candidate.key, () async {
+        final total =
+            _index.values.fold<int>(0, (sum, entry) => sum + entry.sizeBytes);
+        final current = _index[candidate.key];
+        if (total <= maxBytes ||
+            current == null ||
+            current.generation != candidate.generation ||
+            _isProtected(candidate.key)) {
+          return;
+        }
+        await _removeEntryLocked(candidate.key, expected: current);
+      });
     }
   }
 
   Future<void> _loadIndex() async {
     _index.clear();
     _preservedRejectedPaths.clear();
+    _uncertainLoadKeys.clear();
+    _loadIntegrity = true;
     final raw = await _indexStore.read();
     if (raw == null || raw.isEmpty) return;
+    late final List<dynamic> list;
     try {
-      final list = json.decode(raw) as List;
-      for (final item in list) {
-        if (item is Map) {
-          final entry = _CacheEntry.fromJson(Map<String, dynamic>.from(item));
-          final validated = await _validatedStableEntry(entry);
-          if (validated != null) {
-            _index[validated.key] = validated;
-            _generations[validated.key] = validated.generation;
-          } else {
-            await _handleRejectedPersistedEntry(entry);
-          }
+      final decoded = json.decode(raw);
+      if (decoded is! List) throw const FormatException('index is not a list');
+      list = decoded;
+    } catch (error) {
+      _loadIntegrity = false;
+      debugPrint('[PlaybackCache] index load failed: $error');
+      return;
+    }
+    for (final item in list) {
+      try {
+        if (item is! Map) continue;
+        final entry = _CacheEntry.fromJson(Map<String, dynamic>.from(item));
+        final validated = await _validatedStableEntry(entry);
+        if (validated != null) {
+          _index[validated.key] = validated;
+          _generations[validated.key] = validated.generation;
+        } else {
+          await _handleRejectedPersistedEntry(entry);
         }
+      } catch (error) {
+        _protectMalformedRecord(item);
+        debugPrint('[PlaybackCache] index record skipped: $error');
       }
+    }
+    try {
       await _saveIndex();
     } catch (error) {
-      debugPrint('[PlaybackCache] index load failed: $error');
+      debugPrint('[PlaybackCache] index repair failed: $error');
     }
+  }
+
+  void _protectMalformedRecord(Object? item) {
+    if (item is! Map) return;
+    final key = item['key'];
+    if (key is String && RegExp(r'^[0-9a-f]{40}$').hasMatch(key)) {
+      _uncertainLoadKeys.add(key);
+    }
+    final path = item['path'];
+    if (path is! String) return;
+    final lexical = _lexicalChild(path);
+    if (lexical == null || File(lexical).parent.path != _root) return;
+    final match =
+        _stableCacheName.firstMatch(File(lexical).uri.pathSegments.last);
+    if (match == null) return;
+    _preservedRejectedPaths.add(lexical);
+    _uncertainLoadKeys.add(match.group(1)!);
   }
 
   Future<void> _saveIndex({bool allowDuringDispose = false}) {
@@ -1049,6 +1180,13 @@ class _InflightOperation {
   late final Future<String?> future;
 
   _InflightOperation(this.key, this.generation, this.token);
+}
+
+class _PathDecision {
+  final String? path;
+  final Future<String?>? future;
+
+  const _PathDecision({this.path, this.future});
 }
 
 class _CacheEntry {
