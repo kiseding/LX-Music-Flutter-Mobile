@@ -145,3 +145,63 @@ The whole-project test run also completed 645 tests but retained two reproducibl
 pre-existing failures in `player_service_queue_test.dart` concerning metadata
 moves during in-flight source loads. They fail unchanged when that file is run
 alone and are outside Task 8; no player queue or playback-cache file was touched.
+
+## Remaining Findings Remediation
+
+### RED Evidence
+
+Lifecycle dependency-order regression:
+
+```text
+flutter test test/startup_lifecycle_test.dart
+00:00 +2 -1: production provider graph drains async services before dependencies [E]
+Expected: a value less than <0>
+Actual: <1>
+00:00 +2 -1: Some tests failed.
+```
+
+This proved the production playlist/download provider graph closed its async
+service streams only after synchronous `CustomSourceService` disposal.
+
+Version 1 restore regression:
+
+```text
+flutter test test/features/settings/playlist_backup_compatibility_test.dart
+Error: Method not found: 'restoreBackupPlaylists'.
+00:00 +0 -1: Some tests failed.
+```
+
+The missing helper was the intended RED: restore had no seam that required
+strict playlist decoding followed by exactly one replacement.
+
+### GREEN Evidence
+
+```text
+flutter test test/startup_lifecycle_test.dart
+3 tests passed
+
+flutter test test/features/settings/playlist_backup_compatibility_test.dart
+6 tests passed
+
+flutter test test/features/settings/playlist_backup_compatibility_test.dart test/startup_lifecycle_test.dart test/features/sync/presentation/cloud_playlist_merge_test.dart test/features/playlist/presentation/playlist_provider_test.dart test/features/playlist/presentation/playlist_detail_favorites_test.dart test/features/playlist/presentation/playlist_screen_test.dart
+19 tests passed
+
+flutter test test/features/playlist test/features/sync test/features/settings test/widget_test.dart
+90 tests passed
+
+flutter analyze
+22 pre-existing findings; no new findings
+
+dart format --output=none --set-exit-if-changed lib/startup_lifecycle.dart lib/features/playlist/presentation/playlist_provider.dart lib/features/download/presentation/download_provider.dart lib/features/settings/domain/playlist_backup.dart lib/features/settings/presentation/settings_screen.dart test/startup_lifecycle_test.dart test/features/settings/playlist_backup_compatibility_test.dart
+Formatted 7 files (0 changed)
+
+git diff --check
+passed
+```
+
+Registered playlist, download, and playback-cache cleanup now drains before
+`ProviderContainer.dispose`; provider teardown reuses each registered disposal
+future and a final drain captures callback-started cleanup. Missing or null
+version 1 `playlists` is rejected, while both supported playlist shapes are
+strictly decoded and passed to one `replaceAll`. Playback-cache implementation
+files remain unchanged.

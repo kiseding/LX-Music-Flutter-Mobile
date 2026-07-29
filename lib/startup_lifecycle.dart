@@ -9,10 +9,12 @@ final resourceDisposalTrackerProvider = Provider<ResourceDisposalTracker>(
 
 final class ResourceDisposalTracker {
   final List<Future<void>> _pending = [];
-  final List<Future<void> Function()> _resources = [];
+  final List<_TrackedDisposal> _resources = [];
 
-  void register(Future<void> Function() dispose) {
-    _resources.add(dispose);
+  void Function() register(Future<void> Function() dispose) {
+    final resource = _TrackedDisposal(dispose);
+    _resources.add(resource);
+    return () => track(resource.dispose());
   }
 
   void track(Future<void> disposal) {
@@ -20,8 +22,8 @@ final class ResourceDisposalTracker {
   }
 
   Future<void> disposeAndDrain() async {
-    for (final dispose in _resources.reversed) {
-      track(dispose());
+    for (final resource in _resources.reversed) {
+      track(resource.dispose());
     }
     _resources.clear();
     while (_pending.isNotEmpty) {
@@ -30,6 +32,15 @@ final class ResourceDisposalTracker {
       await Future.wait(pending);
     }
   }
+}
+
+final class _TrackedDisposal {
+  _TrackedDisposal(this._dispose);
+
+  final Future<void> Function() _dispose;
+  Future<void>? _future;
+
+  Future<void> dispose() => _future ??= _dispose();
 }
 
 final class StartupLifecycle {
@@ -51,8 +62,12 @@ final class StartupLifecycle {
   Future<void> dispose() => _disposeFuture ??= _dispose();
 
   Future<void> _dispose() async {
-    container.dispose();
-    await disposals.disposeAndDrain();
+    try {
+      await disposals.disposeAndDrain();
+    } finally {
+      container.dispose();
+      await disposals.disposeAndDrain();
+    }
   }
 }
 

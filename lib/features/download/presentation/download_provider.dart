@@ -38,6 +38,7 @@ final downloadServiceProvider = Provider<DownloadService>((ref) {
   );
   final musicSourceService = ref.watch(musicSourceServiceProvider);
   final disposals = ref.read(resourceDisposalTrackerProvider);
+  final disposeService = disposals.register(service.dispose);
   service.setMusicSourceService(musicSourceService);
   final sub = service.tasksStream.listen((_) {
     Future.microtask(() {
@@ -48,7 +49,7 @@ final downloadServiceProvider = Provider<DownloadService>((ref) {
   });
   ref.onDispose(() {
     sub.cancel();
-    disposals.track(service.dispose());
+    disposeService();
   });
   return service;
 });

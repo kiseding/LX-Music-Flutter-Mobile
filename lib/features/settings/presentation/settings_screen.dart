@@ -572,10 +572,10 @@ class SettingsScreen extends ConsumerWidget {
       final storage = await StorageService.instance;
 
       // 恢复歌单
-      if (backup['playlists'] != null) {
-        final snapshot = decodeBackupPlaylists(backup);
-        await ref.read(playlistServiceProvider).replaceAll(snapshot.playlists);
-      }
+      await restoreBackupPlaylists(
+        backup,
+        ref.read(playlistServiceProvider).replaceAll,
+      );
       // 恢复搜索历史
       if (backup['search_history'] != null) {
         await storage.setStringList(

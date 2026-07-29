@@ -38,6 +38,40 @@ void main() {
     expect(decoded.playlists.single.name, 'One');
   });
 
+  test('restore requires a non-null playlists field before replacement',
+      () async {
+    for (final backup in <Map<String, dynamic>>[
+      {'version': 1},
+      {'version': 1, 'playlists': null},
+    ]) {
+      var replacements = 0;
+
+      await expectLater(
+        restoreBackupPlaylists(backup, (_) async => replacements++),
+        throwsFormatException,
+      );
+      expect(replacements, 0);
+    }
+  });
+
+  test('restore strictly decodes each version 1 shape then replaces once',
+      () async {
+    for (final playlists in <Object>[
+      snapshotObject['playlists'] as Object,
+      snapshotObject as Object,
+    ]) {
+      final replacements = <List<Playlist>>[];
+
+      await restoreBackupPlaylists(
+        {'version': 1, 'playlists': playlists},
+        (value) async => replacements.add(value),
+      );
+
+      expect(replacements, hasLength(1));
+      expect(replacements.single.single.id, 'one');
+    }
+  });
+
   test('rejects malformed legacy playlist instead of permissive migration', () {
     expect(
       () => decodeBackupPlaylists({

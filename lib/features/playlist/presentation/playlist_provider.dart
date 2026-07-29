@@ -14,7 +14,7 @@ final playlistServiceProvider = Provider<PlaylistService>((ref) {
     repository: ref.watch(playlistRepositoryProvider),
   );
   final disposals = ref.read(resourceDisposalTrackerProvider);
-  ref.onDispose(() => disposals.track(service.dispose()));
+  ref.onDispose(disposals.register(service.dispose));
   return service;
 });
 
