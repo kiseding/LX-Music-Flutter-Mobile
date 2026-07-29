@@ -54,8 +54,10 @@ final class FilePlaylistRepository implements PlaylistRepository {
     this.codec = const PlaylistSnapshotCodec(),
     DateTime Function()? clock,
     PlaylistFileSystem? fileSystem,
+    Future<bool> Function(String key)? removePreference,
   })  : _clock = clock ?? DateTime.now,
-        _files = fileSystem ?? const PlaylistFileSystem();
+        _files = fileSystem ?? const PlaylistFileSystem(),
+        _removePreference = removePreference ?? preferences.remove;
 
   static const _currentName = 'playlists.v1.json';
   static const _temporaryName = 'playlists.v1.tmp';
@@ -68,6 +70,7 @@ final class FilePlaylistRepository implements PlaylistRepository {
   final PlaylistSnapshotCodec codec;
   final DateTime Function() _clock;
   final PlaylistFileSystem _files;
+  final Future<bool> Function(String key) _removePreference;
 
   @override
   Future<PlaylistSnapshot> load() async {
@@ -75,10 +78,10 @@ final class FilePlaylistRepository implements PlaylistRepository {
     final current = await _decodeFile(paths.current);
     if (current != null) {
       if (await _files.exists(paths.recovery)) {
-        if (_decodeLegacy(preferences.getString(_legacyKey)) != null) {
-          await preferences.remove(_legacyKey);
+        if (_decodeLegacy(preferences.getString(_legacyKey)) != null &&
+            await _removePreference(_legacyKey)) {
+          await _files.delete(paths.recovery);
         }
-        await _files.delete(paths.recovery);
       }
       return current;
     }

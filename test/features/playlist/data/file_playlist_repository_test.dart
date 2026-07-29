@@ -111,7 +111,31 @@ void main() {
     expect(loaded.playlists.single.id, 'current');
     expect(prefs.getString('playlists'), '{broken');
     expect(File('${tempDir.path}/playlists.v1.recovery.json').existsSync(),
-        isFalse);
+        isTrue);
+  });
+
+  test('validated current preserves recovery when legacy removal fails',
+      () async {
+    final current = snapshotFixture(id: 'current');
+    final recovery = snapshotFixture(id: 'recovery');
+    final prefs = await preferences({'playlists': jsonEncode(legacyPlaylists)});
+    final codec = const PlaylistSnapshotCodec();
+    await File('${tempDir.path}/playlists.v1.json')
+        .writeAsString(codec.encode(current));
+    await File('${tempDir.path}/playlists.v1.recovery.json')
+        .writeAsString(codec.encode(recovery));
+    final repository = repositoryFor(
+      tempDir,
+      prefs,
+      removePreference: (_) async => false,
+    );
+
+    final loaded = await repository.load();
+
+    expect(loaded.playlists.single.id, 'current');
+    expect(prefs.containsKey('playlists'), isTrue);
+    expect(File('${tempDir.path}/playlists.v1.recovery.json').existsSync(),
+        isTrue);
   });
 
   test('recovery restore retains fallbacks until a later current reload',
@@ -246,12 +270,14 @@ FilePlaylistRepository repositoryFor(
   Directory directory,
   SharedPreferences preferences, {
   PlaylistFileSystem? fileSystem,
+  Future<bool> Function(String key)? removePreference,
 }) {
   return FilePlaylistRepository(
     directory: () async => directory,
     preferences: preferences,
     clock: () => DateTime.utc(2026, 7, 29),
     fileSystem: fileSystem,
+    removePreference: removePreference,
   );
 }
 
