@@ -31,6 +31,7 @@ class DownloadTask {
   final String? album;
   final String? artwork;
   final int? duration;
+  final int attemptRevision;
 
   const DownloadTask({
     required this.id,
@@ -54,6 +55,7 @@ class DownloadTask {
     this.album,
     this.artwork,
     this.duration,
+    this.attemptRevision = 0,
   });
 
   DownloadTask copyWith({
@@ -80,6 +82,7 @@ class DownloadTask {
     String? album,
     String? artwork,
     int? duration,
+    int? attemptRevision,
   }) {
     return DownloadTask(
       id: id ?? this.id,
@@ -103,6 +106,7 @@ class DownloadTask {
       album: album ?? this.album,
       artwork: artwork ?? this.artwork,
       duration: duration ?? this.duration,
+      attemptRevision: attemptRevision ?? this.attemptRevision,
     );
   }
 
@@ -129,6 +133,7 @@ class DownloadTask {
       'album': album,
       'artwork': artwork,
       'duration': duration,
+      'attemptRevision': attemptRevision,
     };
   }
 
@@ -145,8 +150,8 @@ class DownloadTask {
       speed: json['speed'] ?? 0,
       errorMsg: json['errorMsg'],
       createdAt: DateTime.parse(json['createdAt']),
-      completedAt: json['completedAt'] != null 
-          ? DateTime.parse(json['completedAt']) 
+      completedAt: json['completedAt'] != null
+          ? DateTime.parse(json['completedAt'])
           : null,
       quality: json['quality'],
       fileSize: json['fileSize'] ?? 0,
@@ -157,6 +162,7 @@ class DownloadTask {
       album: json['album'],
       artwork: json['artwork'],
       duration: json['duration'],
+      attemptRevision: json['attemptRevision'] ?? 0,
     );
   }
 

@@ -1,7 +1,7 @@
 # Download Attempt Lifecycle
 
 Date: 2026-07-29
-Status: approved
+Status: approved and implemented
 
 ## Goal
 
@@ -62,3 +62,12 @@ overlapping or mutating newer task state, output, or persistence.
 - Deterministic race tests cover stale progress, errors, finalizers, cleanup,
   retry output preservation, persistence-tail recovery, and no post-close
   stream writes.
+
+## Implementation Notes
+
+- `DownloadTask.attemptRevision` is persisted with a zero default for existing
+  saved tasks.
+- `DownloadService` keeps a revision-owned attempt record in the active slot
+  until its executor future returns. The provider retains the settings-backed
+  connectivity subscription and starts asynchronous disposal when Riverpod
+  releases the service.

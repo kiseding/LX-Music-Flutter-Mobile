@@ -99,6 +99,23 @@ void main() {
     expect(cleared.errorMsg, isNull);
   });
 
+  test('attempt revision defaults to zero and survives persistence', () {
+    final task = DownloadTask(
+      id: 't1',
+      musicId: 'm1',
+      name: 'n',
+      singer: 's',
+      createdAt: DateTime(2026, 1, 1),
+    );
+
+    expect(task.attemptRevision, 0);
+    expect(
+      DownloadTask.fromJson(task.copyWith(attemptRevision: 4).toJson())
+          .attemptRevision,
+      4,
+    );
+  });
+
   test('isPlayableMediaUrl rejects QQ root fake success', () {
     expect(isPlayableMediaUrl('http://wx.music.tc.qq.com/'), isFalse);
     expect(

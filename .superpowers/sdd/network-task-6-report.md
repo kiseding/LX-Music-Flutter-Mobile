@@ -1,28 +1,33 @@
-# Network Task 6 Report
+# Network Task 6 Report: Download Attempt Lifecycle
 
-## Status
+Date: 2026-07-29
+Status: completed
 
-Implemented atomic download scheduling and persistence remediation.
+## Delivered
 
-## Changes
+- Persisted monotonic `attemptRevision` values on download tasks while keeping
+  UUID task IDs unchanged.
+- Replaced task-level cancellation ownership with revision-owned attempt
+  records. Active capacity remains reserved until the executor future settles.
+- Invalidated attempts before retry, pause, cancel, delete, Wi-Fi policy loss,
+  cache clear, and disposal cancellation. Progress, completion, failure, and
+  finalization mutations require the current attempt identity.
+- Assigned each physical executor a revision-specific `.part` path and guarded
+  promotion/cleanup so stale work cannot affect a later attempt.
+- Made persistence tail recovery independent of previous write failure while
+  retaining per-write error delivery and terminal/disposal flushing.
+- Made disposal asynchronous: mark disposed, cancel and await attempts and
+  persistence, then close Dio and the task stream. No callback can emit after
+  disposal begins.
+- Retained centralized fresh URL resolution, bounded expired-link retry, UUID
+  generation, and settings-backed connectivity wiring.
 
-- Replaced counter-based scheduling with synchronously reserved active task IDs.
-- Added injectable concurrency, connectivity/current network, Wi-Fi-only policy, task ID factory, downloader, and persistence seams.
-- Uses UUID v4 IDs by default and centralizes task persistence behind a serialized future tail.
-- Wi-Fi-only downloads remain pending off Wi-Fi, cancel active work on network loss, and restart when Wi-Fi returns.
-- Progress persistence is throttled; terminal state transitions and disposal enqueue persistence immediately.
-- Interrupted downloading tasks are reset to non-resumable pending state with cleared progress and output path.
-- Preserved the existing single `MusicSourceService.resolvePlayableUrl` call per fresh-link attempt and bounded expired-link retry.
-- Wired provider settings and `connectivity_plus` into `DownloadService`.
+## Test Evidence
 
-## Tests
+- `flutter test test/features/download/domain/download_service_test.dart`
+- `flutter test test/features/download/domain/download_task_test.dart`
+- `flutter analyze`
 
-- RED: `flutter test test/features/download/domain/download_service_test.dart` failed because required scheduler seams/types were absent.
-- GREEN: `flutter test test/features/download/domain/download_service_test.dart` passed, 5 tests.
-- `flutter test test/features/download test/core/network test/core/audio` passed, 351 tests.
-- `flutter test` is blocked by unrelated compile errors in the pre-existing modified `test/features/cloud/domain/cloud_api_client_test.dart`.
-- `flutter analyze` reports 33 issues: pre-existing Cloud test compile errors and repository warnings; no remaining Task 6 analyzer findings.
-
-## Concerns
-
-- Full-suite verification cannot complete until the unrelated Cloud test changes compile. They were not modified.
+The service test suite uses cancellation-ignoring gated executors to verify
+Wi-Fi slot retention, no duplicate executor on Wi-Fi restoration, stale retry
+callback isolation, persistence-tail recovery, and disposal stream safety.

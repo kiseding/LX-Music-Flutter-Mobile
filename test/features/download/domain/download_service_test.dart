@@ -34,6 +34,44 @@ class _GatedDownloader {
   }
 
   void complete(String id) => _gates[id]!.complete();
+
+  void completeAll() {
+    for (final gate in _gates.values) {
+      if (!gate.isCompleted) gate.complete();
+    }
+  }
+}
+
+class _AttemptGatedDownloader {
+  final attempts = <_DownloadAttempt>[];
+
+  Future<void> call(
+      DownloadTask task, CancelToken _, void Function(double) progress) {
+    final attempt = _DownloadAttempt(task, progress);
+    attempts.add(attempt);
+    return attempt.gate.future;
+  }
+}
+
+class _DownloadAttempt {
+  _DownloadAttempt(this.task, this.progress);
+
+  final DownloadTask task;
+  final void Function(double) progress;
+  final gate = Completer<void>();
+}
+
+class _FailFirstStorage extends _MemoryStorage {
+  bool _fail = true;
+
+  @override
+  Future<void> save(List<Map<String, dynamic>> tasks) async {
+    if (_fail) {
+      _fail = false;
+      throw StateError('first write fails');
+    }
+    await super.save(tasks);
+  }
 }
 
 MusicItem _song(String id) => MusicItem(
@@ -53,7 +91,10 @@ void main() {
       storage: _MemoryStorage(),
       taskIdFactory: () => 'id-${DateTime.now().microsecondsSinceEpoch}',
     );
-    addTearDown(service.dispose);
+    addTearDown(() async {
+      downloader.completeAll();
+      await service.dispose();
+    });
 
     await service.addTasks([_song('a'), _song('b'), _song('c')]);
     expect(downloader.active, 2);
@@ -70,7 +111,10 @@ void main() {
       storage: _MemoryStorage(),
       taskIdFactory: () => 'fixed-id',
     );
-    addTearDown(service.dispose);
+    addTearDown(() async {
+      downloader.completeAll();
+      await service.dispose();
+    });
 
     await service.addTasks([_song('a'), _song('a')]);
     expect(service.tasks.single.id, 'fixed-id');
@@ -90,19 +134,129 @@ void main() {
       taskIdFactory: () => 'wifi-id',
     );
     addTearDown(() async {
+      downloader.completeAll();
       await network.close();
-      service.dispose();
+      await service.dispose();
     });
 
     await service.addTask(_song('a'));
     await Future<void>.delayed(Duration.zero);
     expect(downloader.started, ['wifi-id']);
     network.add(DownloadNetwork.mobile);
-    await service.idle;
+    await Future<void>.delayed(Duration.zero);
     expect(service.tasks.single.status, DownloadStatus.pending);
+    downloader.complete('wifi-id');
+    await service.idle;
     network.add(DownloadNetwork.wifi);
     await service.idle;
     expect(downloader.started, hasLength(2));
+  });
+
+  test('wifi loss keeps the executor reservation until it returns', () async {
+    final network = StreamController<DownloadNetwork>.broadcast();
+    final downloader = _AttemptGatedDownloader();
+    final service = DownloadService(
+      wifiOnly: true,
+      currentNetwork: () async => DownloadNetwork.wifi,
+      connectivity: network.stream,
+      maxConcurrent: 1,
+      downloader: downloader.call,
+      storage: _MemoryStorage(),
+      taskIdFactory: () => 'wifi-id',
+    );
+    addTearDown(() async {
+      for (final attempt in downloader.attempts) {
+        if (!attempt.gate.isCompleted) attempt.gate.complete();
+      }
+      await service.dispose();
+      await network.close();
+    });
+
+    await service.addTask(_song('a'));
+    await Future<void>.delayed(Duration.zero);
+    network.add(DownloadNetwork.mobile);
+    await Future<void>.delayed(Duration.zero);
+    expect(service.tasks.single.status, DownloadStatus.pending);
+    expect(service.activeTaskIds, {'wifi-id'});
+
+    network.add(DownloadNetwork.wifi);
+    await Future<void>.delayed(Duration.zero);
+    expect(downloader.attempts, hasLength(1));
+
+    downloader.attempts.single.gate.complete();
+    await Future<void>.delayed(Duration.zero);
+    expect(downloader.attempts, hasLength(2));
+  });
+
+  test('stale callbacks cannot mutate a retry attempt', () async {
+    final downloader = _AttemptGatedDownloader();
+    final service = DownloadService(
+      maxConcurrent: 1,
+      downloader: downloader.call,
+      storage: _MemoryStorage(),
+      taskIdFactory: () => 'retry-id',
+    );
+    addTearDown(() async {
+      for (final attempt in downloader.attempts) {
+        if (!attempt.gate.isCompleted) attempt.gate.complete();
+      }
+      await service.dispose();
+    });
+
+    await service.addTask(_song('a'));
+    final original = downloader.attempts.single;
+    service.retryTask('retry-id');
+    original.progress(.9);
+    expect(service.tasks.single.progress, 0);
+
+    original.gate.completeError(StateError('old attempt failed'));
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+    expect(downloader.attempts, hasLength(2));
+    expect(downloader.attempts.last.task.attemptRevision,
+        service.tasks.single.attemptRevision);
+    expect(service.tasks.single.status, DownloadStatus.downloading);
+  });
+
+  test('a failed persistence write does not poison later snapshots', () async {
+    final storage = _FailFirstStorage();
+    final service = DownloadService(
+      downloader: (_, __, ___) async {},
+      storage: storage,
+      taskIdFactory: () => 'persist-${storage.writes}',
+    );
+    addTearDown(service.dispose);
+
+    await expectLater(service.addTask(_song('a')), throwsStateError);
+    await service.addTask(_song('b'));
+    await service.persistenceIdle;
+    expect(storage.saved, hasLength(2));
+  });
+
+  test('dispose drains attempts before closing the task stream', () async {
+    final downloader = _AttemptGatedDownloader();
+    final service = DownloadService(
+      downloader: downloader.call,
+      storage: _MemoryStorage(),
+      taskIdFactory: () => 'dispose-id',
+    );
+    final events = <List<DownloadTask>>[];
+    final subscription = service.tasksStream.listen(events.add);
+    addTearDown(subscription.cancel);
+
+    await service.addTask(_song('a'));
+    var disposed = false;
+    final disposal = service.dispose().then((_) => disposed = true);
+    await Future<void>.delayed(Duration.zero);
+    expect(disposed, isFalse);
+
+    downloader.attempts.single.progress(.8);
+    downloader.attempts.single.gate.complete();
+    await disposal;
+    final eventCount = events.length;
+    downloader.attempts.single.progress(1);
+    await Future<void>.delayed(Duration.zero);
+    expect(events, hasLength(eventCount));
   });
 
   test(
@@ -116,7 +270,10 @@ void main() {
       taskIdFactory: () => 'persist-id',
       progressPersistenceInterval: const Duration(days: 1),
     );
-    addTearDown(service.dispose);
+    addTearDown(() async {
+      downloader.completeAll();
+      await service.dispose();
+    });
 
     await service.addTask(_song('a'));
     await service.persistenceIdle;

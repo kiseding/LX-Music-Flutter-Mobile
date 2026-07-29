@@ -42,6 +42,15 @@ typedef DownloadExecutor = Future<void> Function(
   void Function(double progress) onProgress,
 );
 
+final class _DownloadAttempt {
+  _DownloadAttempt(this.taskId, this.revision) : cancelToken = CancelToken();
+
+  final String taskId;
+  final int revision;
+  final CancelToken cancelToken;
+  late final Future<void> future;
+}
+
 Future<PlayUrlResult?> downloadWithFreshLinkRetry({
   CancelToken? cancelToken,
   required Future<PlayUrlResult?> Function() resolve,
@@ -109,7 +118,7 @@ class DownloadService {
   final List<DownloadTask> _tasks = [];
   final StreamController<List<DownloadTask>> _tasksController =
       StreamController<List<DownloadTask>>.broadcast();
-  final Map<String, CancelToken> _cancelTokens = {};
+  final Map<String, _DownloadAttempt> _attempts = {};
   final Set<String> _activeTaskIds = <String>{};
   final int _maxConcurrent;
   final bool _wifiOnly;
@@ -125,6 +134,7 @@ class DownloadService {
   MusicSourceService? _musicSourceService;
   DownloadTaskStorage? _storage;
   bool _initialized = false;
+  bool _disposed = false;
 
   List<DownloadTask> get tasks => List.unmodifiable(_tasks);
   Stream<List<DownloadTask>> get tasksStream => _tasksController.stream;
@@ -209,7 +219,7 @@ class DownloadService {
       }
     }
     if (demoted) {
-      _tasksController.add(_tasks);
+      _emitTasks();
       await _saveToStorage();
     }
     _initialized = true;
@@ -223,14 +233,16 @@ class DownloadService {
     for (final json in saved) {
       _tasks.add(DownloadTask.fromJson(Map<String, dynamic>.from(json as Map)));
     }
-    _tasksController.add(_tasks);
+    _emitTasks();
   }
 
   Future<void> _saveToStorage() async {
     _storage ??= _StorageAdapter(await StorageService.instance);
     final data = _tasks.map((t) => t.toJson()).toList(growable: false);
-    _persistenceTail = _persistenceTail.then((_) => _storage!.save(data));
-    return _persistenceTail;
+    final write =
+        _persistenceTail.catchError((_) {}).then((_) => _storage!.save(data));
+    _persistenceTail = write.catchError((_) {});
+    return write;
   }
 
   Future<void> _initDownloadDir() async {
@@ -268,7 +280,7 @@ class DownloadService {
     );
 
     _tasks.add(task);
-    _tasksController.add(_tasks);
+    _emitTasks();
     await _saveToStorage();
     _processQueue();
   }
@@ -279,33 +291,28 @@ class DownloadService {
     }
   }
 
-  Future<void> _startDownload(DownloadTask task) async {
+  Future<void> _runAttempt(DownloadTask task, _DownloadAttempt attempt) async {
     final latest = _taskById(task.id);
-    if (latest == null) return;
-    if (latest.status != DownloadStatus.pending &&
-        latest.status != DownloadStatus.downloading) {
-      return;
-    }
+    if (!_isCurrent(attempt) || latest == null) return;
 
     if (_downloader == null && _downloadDir == null) {
       await _initDownloadDir();
     }
 
-    final cancelToken = CancelToken();
-    _cancelTokens[task.id] = cancelToken;
-    _updateTask(task.id, status: DownloadStatus.downloading, errorMsg: '');
+    final cancelToken = attempt.cancelToken;
+    _updateCurrent(attempt, status: DownloadStatus.downloading, errorMsg: '');
 
     final baseName = safeDownloadBaseName(task.musicId);
-    final partPath = '$_downloadDir/$baseName.part';
+    final partPath = _partPathFor(task.id, task.musicId, attempt.revision);
 
     try {
       if (_downloader != null) {
         await _downloader(latest, cancelToken, (progress) {
-          _updateTask(task.id, progress: progress, persistProgress: true);
+          _updateCurrent(attempt, progress: progress, persistProgress: true);
         });
-        if (!cancelToken.isCancelled &&
-            _taskById(task.id)?.status == DownloadStatus.downloading) {
-          _updateTask(task.id, status: DownloadStatus.completed, progress: 1.0);
+        if (_isCurrent(attempt) && !cancelToken.isCancelled) {
+          _updateCurrent(attempt,
+              status: DownloadStatus.completed, progress: 1.0);
         }
         return;
       }
@@ -325,8 +332,8 @@ class DownloadService {
         ),
         download: (resolved) async {
           final downloadUrl = normalizeOutboundUrl(resolved.url);
-          _updateTask(
-            task.id,
+          _updateCurrent(
+            attempt,
             url: resolved.url,
             quality: resolved.actualQuality,
             progress: 0.0,
@@ -343,7 +350,7 @@ class DownloadService {
               cancelToken: cancelToken,
               onReceiveProgress: (received, total) {
                 if (total > 0) {
-                  _updateTask(task.id, progress: received / total);
+                  _updateCurrent(attempt, progress: received / total);
                 }
               },
               options: Options(
@@ -356,7 +363,7 @@ class DownloadService {
               ),
             );
           } on DioException catch (e) {
-            await _safeDelete(partPath);
+            await _safeDeleteOwned(partPath, attempt);
             if (CancelToken.isCancel(e)) rethrow;
             debugPrint(
               '[DownloadService] HTTP fail q=${resolved.actualQuality} '
@@ -370,25 +377,25 @@ class DownloadService {
       if (resolved != null) {
         final downloadUrl = normalizeOutboundUrl(resolved.url);
         final after = _taskById(task.id);
-        if (after == null ||
-            after.status == DownloadStatus.paused ||
-            after.status == DownloadStatus.failed) {
-          await _safeDelete(partPath);
+        if (!_isCurrent(attempt) ||
+            after == null ||
+            after.status != DownloadStatus.downloading) {
+          await _safeDeleteOwned(partPath, attempt);
           return;
         }
 
         final part = File(partPath);
         if (!await part.exists() || await part.length() == 0) {
-          await _safeDelete(partPath);
+          await _safeDeleteOwned(partPath, attempt);
         } else if (await part.length() < 2048) {
-          await _safeDelete(partPath);
+          await _safeDeleteOwned(partPath, attempt);
         } else {
           final header = await part.openRead(0, 64).fold<List<int>>(
             <int>[],
             (all, chunk) => all..addAll(chunk),
           );
           if (_looksLikeNonAudio(header)) {
-            await _safeDelete(partPath);
+            await _safeDeleteOwned(partPath, attempt);
           } else {
             final urlExt = _guessExt(downloadUrl);
             final qualityExt = _qualityExt(resolved.actualQuality);
@@ -397,17 +404,25 @@ class DownloadService {
               fallback: urlExt == '.audio' ? qualityExt : urlExt,
             );
             if (detectedExt == '.audio') {
-              await _safeDelete(partPath);
+              await _safeDeleteOwned(partPath, attempt);
             } else {
               final savePath = '$_downloadDir/$baseName$detectedExt';
               final out = File(savePath);
+              if (!_isCurrent(attempt)) {
+                await _safeDeleteOwned(partPath, attempt);
+                return;
+              }
               if (await out.exists()) await out.delete();
               await _promotePartFile(part, savePath);
+              if (!_isCurrent(attempt)) {
+                await _safeDeleteOwned(savePath, attempt);
+                return;
+              }
               await _cleanupSiblingFiles(baseName, keep: savePath);
 
               final size = await File(savePath).length();
-              _updateTask(
-                task.id,
+              _updateCurrent(
+                attempt,
                 status: DownloadStatus.completed,
                 progress: 1.0,
                 savePath: savePath,
@@ -422,48 +437,51 @@ class DownloadService {
       }
 
       if (!completedOk &&
+          _isCurrent(attempt) &&
           _taskById(task.id)?.status != DownloadStatus.paused &&
           !cancelToken.isCancelled) {
-        _updateTask(
-          task.id,
+        _updateCurrent(
+          attempt,
           status: DownloadStatus.failed,
           errorMsg: '无法获取下载链接',
         );
       }
     } on DioException catch (e) {
-      await _safeDelete(partPath);
+      await _safeDeleteOwned(partPath, attempt);
       if (CancelToken.isCancel(e)) {
         final cur = _taskById(task.id);
-        if (cur != null && cur.status == DownloadStatus.downloading) {
-          _updateTask(task.id, status: DownloadStatus.paused);
+        if (_isCurrent(attempt) &&
+            cur != null &&
+            cur.status == DownloadStatus.downloading) {
+          _updateCurrent(attempt, status: DownloadStatus.paused);
         }
         return;
       }
-      _updateTask(
-        task.id,
+      _updateCurrent(
+        attempt,
         status: DownloadStatus.failed,
         errorMsg: _dioErrorMessage(e),
       );
     } catch (e) {
-      await _safeDelete(partPath);
+      await _safeDeleteOwned(partPath, attempt);
       final current = _taskById(task.id)?.status;
-      if (current != null) {
+      if (_isCurrent(attempt) && current != null) {
         final status = downloadFailureStatus(
           current,
           cancelled: cancelToken.isCancelled,
         );
-        _updateTask(
-          task.id,
+        _updateCurrent(
+          attempt,
           status: status,
           errorMsg: status == DownloadStatus.failed ? e.toString() : '',
         );
       }
     } finally {
-      if (identical(_cancelTokens[task.id], cancelToken)) {
-        _cancelTokens.remove(task.id);
+      if (identical(_attempts[task.id], attempt)) {
+        _attempts.remove(task.id);
         _activeTaskIds.remove(task.id);
       }
-      _processQueue();
+      if (!_disposed) _processQueue();
     }
   }
 
@@ -551,6 +569,7 @@ class DownloadService {
   }
 
   void _processQueue() {
+    if (_disposed) return;
     final slots = _maxConcurrent - _activeTaskIds.length;
     if (slots <= 0) return;
     if (_wifiOnly) {
@@ -563,6 +582,7 @@ class DownloadService {
   }
 
   void _processQueueAllowed() {
+    if (_disposed) return;
     final slots = _maxConcurrent - _activeTaskIds.length;
     if (slots <= 0) return;
     final pendingTasks = _tasks
@@ -571,28 +591,34 @@ class DownloadService {
         .toList();
     for (final task in pendingTasks) {
       if (!_activeTaskIds.add(task.id)) continue;
-      unawaited(_startDownload(task));
+      final revision = task.attemptRevision + 1;
+      _updateTask(task.id, attemptRevision: revision);
+      final attempt = _DownloadAttempt(task.id, revision);
+      _attempts[task.id] = attempt;
+      attempt.future = _runAttempt(_taskById(task.id)!, attempt);
+      unawaited(attempt.future);
     }
   }
 
   void _onNetworkChanged(DownloadNetwork network) {
     if (!_wifiOnly) return;
     if (network == DownloadNetwork.wifi) {
-      _processQueueAllowed();
+      _processQueue();
       return;
     }
-    for (final entry in _cancelTokens.entries.toList()) {
-      _cancelTokens.remove(entry.key);
-      _activeTaskIds.remove(entry.key);
-      entry.value.cancel('wifi policy');
-      _updateTask(entry.key, status: DownloadStatus.pending, progress: 0.0);
+    for (final attempt in _attempts.values.toList()) {
+      _invalidate(attempt, status: DownloadStatus.pending, progress: 0.0);
+      attempt.cancelToken.cancel('wifi policy');
     }
   }
 
   void pauseTask(String taskId) {
-    final token = _cancelTokens.remove(taskId);
-    _activeTaskIds.remove(taskId);
-    token?.cancel('paused');
+    final attempt = _attempts[taskId];
+    if (attempt != null) {
+      _invalidate(attempt, status: DownloadStatus.paused);
+      attempt.cancelToken.cancel('paused');
+      return;
+    }
     _updateTask(taskId, status: DownloadStatus.paused);
   }
 
@@ -611,32 +637,35 @@ class DownloadService {
     }
   }
 
-  String _partPathFor(String musicId) =>
-      '$_downloadDir/${safeDownloadBaseName(musicId)}.part';
+  String _partPathFor(String taskId, String musicId, int revision) =>
+      '$_downloadDir/${safeDownloadBaseName(musicId)}.'
+      '${safeDownloadBaseName(taskId)}.$revision.part';
 
   void cancelTask(String taskId) {
-    final token = _cancelTokens.remove(taskId);
-    _activeTaskIds.remove(taskId);
-    token?.cancel('cancelled');
+    final attempt = _attempts[taskId];
+    if (attempt != null) {
+      _invalidate(attempt);
+      attempt.cancelToken.cancel('cancelled');
+    }
     final task = _taskById(taskId);
     if (task != null) {
-      unawaited(_safeDelete(_partPathFor(task.musicId)));
       if (task.savePath != null) {
         unawaited(_safeDelete(task.savePath!));
       }
     }
     _tasks.removeWhere((t) => t.id == taskId);
-    _tasksController.add(_tasks);
+    _emitTasks();
     unawaited(_saveToStorage());
   }
 
   void retryTask(String taskId) {
     final task = _taskById(taskId);
     if (task == null) return;
-    final token = _cancelTokens.remove(taskId);
-    _activeTaskIds.remove(taskId);
-    token?.cancel('retry');
-    unawaited(_safeDelete(_partPathFor(task.musicId)));
+    final attempt = _attempts[taskId];
+    if (attempt != null) {
+      _invalidate(attempt);
+      attempt.cancelToken.cancel('retry');
+    }
     _updateTask(
       taskId,
       status: DownloadStatus.pending,
@@ -653,10 +682,14 @@ class DownloadService {
     if (task.savePath != null) {
       await _safeDelete(task.savePath!);
     }
-    await _safeDelete(_partPathFor(task.musicId));
+    final attempt = _attempts[taskId];
+    if (attempt != null) {
+      _invalidate(attempt);
+      attempt.cancelToken.cancel('deleted');
+    }
     await _cleanupSiblingFiles(safeDownloadBaseName(task.musicId), keep: '');
     _tasks.removeWhere((t) => t.id == taskId);
-    _tasksController.add(_tasks);
+    _emitTasks();
     await _saveToStorage();
   }
 
@@ -679,6 +712,7 @@ class DownloadService {
     int? fileSize,
     String? url,
     String? quality,
+    int? attemptRevision,
     bool persistProgress = false,
   }) {
     final index = _tasks.indexWhere((t) => t.id == taskId);
@@ -697,8 +731,9 @@ class DownloadService {
       fileSize: fileSize,
       url: url,
       quality: quality,
+      attemptRevision: attemptRevision,
     );
-    _tasksController.add(_tasks);
+    _emitTasks();
     final terminal = status == DownloadStatus.completed ||
         status == DownloadStatus.failed ||
         status == DownloadStatus.paused;
@@ -710,6 +745,64 @@ class DownloadService {
       if (persistProgress) _lastProgressPersistence = now;
       unawaited(_saveToStorage());
     }
+  }
+
+  bool _isCurrent(_DownloadAttempt attempt) {
+    return !_disposed &&
+        identical(_attempts[attempt.taskId], attempt) &&
+        _taskById(attempt.taskId)?.attemptRevision == attempt.revision;
+  }
+
+  void _updateCurrent(
+    _DownloadAttempt attempt, {
+    DownloadStatus? status,
+    double? progress,
+    int? speed,
+    String? errorMsg,
+    String? savePath,
+    bool clearSavePath = false,
+    bool clearErrorMsg = false,
+    DateTime? completedAt,
+    int? fileSize,
+    String? url,
+    String? quality,
+    bool persistProgress = false,
+  }) {
+    if (!_isCurrent(attempt)) return;
+    _updateTask(
+      attempt.taskId,
+      status: status,
+      progress: progress,
+      speed: speed,
+      errorMsg: errorMsg,
+      savePath: savePath,
+      clearSavePath: clearSavePath,
+      clearErrorMsg: clearErrorMsg,
+      completedAt: completedAt,
+      fileSize: fileSize,
+      url: url,
+      quality: quality,
+      persistProgress: persistProgress,
+    );
+  }
+
+  void _invalidate(
+    _DownloadAttempt attempt, {
+    DownloadStatus? status,
+    double? progress,
+  }) {
+    final task = _taskById(attempt.taskId);
+    if (task == null || task.attemptRevision != attempt.revision) return;
+    _updateTask(
+      attempt.taskId,
+      attemptRevision: attempt.revision + 1,
+      status: status,
+      progress: progress,
+    );
+  }
+
+  void _emitTasks() {
+    if (!_disposed && !_tasksController.isClosed) _tasksController.add(_tasks);
   }
 
   Future<List<DownloadTask>> getDownloadedTasks() async {
@@ -750,10 +843,14 @@ class DownloadService {
       if (task.savePath != null) {
         await _safeDelete(task.savePath!);
       }
-      await _safeDelete(_partPathFor(task.musicId));
+      final attempt = _attempts[task.id];
+      if (attempt != null) {
+        _invalidate(attempt);
+        attempt.cancelToken.cancel('cleared');
+      }
     }
     _tasks.clear();
-    _tasksController.add(_tasks);
+    _emitTasks();
     await _saveToStorage();
   }
 
@@ -778,7 +875,7 @@ class DownloadService {
         }
       }
     }
-    _tasksController.add(_tasks);
+    _emitTasks();
     await _saveToStorage();
   }
 
@@ -858,6 +955,10 @@ class DownloadService {
     } catch (_) {}
   }
 
+  Future<void> _safeDeleteOwned(String path, _DownloadAttempt attempt) async {
+    await _safeDelete(path);
+  }
+
   /// 将 .part 提升为最终文件；rename 失败时 copy+delete 兜底。
   Future<void> _promotePartFile(File part, String savePath) async {
     try {
@@ -888,7 +989,7 @@ class DownloadService {
       final name = entity.uri.pathSegments.isNotEmpty
           ? entity.uri.pathSegments.last
           : entity.path.split(Platform.pathSeparator).last;
-      if (name == '$baseName.part') continue;
+      if (name.endsWith('.part')) continue;
       if (!name.startsWith('$baseName.')) continue;
       if (entity.absolute.path == keepCanon) continue;
       await _safeDelete(entity.path);
@@ -905,14 +1006,19 @@ class DownloadService {
     return cleaned.length > 120 ? cleaned.substring(0, 120) : cleaned;
   }
 
-  void dispose() {
-    for (final t in _cancelTokens.values) {
-      t.cancel('disposed');
+  Future<void> dispose() async {
+    if (_disposed) return;
+    _disposed = true;
+    final attempts = _attempts.values.toList();
+    for (final attempt in attempts) {
+      _invalidate(attempt);
+      attempt.cancelToken.cancel('disposed');
     }
-    _cancelTokens.clear();
-    _connectivitySubscription?.cancel();
-    unawaited(_saveToStorage());
+    await _connectivitySubscription?.cancel();
+    await Future.wait(attempts.map((attempt) => attempt.future));
+    await _saveToStorage().catchError((_) {});
+    await _persistenceTail;
     _dio.close();
-    _tasksController.close();
+    await _tasksController.close();
   }
 }

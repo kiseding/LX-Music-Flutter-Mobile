@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../domain/download_service.dart';
@@ -44,7 +46,7 @@ final downloadServiceProvider = Provider<DownloadService>((ref) {
   });
   ref.onDispose(() {
     sub.cancel();
-    service.dispose();
+    unawaited(service.dispose());
   });
   return service;
 });
