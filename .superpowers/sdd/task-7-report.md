@@ -200,3 +200,96 @@ check exited cleanly.
   it; the synchronous disposed flag still prevents new work immediately, while
   accepted work finishes asynchronously as required.
 - Task 8 consumer/repository files were intentionally not modified.
+
+## Second Review Follow-up
+
+### RED Evidence
+
+Added focused race and boundary regressions before changing the service, then
+ran:
+
+```bash
+flutter test test/features/playlist/domain/playlist_service_test.dart
+```
+
+Result: `+18 -6`. The six new behavior groups failed for the expected reasons:
+
+- A mutation invoked during a pending valid load saved against empty state and
+  was then overwritten by initialization.
+- A mutation invoked during a pending repair load entered the mutation queue
+  before repair and replaced the loaded custom playlist.
+- `dispose` completed while a valid init load and its accepted mutation were
+  still pending.
+- `dispose` completed while a repair init load was still pending.
+- An exact recent head with a later duplicate ID incorrectly returned a no-op.
+- Invalid equal reorder indices incorrectly returned a no-op before either
+  index was validated.
+
+### GREEN Evidence
+
+After implementing the shared lifecycle queue, the focused service suite passed:
+
+```bash
+flutter test test/features/playlist/domain/playlist_service_test.dart
+```
+
+Result: `+24: All tests passed!`.
+
+The exact Task 7 verification passed:
+
+```bash
+flutter test test/features/playlist/domain/playlist_service_test.dart test/features/playlist/domain/playlist_test.dart test/features/playlist/domain/playlist_import_service_test.dart
+```
+
+Result: `+29: All tests passed!`.
+
+Targeted checks run before the final report update:
+
+```bash
+flutter analyze lib/features/playlist/domain/playlist_service.dart test/features/playlist/domain/playlist_service_test.dart
+dart format --output=none --set-exit-if-changed lib/features/playlist/domain/playlist_service.dart test/features/playlist/domain/playlist_service_test.dart
+git diff --check
+```
+
+Analyzer result: `No issues found`. The first formatter check detected one
+service file requiring canonical formatting; formatting was applied and all
+checks are rerun on the final files before commit.
+
+### Fixes
+
+- Initialization and mutations now use one error-isolating tail. `init()` starts
+  repository load at invocation time, then occupies the queue while awaiting
+  load, optional repair save, publication, and revision. A later accepted
+  mutation observes the initialized state and cannot be overwritten by repair.
+- Repair init persists and publishes directly inside its lifecycle job instead
+  of recursively entering mutation machinery, avoiding self-deadlock.
+- Concurrent init still shares one in-flight load. A failed init leaves the
+  queue usable and clears the coalesced future so a later init can retry.
+- `dispose()` marks the service unavailable synchronously, captures the shared
+  tail containing accepted init and mutation work, and closes revisions only
+  after that work has finished. No publication job remains after disposal
+  completes.
+- `addToRecent` accepts the exact head as a no-op only when no later song has
+  the same ID; duplicate cleanup remains one save and one revision.
+- Manual reorder validates `oldIndex` and the insertion-style `newIndex` range
+  before applying adjusted equal-index no-op detection.
+
+### Second Review Self-Review
+
+- Confirmed valid init publishes no revision, repair init publishes exactly one,
+  and an accepted post-init mutation retains its own one-save/one-revision
+  outcome.
+- Confirmed disposal tests cover pending valid init plus a queued mutation,
+  pending repair init, synchronous rejection of new work, stream closure, and
+  final state/revision coherence.
+- Confirmed the lifecycle queue catches each job error so failed init remains
+  retryable and cannot poison later queue work.
+- Confirmed prior ID validation, semantic equality, save-before-publication,
+  protected-list, no-op, and mutation-order behavior remains covered.
+- Confirmed only Task 7 service, service tests, and this report are intended for
+  the follow-up commit; Task 8 and unrelated worktree files remain untouched.
+
+### Second Review Concerns
+
+- Task 8 consumer migration remains outside Task 7 scope, consistent with the
+  original brief.

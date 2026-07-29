@@ -37,26 +37,32 @@ class PlaylistService {
       return Future.error(StateError('PlaylistService is disposed'));
     }
     if (_initialized) return Future.value();
-    return _initFuture ??= _initialize().whenComplete(() {
+    return _initFuture ??= _startInitialize().whenComplete(() {
       if (!_initialized) _initFuture = null;
     });
   }
 
-  Future<void> _initialize() async {
-    final loaded = await _repository.load();
+  Future<void> _startInitialize() {
+    final load = _repository.load();
+    return _enqueue(() => _initialize(load));
+  }
+
+  Future<void> _initialize(Future<PlaylistSnapshot> load) async {
+    final loaded = await load;
     _validatePlaylistIds(loaded.playlists, loadedState: true);
     final repaired = _withSystemPlaylists(loaded.playlists);
     _validatePlaylistIds(repaired, loadedState: true);
     final needsRepair = repaired.length != loaded.playlists.length;
     if (needsRepair) {
-      await _mutate<void>((_) => (
-            next: repaired,
-            result: null,
-            changed: true,
-          ));
-    } else {
-      _playlists.addAll(loaded.playlists);
+      await _repository.save(PlaylistSnapshot(
+        schemaVersion: 1,
+        playlists: repaired,
+      ));
     }
+    _playlists
+      ..clear()
+      ..addAll(repaired);
+    if (needsRepair) _revisionController.add(++_revision);
     _initialized = true;
   }
 
@@ -181,6 +187,13 @@ class PlaylistService {
       final index = _indexOf(current, playlistId);
       final existing = current[index];
       final songs = [...existing.songs];
+      RangeError.checkValidIndex(oldIndex, songs, 'oldIndex');
+      RangeError.checkValueInInterval(
+        newIndex,
+        0,
+        songs.length,
+        'newIndex',
+      );
       var destination = newIndex;
       if (oldIndex < destination) destination--;
       if (oldIndex == destination) {
@@ -228,6 +241,9 @@ class PlaylistService {
       if (existing.songs.isNotEmpty &&
           existing.songs.first.id == song.id &&
           _sameMusicItem(existing.songs.first, song) &&
+          !existing.songs
+              .skip(1)
+              .any((existingSong) => existingSong.id == song.id) &&
           existing.songs.length <= 100) {
         return (next: current, result: false, changed: false);
       }
@@ -319,26 +335,31 @@ class PlaylistService {
     if (_disposing) {
       return Future.error(StateError('PlaylistService is disposed'));
     }
+    return _enqueue(() async {
+      if (!_initialized) {
+        throw StateError('PlaylistService is not initialized');
+      }
+      final mutation = await operation(List<Playlist>.unmodifiable(_playlists));
+      if (!mutation.changed) return mutation.result;
+
+      final snapshot = PlaylistSnapshot(
+        schemaVersion: 1,
+        playlists: _withSystemPlaylists(mutation.next),
+      );
+      await _repository.save(snapshot);
+      _playlists
+        ..clear()
+        ..addAll(snapshot.playlists);
+      _revisionController.add(++_revision);
+      return mutation.result;
+    });
+  }
+
+  Future<T> _enqueue<T>(FutureOr<T> Function() operation) {
     final completer = Completer<T>();
     _tail = _tail.then((_) async {
       try {
-        final mutation =
-            await operation(List<Playlist>.unmodifiable(_playlists));
-        if (!mutation.changed) {
-          completer.complete(mutation.result);
-          return;
-        }
-
-        final snapshot = PlaylistSnapshot(
-          schemaVersion: 1,
-          playlists: _withSystemPlaylists(mutation.next),
-        );
-        await _repository.save(snapshot);
-        _playlists
-          ..clear()
-          ..addAll(snapshot.playlists);
-        _revisionController.add(++_revision);
-        completer.complete(mutation.result);
+        completer.complete(await operation());
       } catch (error, stackTrace) {
         completer.completeError(error, stackTrace);
       }

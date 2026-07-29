@@ -454,6 +454,136 @@ void main() {
     await service.dispose();
   });
 
+  test('mutation invoked during init waits for loaded state', () async {
+    final repository = DeferredLoadPlaylistRepository(systemSnapshot(
+      additional: [playlist('loaded')],
+    ));
+    final service = PlaylistService(
+      repository: repository,
+      createId: () => 'created',
+    );
+
+    final init = service.init();
+    final mutation = service.createPlaylist(name: 'Created during load');
+    await Future<void>.delayed(Duration.zero);
+
+    expect(repository.saves, isEmpty);
+    expect(service.playlists, isEmpty);
+
+    repository.completeLoad();
+    await init;
+    await mutation;
+
+    expect(repository.saves, hasLength(1));
+    expect(
+      repository.saves.single.playlists.map((item) => item.id),
+      containsAll(['favorites', 'recent', 'loaded', 'created']),
+    );
+    expect(
+      service.playlists.map((item) => item.id),
+      ['favorites', 'recent', 'loaded', 'created'],
+    );
+    await service.dispose();
+  });
+
+  test('init repair precedes a mutation accepted during load', () async {
+    final repository = DeferredLoadPlaylistRepository(PlaylistSnapshot(
+      schemaVersion: 1,
+      playlists: [playlist('loaded')],
+    ));
+    final service = PlaylistService(
+      repository: repository,
+      clock: () => _now,
+      createId: () => 'created',
+    );
+
+    final init = service.init();
+    final mutation = service.createPlaylist(name: 'Created during repair');
+    repository.completeLoad();
+    await init;
+    await mutation;
+
+    expect(repository.saves, hasLength(2));
+    expect(
+      repository.saves.first.playlists.map((item) => item.id),
+      ['loaded', 'favorites', 'recent'],
+    );
+    expect(
+      repository.saves.last.playlists.map((item) => item.id),
+      ['loaded', 'favorites', 'recent', 'created'],
+    );
+    expect(
+      service.playlists.map((item) => item.id),
+      ['loaded', 'favorites', 'recent', 'created'],
+    );
+    expect(service.revision, 2);
+    await service.dispose();
+  });
+
+  test('dispose drains pending init and its queued mutation before closing',
+      () async {
+    final repository = DeferredLoadPlaylistRepository(systemSnapshot());
+    final service = PlaylistService(
+      repository: repository,
+      createId: () => 'accepted',
+    );
+    final revisions = <int>[];
+    final subscription = service.revisions.listen(revisions.add);
+
+    final init = service.init();
+    final mutation = service.createPlaylist(name: 'Accepted');
+    final disposal = service.dispose();
+    var disposed = false;
+    disposal.then((_) => disposed = true);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(disposed, isFalse);
+    expect(repository.saves, isEmpty);
+    await expectLater(
+      service.createPlaylist(name: 'Rejected', id: 'rejected'),
+      throwsStateError,
+    );
+
+    repository.completeLoad();
+    await Future.wait([init, mutation, disposal]);
+
+    expect(service.getPlaylist('accepted'), isNotNull);
+    expect(repository.saves, hasLength(1));
+    expect(service.revision, 1);
+    expect(revisions, [1]);
+    expect(await service.revisions.isEmpty, isTrue);
+    await subscription.cancel();
+  });
+
+  test('dispose drains a pending repair init before closing revisions',
+      () async {
+    final repository = DeferredLoadPlaylistRepository(PlaylistSnapshot(
+      schemaVersion: 1,
+      playlists: [playlist('loaded')],
+    ));
+    final service = PlaylistService(repository: repository, clock: () => _now);
+    final revisions = <int>[];
+    final subscription = service.revisions.listen(revisions.add);
+
+    final init = service.init();
+    final disposal = service.dispose();
+    var disposed = false;
+    disposal.then((_) => disposed = true);
+    await Future<void>.delayed(Duration.zero);
+    expect(disposed, isFalse);
+
+    repository.completeLoad();
+    await Future.wait([init, disposal]);
+
+    expect(repository.saves, hasLength(1));
+    expect(service.playlists.map((item) => item.id),
+        ['loaded', 'favorites', 'recent']);
+    expect(service.revision, 1);
+    expect(revisions, [1]);
+    expect(await service.revisions.isEmpty, isTrue);
+    await subscription.cancel();
+  });
+
   test('addToRecent refreshes same-id content but exact repeats are no-ops',
       () async {
     final original = detailedSong('a', name: 'Old', meta: {'version': 1});
@@ -475,6 +605,48 @@ void main() {
 
     expect(repository.saves, hasLength(1));
     expect(service.revision, 1);
+    await service.dispose();
+  });
+
+  test('addToRecent dedupes an exact head repeated later', () async {
+    final repeated = detailedSong('a');
+    final repository = MemoryPlaylistRepository(PlaylistSnapshot(
+      schemaVersion: 1,
+      playlists: [
+        playlist('favorites'),
+        playlist('recent', songs: [repeated, song('b'), repeated]),
+      ],
+    ));
+    final service = PlaylistService(repository: repository, clock: () => _now);
+    await service.init();
+
+    expect(await service.addToRecent(repeated), isTrue);
+
+    expect(service.recent!.songs.map((item) => item.id), ['a', 'b']);
+    expect(repository.saves, hasLength(1));
+    expect(service.revision, 1);
+    await service.dispose();
+  });
+
+  test('reorder validates both indices before adjusted equal-index no-op',
+      () async {
+    final repository = MemoryPlaylistRepository(systemSnapshot(additional: [
+      playlist('custom', songs: [song('a'), song('b')]),
+    ]));
+    final service = PlaylistService(repository: repository);
+    await service.init();
+
+    await expectLater(
+      service.sortSongsInPlaylist('custom', oldIndex: 2, newIndex: 2),
+      throwsRangeError,
+    );
+    await expectLater(
+      service.sortSongsInPlaylist('custom', oldIndex: 1, newIndex: 3),
+      throwsRangeError,
+    );
+
+    expect(repository.saves, isEmpty);
+    expect(service.revision, 0);
     await service.dispose();
   });
 
@@ -611,6 +783,22 @@ final class RetryLoadPlaylistRepository implements PlaylistRepository {
     _load.completeError(error);
     _load = Completer<PlaylistSnapshot>();
   }
+
+  void completeLoad() => _load.complete(snapshot);
+
+  @override
+  Future<void> save(PlaylistSnapshot value) async => saves.add(value);
+}
+
+final class DeferredLoadPlaylistRepository implements PlaylistRepository {
+  DeferredLoadPlaylistRepository(this.snapshot);
+
+  final PlaylistSnapshot snapshot;
+  final List<PlaylistSnapshot> saves = [];
+  final Completer<PlaylistSnapshot> _load = Completer<PlaylistSnapshot>();
+
+  @override
+  Future<PlaylistSnapshot> load() => _load.future;
 
   void completeLoad() => _load.complete(snapshot);
 
