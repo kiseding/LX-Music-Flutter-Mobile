@@ -167,6 +167,27 @@ void main() {
             .id,
         'existing');
   });
+
+  test('save durably flushes and closes previous before replacing current',
+      () async {
+    final codec = const PlaylistSnapshotCodec();
+    await File('${tempDir.path}/playlists.v1.json')
+        .writeAsString(codec.encode(snapshotFixture(id: 'existing')));
+    final fileSystem = RecordingDurabilityFileSystem();
+    final repository = repositoryFor(
+      tempDir,
+      await preferences({}),
+      fileSystem: fileSystem,
+    );
+
+    await repository.save(snapshotFixture(id: 'next'));
+
+    expect(fileSystem.events, [
+      'copy previous',
+      'flush and close previous',
+      'replace current',
+    ]);
+  });
 }
 
 FilePlaylistRepository repositoryFor(
@@ -238,5 +259,33 @@ final class FailingRenameFileSystem extends PlaylistFileSystem {
       throw FileSystemException('replacement failed', from);
     }
     return super.rename(from, to);
+  }
+}
+
+final class RecordingDurabilityFileSystem extends PlaylistFileSystem {
+  final events = <String>[];
+
+  @override
+  Future<void> copy(String from, String to) async {
+    await super.copy(from, to);
+    if (to.endsWith('playlists.v1.previous')) {
+      events.add('copy previous');
+    }
+  }
+
+  @override
+  Future<void> flushAndClose(String path) async {
+    await super.flushAndClose(path);
+    if (path.endsWith('playlists.v1.previous')) {
+      events.add('flush and close previous');
+    }
+  }
+
+  @override
+  Future<void> rename(String from, String to) async {
+    if (from.endsWith('playlists.v1.tmp') && to.endsWith('playlists.v1.json')) {
+      events.add('replace current');
+    }
+    await super.rename(from, to);
   }
 }

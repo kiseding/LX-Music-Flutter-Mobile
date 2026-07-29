@@ -13,6 +13,12 @@ class PlaylistFileSystem {
   Future<void> write(String path, String contents, {bool flush = false}) =>
       File(path).writeAsString(contents, flush: flush);
   Future<void> copy(String from, String to) => File(from).copy(to);
+  Future<void> flushAndClose(String path) async {
+    final file = await File(path).open(mode: FileMode.append);
+    await file.flush();
+    await file.close();
+  }
+
   Future<void> rename(String from, String to) => File(from).rename(to);
   Future<void> delete(String path) => File(path).delete();
 }
@@ -92,6 +98,7 @@ final class FilePlaylistRepository implements PlaylistRepository {
       }
       if (await _files.exists(paths.current)) {
         await _files.copy(paths.current, paths.previous);
+        await _files.flushAndClose(paths.previous);
       }
       try {
         await _files.rename(paths.temporary, paths.current);
