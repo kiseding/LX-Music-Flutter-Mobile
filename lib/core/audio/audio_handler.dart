@@ -359,6 +359,27 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     }
   }
 
+  bool _leaseMatchesUrl(PlaybackCacheLease lease, String url) {
+    final uri = Uri.tryParse(url);
+    if (uri == null || uri.scheme != 'file') return false;
+    try {
+      return uri.toFilePath() == lease.path;
+    } on FormatException {
+      return false;
+    }
+  }
+
+  Future<PlaybackCacheLease?> _takePendingLeaseForUrl(
+    String mediaId,
+    String url,
+  ) async {
+    final lease = _pendingResolutions[mediaId]?.leaseOrNull;
+    if (lease == null) return null;
+    if (_leaseMatchesUrl(lease, url)) return lease;
+    await _discardStagedLease(mediaId, lease);
+    return null;
+  }
+
   Future<PlaybackCachePathClassification> _classifyExistingCachePath(
       String url) async {
     final uri = Uri.tryParse(url);
@@ -1106,25 +1127,29 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       try {
         String? url = currentUrl;
         var checkedExistingPath = false;
+        var rejectedResolverProducedFile = false;
 
         if (canReuse && url != null && url.isNotEmpty) {
-          checkedExistingPath = true;
-          final classification = await _classifyExistingCachePath(url);
-          if (classification is RejectedPlaybackCachePath) {
-            final staleExtras =
-                Map<String, dynamic>.from(_queue[index].extras ?? {});
-            staleExtras
-              ..remove('url')
-              ..remove('remoteUrl')
-              ..remove('cacheKey')
-              ..remove('actualQuality');
-            final clearedItem = _queue[index].copyWith(extras: staleExtras);
-            _queue[index] = clearedItem;
-            queue.add(List.from(_queue));
-            mediaItem.add(clearedItem);
-            url = null;
-          } else if (classification is LeasedPlaybackCachePath) {
-            stagedLease = classification.lease;
+          stagedLease = await _takePendingLeaseForUrl(itemId, url);
+          if (stagedLease == null) {
+            checkedExistingPath = true;
+            final classification = await _classifyExistingCachePath(url);
+            if (classification is RejectedPlaybackCachePath) {
+              final staleExtras =
+                  Map<String, dynamic>.from(_queue[index].extras ?? {});
+              staleExtras
+                ..remove('url')
+                ..remove('remoteUrl')
+                ..remove('cacheKey')
+                ..remove('actualQuality');
+              final clearedItem = _queue[index].copyWith(extras: staleExtras);
+              _queue[index] = clearedItem;
+              queue.add(List.from(_queue));
+              mediaItem.add(clearedItem);
+              url = null;
+            } else if (classification is LeasedPlaybackCachePath) {
+              stagedLease = classification.lease;
+            }
           }
         }
 
@@ -1163,25 +1188,42 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
             url.isNotEmpty &&
             stagedLease == null &&
             !checkedExistingPath) {
-          final classification = await _classifyExistingCachePath(url);
-          if (classification is RejectedPlaybackCachePath) {
-            final staleExtras =
-                Map<String, dynamic>.from(_queue[transactionIndex].extras ?? {});
-            staleExtras
-              ..remove('url')
-              ..remove('remoteUrl')
-              ..remove('cacheKey')
-              ..remove('actualQuality');
-            final clearedItem = _queue[transactionIndex].copyWith(
-              extras: staleExtras,
-            );
-            _queue[transactionIndex] = clearedItem;
-            queue.add(List.from(_queue));
-            mediaItem.add(clearedItem);
-            url = null;
-          } else if (classification is LeasedPlaybackCachePath) {
-            stagedLease = classification.lease;
+          stagedLease = await _takePendingLeaseForUrl(itemId, url);
+          if (stagedLease == null) {
+            final classification = await _classifyExistingCachePath(url);
+            if (classification is RejectedPlaybackCachePath) {
+              final staleExtras = Map<String, dynamic>.from(
+                _queue[transactionIndex].extras ?? {},
+              );
+              staleExtras
+                ..remove('url')
+                ..remove('remoteUrl')
+                ..remove('cacheKey')
+                ..remove('actualQuality');
+              final clearedItem = _queue[transactionIndex].copyWith(
+                extras: staleExtras,
+              );
+              _queue[transactionIndex] = clearedItem;
+              queue.add(List.from(_queue));
+              mediaItem.add(clearedItem);
+              url = null;
+              rejectedResolverProducedFile = true;
+            } else if (classification is LeasedPlaybackCachePath) {
+              stagedLease = classification.lease;
+            }
           }
+        }
+
+        if (url == null &&
+            rejectedResolverProducedFile &&
+            urlResolver != null) {
+          final resolveExtras = item.extras == null
+              ? <String, dynamic>{}
+              : Map<String, dynamic>.from(item.extras!);
+          resolveExtras.remove('url');
+          resolveExtras.remove('remoteUrl');
+          resolveExtras['requestedQuality'] = preferredQuality;
+          url = await urlResolver!(item.id, resolveExtras);
         }
 
         if (url == null || url.isEmpty) {

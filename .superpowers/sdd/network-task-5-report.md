@@ -97,3 +97,20 @@ including re-acquisition for cached URL reuse after preload or stop.
   unleased.
 - Handler cancellation retains existing shared-key semantics: foreground
   cancellation cancels all callers sharing an inflight key.
+
+## Important Review Fix
+
+- A resolver-produced cached `file://` URL now adopts a matching pending lease
+  before any cache-path classification. This preserves the resolver's already
+  validated ownership when a classification-side LRU persistence write would
+  fail.
+- A mismatched pending lease is discarded before classifying the returned file
+  URL. If that file URL is rejected, the handler clears stale metadata and makes
+  one fresh resolution attempt; a validated remote result streams explicitly.
+- Strict RED: the matching-lease test failed by invoking the classifier and
+  reporting its simulated persistence error; the stale-mismatch test failed by
+  neither releasing the stale lease nor resolving the remote fallback.
+- GREEN: `flutter test test/core/audio/playback_resolution_test.dart` passed 21
+  tests. `flutter test test/core/audio test/core/network` passed 330 tests.
+  Targeted analysis of the handler and regression test reported no issues.
+- Full `flutter analyze` reports 23 existing diagnostics outside this change.

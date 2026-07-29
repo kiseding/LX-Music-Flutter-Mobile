@@ -528,9 +528,86 @@ void main() {
         classifyExisting: (path) async => const NonCacheLocalPlaybackPath(),
       );
 
-      await handler.setPlaylist([_cachedItem('local-boundary', '/tmp/local.mp3')]);
+      await handler
+          .setPlaylist([_cachedItem('local-boundary', '/tmp/local.mp3')]);
 
       expect(player.sourceInstallCount, 1);
+    });
+
+    test('resolver cached lease bypasses file reclassification', () async {
+      final player = _ReuseAudioPlayer();
+      final handler = LxAudioHandler(player: player);
+      addTearDown(player.dispose);
+      final lease = _FakeLease('/cache/resolved.mp3', 'resolved', (_) {});
+      var classificationCalls = 0;
+      final errors = <String>[];
+      handler.attachPlaybackCache(
+        classifyExisting: (path) async {
+          classificationCalls++;
+          throw StateError('LRU persistence failed');
+        },
+      );
+      handler.onError = errors.add;
+      handler.urlResolver = (id, [extras]) async {
+        final resolved = CachedPlayback(lease.asLease(), {
+          'url': PlaybackCacheService.toPlayableUri(lease.path),
+        });
+        handler.noteResolvedPlayback(id, resolved);
+        return resolved.playableUrl;
+      };
+
+      await handler.setPlaylist([_unresolvedItem('resolved')]);
+
+      expect(classificationCalls, 0);
+      expect(player.sourceInstallCount, 1);
+      expect(errors, isEmpty);
+      expect(lease.releaseCount, 0);
+    });
+
+    test(
+        'stale pending lease releases before rejected file re-resolves to stream',
+        () async {
+      final player = _ReuseAudioPlayer();
+      final handler = LxAudioHandler(player: player);
+      addTearDown(player.dispose);
+      final stale = _FakeLease('/cache/stale.mp3', 'stale', (_) {});
+      final staleUrl = PlaybackCacheService.toPlayableUri(stale.path);
+      final replacementUrl =
+          PlaybackCacheService.toPlayableUri('/cache/new.mp3');
+      const remoteUrl = 'https://cdn.example/fallback.mp3';
+      var classifyCalls = 0;
+      var resolveCalls = 0;
+      handler.attachPlaybackCache(
+        classifyExisting: (path) async {
+          classifyCalls++;
+          expect(path, '/cache/new.mp3');
+          return const RejectedPlaybackCachePath();
+        },
+      );
+      handler.urlResolver = (id, [extras]) async {
+        resolveCalls++;
+        if (resolveCalls == 1) {
+          handler.noteResolvedPlayback(
+            id,
+            CachedPlayback(stale.asLease(), {'url': staleUrl}),
+          );
+          return replacementUrl;
+        }
+        expect(stale.releaseCount, 1);
+        handler.noteResolvedPlayback(
+          id,
+          const StreamingPlayback(remoteUrl, {'url': remoteUrl}),
+        );
+        return remoteUrl;
+      };
+
+      await handler.setPlaylist([_unresolvedItem('stale')]);
+
+      expect(classifyCalls, 1);
+      expect(resolveCalls, 2);
+      expect(player.sourceInstallCount, 1);
+      expect(stale.releaseCount, 1);
+      expect(handler.mediaItem.value?.extras?['url'], remoteUrl);
     });
 
     test('failed cached source install releases the newly acquired lease',
@@ -558,6 +635,12 @@ MediaItem _cachedItem(String id, String path) => MediaItem(
         'url': PlaybackCacheService.toPlayableUri(path),
         'requestedQuality': '320k',
       },
+    );
+
+MediaItem _unresolvedItem(String id) => MediaItem(
+      id: id,
+      title: id,
+      extras: const {'requestedQuality': '320k'},
     );
 
 class _ReuseAudioPlayer extends AudioPlayer {
