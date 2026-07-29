@@ -65,6 +65,7 @@ class CloudApiClient {
   final SecureTokenStore _secureStore;
   final Future<SharedPreferences> Function() _preferences;
   final Future<CloudSessionPreferences> Function() _sessionPreferences;
+  final Future<CloudSessionPreferences> Function() _baseUrlPreferences;
 
   String? _baseUrl;
   String? _token;
@@ -72,13 +73,16 @@ class CloudApiClient {
   String? _role;
   String? _configurationError;
   int _sessionRevision = 0;
+  int _baseUrlRevision = 0;
   Future<void> _sessionMutation = Future.value();
+  Future<void> _baseUrlMutation = Future.value();
 
   CloudApiClient({
     Dio? dio,
     SecureTokenStore? secureStore,
     Future<SharedPreferences> Function()? preferences,
     Future<CloudSessionPreferences> Function()? sessionPreferences,
+    Future<CloudSessionPreferences> Function()? baseUrlPreferences,
   })  : _dio = dio ??
             Dio(BaseOptions(
               connectTimeout: const Duration(seconds: 12),
@@ -88,6 +92,10 @@ class CloudApiClient {
         _secureStore = secureStore ?? FlutterSecureTokenStore(),
         _preferences = preferences ?? SharedPreferences.getInstance,
         _sessionPreferences = sessionPreferences ??
+            (() async => _SharedPreferencesCloudSessionPreferences(
+                  await (preferences ?? SharedPreferences.getInstance)(),
+                )),
+        _baseUrlPreferences = baseUrlPreferences ??
             (() async => _SharedPreferencesCloudSessionPreferences(
                   await (preferences ?? SharedPreferences.getInstance)(),
                 ));
@@ -104,6 +112,8 @@ class CloudApiClient {
 
   Future<void> load() async {
     final revision = _sessionRevision;
+    final baseUrlRevision = _baseUrlRevision;
+    final canAssignBaseUrl = baseUrlRevision == 0;
     final prefs = await _preferences();
     final savedBaseUrl = prefs.getString(_kBase);
     String? baseUrl;
@@ -116,10 +126,14 @@ class CloudApiClient {
       }
     }
     if (prefs.getString(_kTokenInvalidated) == 'true') {
-      if (_sessionRevision != revision) return;
-      _baseUrl = baseUrl;
-      _configurationError =
-          'Cloud credential was invalidated after interrupted persistence. Please sign in again.';
+      if (_sessionRevision != revision || _baseUrlRevision != baseUrlRevision) {
+        return;
+      }
+      if (canAssignBaseUrl) {
+        _baseUrl = baseUrl;
+        _configurationError =
+            'Cloud credential was invalidated after interrupted persistence. Please sign in again.';
+      }
       _token = null;
       _username = prefs.getString(_kUsername);
       _role = prefs.getString(_kRole);
@@ -137,9 +151,13 @@ class CloudApiClient {
     final username = prefs.getString(_kUsername);
     final role = prefs.getString(_kRole);
 
-    if (_sessionRevision != revision) return;
-    _baseUrl = baseUrl;
-    _configurationError = configurationError;
+    if (_sessionRevision != revision || _baseUrlRevision != baseUrlRevision) {
+      return;
+    }
+    if (canAssignBaseUrl) {
+      _baseUrl = baseUrl;
+      _configurationError = configurationError;
+    }
     _token = token;
     _username = username;
     _role = role;
@@ -147,11 +165,49 @@ class CloudApiClient {
 
   Future<void> setBaseUrl(String url) async {
     final validated = validateHttpsServiceUrl(url);
-    _sessionRevision++;
+    ++_sessionRevision;
+    final revision = ++_baseUrlRevision;
+    final previousBaseUrl = _baseUrl;
+    final previousConfigurationError = _configurationError;
     _baseUrl = validated;
     _configurationError = null;
-    final prefs = await _preferences();
-    await prefs.setString(_kBase, validated);
+    await _runBaseUrlMutation(() => _persistBaseUrlLocked(
+          validated: validated,
+          expectedRevision: revision,
+          previousBaseUrl: previousBaseUrl,
+          previousConfigurationError: previousConfigurationError,
+        ));
+  }
+
+  Future<T> _runBaseUrlMutation<T>(Future<T> Function() operation) {
+    final previous = _baseUrlMutation;
+    final completed = Completer<void>();
+    _baseUrlMutation = completed.future;
+    return previous.then((_) => operation()).whenComplete(completed.complete);
+  }
+
+  Future<void> _persistBaseUrlLocked({
+    required String validated,
+    required int expectedRevision,
+    required String? previousBaseUrl,
+    required String? previousConfigurationError,
+  }) async {
+    if (!_ownsBaseUrlRevision(expectedRevision)) return;
+    try {
+      final preferences = await _baseUrlPreferences();
+      if (!_ownsBaseUrlRevision(expectedRevision)) return;
+      await preferences.setString(_kBase, validated);
+      // A later revision is queued behind this write and owns the final value.
+      if (!_ownsBaseUrlRevision(expectedRevision)) return;
+      _baseUrl = validated;
+      _configurationError = null;
+    } catch (_) {
+      if (!_ownsBaseUrlRevision(expectedRevision)) return;
+      _baseUrl = previousBaseUrl;
+      _configurationError = previousConfigurationError ??
+          'Cloud server address could not be saved. Please try again.';
+      rethrow;
+    }
   }
 
   Future<_CloudSessionSnapshot> _snapshotSession(
@@ -344,6 +400,9 @@ class CloudApiClient {
 
   bool _ownsRevision(int? expectedRevision) =>
       expectedRevision == null || _sessionRevision == expectedRevision;
+
+  bool _ownsBaseUrlRevision(int expectedRevision) =>
+      _baseUrlRevision == expectedRevision;
 
   Future<void> _compensateStaleCleanup(
     CloudSessionPreferences preferences,

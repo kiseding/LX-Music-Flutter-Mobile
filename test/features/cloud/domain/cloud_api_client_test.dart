@@ -169,6 +169,42 @@ final class FakeCloudSessionPreferences implements CloudSessionPreferences {
   }
 }
 
+final class DelayedBaseUrlPreferences implements CloudSessionPreferences {
+  DelayedBaseUrlPreferences(this.values);
+
+  final Map<String, String> values;
+  final Map<String, Completer<void>> _started = {};
+  final Map<String, Completer<void>> _pauses = {};
+  String? failSetValue;
+
+  Future<void> startedFor(String value) =>
+      _started.putIfAbsent(value, Completer<void>.new).future;
+
+  void pause(String value) {
+    _pauses[value] = Completer<void>();
+  }
+
+  void release(String value) => _pauses[value]!.complete();
+
+  @override
+  String? getString(String key) => values[key];
+
+  @override
+  Future<void> remove(String key) async {
+    values.remove(key);
+  }
+
+  @override
+  Future<void> setString(String key, String value) async {
+    final started = _started.putIfAbsent(value, Completer<void>.new);
+    if (!started.isCompleted) started.complete();
+    final pause = _pauses[value];
+    if (pause != null) await pause.future;
+    if (value == failSetValue) throw StateError('set $key failed');
+    values[key] = value;
+  }
+}
+
 Dio responseDio({
   int statusCode = 200,
   Object? data,
@@ -238,6 +274,89 @@ void main() {
     expect(client.baseUrl, 'https://cloud.example.com/api');
     final prefs = await SharedPreferences.getInstance();
     expect(prefs.getString('cloud_api_base'), 'https://cloud.example.com/api');
+  });
+
+  test('a stale base URL write cannot overwrite a newer durable URL', () async {
+    final preferences = DelayedBaseUrlPreferences({});
+    preferences.pause('https://old.example');
+    final client = CloudApiClient(
+      baseUrlPreferences: () async => preferences,
+    );
+
+    final old = client.setBaseUrl('https://old.example');
+    await preferences.startedFor('https://old.example');
+    final newer = client.setBaseUrl('https://new.example');
+    preferences.release('https://old.example');
+    await Future.wait<void>([old, newer]);
+
+    expect(client.baseUrl, 'https://new.example');
+    expect(preferences.values['cloud_api_base'], 'https://new.example');
+  });
+
+  test('a delayed base URL write survives a newer login', () async {
+    final preferences = DelayedBaseUrlPreferences({});
+    preferences.pause('https://new.example');
+    final client = CloudApiClient(
+      dio: responseDio(data: {
+        'token': 'token',
+        'username': 'user',
+        'role': 'user',
+      }),
+      secureStore: FakeSecureTokenStore(),
+      baseUrlPreferences: () async => preferences,
+    );
+
+    final setBaseUrl = client.setBaseUrl('https://new.example');
+    await preferences.startedFor('https://new.example');
+    final login = client.login('user', 'password');
+    preferences.release('https://new.example');
+    await Future.wait<void>([setBaseUrl, login]);
+
+    expect(client.baseUrl, 'https://new.example');
+    expect(preferences.values['cloud_api_base'], 'https://new.example');
+    expect(client.token, 'token');
+  });
+
+  test('a delayed base URL write survives a concurrent load', () async {
+    SharedPreferences.setMockInitialValues({
+      'cloud_api_base': 'https://old.example',
+    });
+    final preferences = DelayedBaseUrlPreferences({
+      'cloud_api_base': 'https://old.example',
+    });
+    preferences.pause('https://new.example');
+    final client = CloudApiClient(
+      secureStore: FakeSecureTokenStore(),
+      baseUrlPreferences: () async => preferences,
+    );
+
+    final setBaseUrl = client.setBaseUrl('https://new.example');
+    await preferences.startedFor('https://new.example');
+    final load = client.load();
+    preferences.release('https://new.example');
+    await Future.wait<void>([setBaseUrl, load]);
+
+    expect(client.baseUrl, 'https://new.example');
+    expect(preferences.values['cloud_api_base'], 'https://new.example');
+  });
+
+  test('a failed current base URL write restores the prior coherent state',
+      () async {
+    final preferences = DelayedBaseUrlPreferences({});
+    final client = CloudApiClient(
+      baseUrlPreferences: () async => preferences,
+    );
+    await client.setBaseUrl('https://old.example');
+    preferences.failSetValue = 'https://new.example';
+
+    await expectLater(
+      client.setBaseUrl('https://new.example'),
+      throwsStateError,
+    );
+
+    expect(client.baseUrl, 'https://old.example');
+    expect(preferences.values['cloud_api_base'], 'https://old.example');
+    expect(client.configurationError, contains('could not be saved'));
   });
 
   test('path-prefixed base constructs the expected login endpoint', () async {
