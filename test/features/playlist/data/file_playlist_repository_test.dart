@@ -184,8 +184,41 @@ void main() {
 
     expect(fileSystem.events, [
       'copy previous',
-      'flush and close previous',
-      'replace current',
+      'flush previous completed',
+      'close previous completed',
+      'replace current invoked',
+      'replace current completed',
+    ]);
+  });
+
+  test('flush failure closes previous without replacing readable current',
+      () async {
+    final codec = const PlaylistSnapshotCodec();
+    await File('${tempDir.path}/playlists.v1.json')
+        .writeAsString(codec.encode(snapshotFixture(id: 'existing')));
+    final fileSystem = FlushFailingFileSystem();
+    final repository = repositoryFor(
+      tempDir,
+      await preferences({}),
+      fileSystem: fileSystem,
+    );
+
+    await expectLater(repository.save(snapshotFixture(id: 'next')),
+        throwsA(isA<FileSystemException>()));
+
+    expect(
+        codec
+            .decode(
+                await File('${tempDir.path}/playlists.v1.json').readAsString())
+            .playlists
+            .single
+            .id,
+        'existing');
+    expect(fileSystem.replacementRenameInvocations, 0);
+    expect(fileSystem.events, [
+      'flush previous invoked',
+      'close previous invoked',
+      'close previous completed',
     ]);
   });
 }
@@ -274,18 +307,77 @@ final class RecordingDurabilityFileSystem extends PlaylistFileSystem {
   }
 
   @override
-  Future<void> flushAndClose(String path) async {
-    await super.flushAndClose(path);
-    if (path.endsWith('playlists.v1.previous')) {
-      events.add('flush and close previous');
-    }
+  Future<PlaylistOpenFile> openForAppend(String path) async {
+    final file = await super.openForAppend(path);
+    return path.endsWith('playlists.v1.previous')
+        ? RecordingOpenFile(file, events)
+        : file;
   }
 
   @override
   Future<void> rename(String from, String to) async {
     if (from.endsWith('playlists.v1.tmp') && to.endsWith('playlists.v1.json')) {
-      events.add('replace current');
+      events.add('replace current invoked');
     }
     await super.rename(from, to);
+    if (from.endsWith('playlists.v1.tmp') && to.endsWith('playlists.v1.json')) {
+      events.add('replace current completed');
+    }
+  }
+}
+
+final class RecordingOpenFile implements PlaylistOpenFile {
+  RecordingOpenFile(this.file, this.events);
+
+  final PlaylistOpenFile file;
+  final List<String> events;
+
+  @override
+  Future<void> flush() async {
+    await file.flush();
+    events.add('flush previous completed');
+  }
+
+  @override
+  Future<void> close() async {
+    await file.close();
+    events.add('close previous completed');
+  }
+}
+
+final class FlushFailingFileSystem extends PlaylistFileSystem {
+  final events = <String>[];
+  var replacementRenameInvocations = 0;
+
+  @override
+  Future<PlaylistOpenFile> openForAppend(String path) async {
+    return FlushFailingOpenFile(events);
+  }
+
+  @override
+  Future<void> rename(String from, String to) async {
+    if (from.endsWith('playlists.v1.tmp') && to.endsWith('playlists.v1.json')) {
+      replacementRenameInvocations++;
+    }
+    await super.rename(from, to);
+  }
+}
+
+final class FlushFailingOpenFile implements PlaylistOpenFile {
+  FlushFailingOpenFile(this.events);
+
+  final List<String> events;
+
+  @override
+  Future<void> flush() async {
+    events.add('flush previous invoked');
+    throw const FileSystemException('flush failed');
+  }
+
+  @override
+  Future<void> close() async {
+    events.add('close previous invoked');
+    await Future<void>.value();
+    events.add('close previous completed');
   }
 }

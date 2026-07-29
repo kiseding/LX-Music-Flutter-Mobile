@@ -5,6 +5,25 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'playlist_repository.dart';
 
+abstract interface class PlaylistOpenFile {
+  Future<void> flush();
+  Future<void> close();
+}
+
+final class _RandomAccessPlaylistFile implements PlaylistOpenFile {
+  const _RandomAccessPlaylistFile(this.file);
+
+  final RandomAccessFile file;
+
+  @override
+  Future<void> flush() => file.flush();
+
+  @override
+  Future<void> close() async {
+    await file.close();
+  }
+}
+
 class PlaylistFileSystem {
   const PlaylistFileSystem();
 
@@ -13,10 +32,15 @@ class PlaylistFileSystem {
   Future<void> write(String path, String contents, {bool flush = false}) =>
       File(path).writeAsString(contents, flush: flush);
   Future<void> copy(String from, String to) => File(from).copy(to);
+  Future<PlaylistOpenFile> openForAppend(String path) async =>
+      _RandomAccessPlaylistFile(await File(path).open(mode: FileMode.append));
   Future<void> flushAndClose(String path) async {
-    final file = await File(path).open(mode: FileMode.append);
-    await file.flush();
-    await file.close();
+    final file = await openForAppend(path);
+    try {
+      await file.flush();
+    } finally {
+      await file.close();
+    }
   }
 
   Future<void> rename(String from, String to) => File(from).rename(to);
