@@ -6,10 +6,12 @@ final customSourceServiceProvider = Provider<CustomSourceService>((ref) {
   final service = CustomSourceService();
   // 在应用启动时初始化一次
   service.init();
+  ref.onDispose(service.dispose);
   return service;
 });
 
-final customSourcesProvider = StateNotifierProvider<CustomSourcesNotifier, List<CustomSource>>((ref) {
+final customSourcesProvider =
+    StateNotifierProvider<CustomSourcesNotifier, List<CustomSource>>((ref) {
   final service = ref.watch(customSourceServiceProvider);
   return CustomSourcesNotifier(service);
 });

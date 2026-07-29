@@ -1,10 +1,9 @@
-import 'dart:async';
-
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../data/playlist_repository.dart';
 import '../domain/playlist_service.dart';
 import '../domain/playlist.dart';
 import '../../player/domain/music_item.dart';
+import '../../../startup_lifecycle.dart';
 
 final playlistRepositoryProvider = Provider<PlaylistRepository>((ref) {
   throw StateError('playlistRepositoryProvider must be overridden at startup');
@@ -14,7 +13,8 @@ final playlistServiceProvider = Provider<PlaylistService>((ref) {
   final service = PlaylistService(
     repository: ref.watch(playlistRepositoryProvider),
   );
-  ref.onDispose(() => unawaited(service.dispose()));
+  final disposals = ref.read(resourceDisposalTrackerProvider);
+  ref.onDispose(() => disposals.track(service.dispose()));
   return service;
 });
 

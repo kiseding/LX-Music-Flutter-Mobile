@@ -98,3 +98,50 @@ mutation caller. Existing unrelated changes in
 `.superpowers/sdd/network-task-4-report.md` and
 `docs/superpowers/plans/2026-07-29-playlist-snapshot-meta-immutability.md` were
 not modified or staged.
+
+## Review Remediation
+
+### RED Evidence
+
+The focused review command initially failed with the expected missing-helper
+compile errors and behavior failures:
+
+```text
+flutter test test/features/settings/playlist_backup_compatibility_test.dart test/startup_lifecycle_test.dart test/features/sync/presentation/cloud_playlist_merge_test.dart test/features/playlist/presentation/playlist_provider_test.dart test/features/playlist/presentation/playlist_detail_favorites_test.dart test/features/playlist/presentation/playlist_screen_test.dart
+```
+
+- Backup compatibility, startup lifecycle, and cloud merge seams did not exist.
+- A removed selected playlist continued to render from stale provider state.
+- Import dialog success/catch paths called local `StateSetter` without checking
+  whether the dialog context remained mounted.
+- The favorite invalidation test already passed, isolating stale detail state
+  from the revision stream.
+
+### GREEN Evidence
+
+- The same focused command passes 16 tests.
+- Version 1 backups preserve their outer version and accept either the legacy
+  playlist list or the new strict snapshot object. Both shapes pass through
+  `PlaylistSnapshotCodec`; malformed payloads remain rejected.
+- `OwnedProviderScope` owns the startup container. Partial initialization
+  failure disposes it once and awaits tracked playlist/download/cache cleanup.
+- Playlist detail resolves selected IDs only from the live service and renders
+  a mutation-free missing state after `replaceAll` removes the selection.
+- Dialog-local state is guarded after both confirmation and exception awaits.
+- Cloud merge performs one `replaceAll`, reports unique accepted playlist IDs,
+  and cannot return a success result when persistence fails.
+
+### Final Verification
+
+```text
+flutter test test/features/playlist test/features/sync test/features/settings test/widget_test.dart
+88 tests passed
+
+flutter analyze
+22 pre-existing findings; no new findings
+```
+
+The whole-project test run also completed 645 tests but retained two reproducible
+pre-existing failures in `player_service_queue_test.dart` concerning metadata
+moves during in-flight source loads. They fail unchanged when that file is run
+alone and are outside Task 8; no player queue or playback-cache file was touched.

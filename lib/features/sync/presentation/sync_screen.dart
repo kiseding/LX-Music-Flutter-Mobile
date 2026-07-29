@@ -4,8 +4,8 @@ import '../../../core/theme/app_colors.dart';
 import '../../cloud/presentation/cloud_provider.dart';
 import '../../cloud/domain/cloud_api_client.dart';
 import '../../playlist/presentation/playlist_provider.dart';
-import '../../playlist/domain/playlist.dart';
 import '../../player/domain/music_item.dart';
+import 'cloud_playlist_merge.dart';
 
 /// 同步页：对接 workers 云端（账号 + 歌单），不再强制首次启动登录。
 class SyncScreen extends ConsumerStatefulWidget {
@@ -326,53 +326,16 @@ class _SyncScreenState extends ConsumerState<SyncScreen> {
       final data = await _api.fetchUserList();
       final love = (data['loveList'] as List?) ?? [];
       final userList = (data['userList'] as List?) ?? [];
-      final playlistService = ref.read(playlistServiceProvider);
-      final playlists = {
-        for (final playlist in playlistService.playlists) playlist.id: playlist
-      };
-
-      // 同步「我喜欢」
-      final favSongs = love.map(_songFromCloud).whereType<MusicItem>().toList();
-      final fav = playlists['favorites'];
-      if (fav != null) {
-        playlists['favorites'] = fav.copyWith(
-          songs: favSongs,
-          updatedAt: DateTime.now(),
-        );
-      }
-
-      for (final pl in userList) {
-        if (pl is! Map) continue;
-        final id = pl['id']?.toString() ?? '';
-        final name = pl['name']?.toString() ?? '云端歌单';
-        if (id.isEmpty || id == 'love') continue;
-        final songs = ((pl['list'] as List?) ?? [])
-            .map(_songFromCloud)
-            .whereType<MusicItem>()
-            .toList();
-        final existing = playlists[id];
-        if (existing != null) {
-          playlists[id] = existing.copyWith(
-            name: name,
-            songs: songs,
-            updatedAt: DateTime.now(),
-          );
-        } else {
-          final now = DateTime.now();
-          playlists[id] = Playlist(
-            id: id,
-            name: name,
-            description: '云端同步',
-            songs: songs,
-            createdAt: now,
-            updatedAt: now,
-          );
-        }
-      }
-      await playlistService.replaceAll(playlists.values.toList());
+      final result = await mergeAndPersistCloudPlaylists(
+        service: ref.read(playlistServiceProvider),
+        love: love,
+        userList: userList,
+        decodeSong: _songFromCloud,
+      );
       if (!mounted) return;
       setState(
-        () => _message = '已同步：喜欢 ${favSongs.length} 首，歌单 ${userList.length} 个',
+        () => _message =
+            '已同步：喜欢 ${result.favoriteSongCount} 首，歌单 ${result.acceptedPlaylistCount} 个',
       );
     } catch (e) {
       if (!mounted) return;

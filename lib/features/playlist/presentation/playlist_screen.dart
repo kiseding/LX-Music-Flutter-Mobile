@@ -1121,9 +1121,11 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
                                       );
                                     }
                                   } else {
+                                    if (!ctx.mounted) return;
                                     setLocal(() => busy = false);
                                   }
                                 } catch (e) {
+                                  if (!ctx.mounted) return;
                                   setLocal(() {
                                     busy = false;
                                     error = e.toString().replaceFirst(

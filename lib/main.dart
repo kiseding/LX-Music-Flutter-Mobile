@@ -15,6 +15,7 @@ import 'package:audio_session/audio_session.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:lx_music_flutter/features/playlist/data/file_playlist_repository.dart';
+import 'package:lx_music_flutter/startup_lifecycle.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -61,133 +62,139 @@ void main() async {
     directory: () async => documents,
     preferences: preferences,
   );
+  final disposals = ResourceDisposalTracker();
   final container = ProviderContainer(overrides: [
     playlistRepositoryProvider.overrideWithValue(playlistRepository),
+    resourceDisposalTrackerProvider.overrideWithValue(disposals),
   ]);
+  final lifecycle = StartupLifecycle(container, disposals);
 
-  // 3. 初始化自定义音源
-  await container.read(customSourceServiceProvider).init();
+  await lifecycle.run(() async {
+    // 3. 初始化自定义音源
+    await container.read(customSourceServiceProvider).init();
 
-  // 3.5 初始化歌单持久化
-  await container.read(playlistServiceProvider).init();
+    // 3.5 初始化歌单持久化
+    await container.read(playlistServiceProvider).init();
 
-  // 3.6 初始化下载服务持久化
-  await container.read(downloadServiceProvider).init();
+    // 3.6 初始化下载服务持久化
+    await container.read(downloadServiceProvider).init();
 
-  // 4. 关键：连接 AudioHandler 和 MusicSourceService + 播放缓存
-  final playbackCache = PlaybackCacheService();
-  await playbackCache.init();
+    // 4. 关键：连接 AudioHandler 和 MusicSourceService + 播放缓存
+    final playbackCache = PlaybackCacheService();
+    disposals.register(playbackCache.dispose);
+    await playbackCache.init();
 
-  if (audioHandler is LxAudioHandler) {
-    final lxHandler = audioHandler as LxAudioHandler;
-    final sourceService = container.read(musicSourceServiceProvider);
-    final playbackResolver = PlaybackUrlResolver<MusicItem>(
-      resolvePlayableUrl: (music, {required preferredQuality}) {
-        return sourceService.resolvePlayableUrl(
-          music,
-          preferredQuality: preferredQuality,
-        );
-      },
-      acquireOrDownload: playbackCache.acquireOrDownload,
-      cancelCacheKey: playbackCache.cancelKey,
-      songIdFor: (music) {
-        if (music.songmid?.isNotEmpty == true) return music.songmid!;
-        if (music.hash?.isNotEmpty == true) return music.hash!;
-        return music.id;
-      },
-    );
-    lxHandler.attachPlaybackCache(
-      classifyExisting: playbackCache.classifyExisting,
-      acquireExisting: playbackCache.acquireExisting,
-      cancelCacheKey: playbackCache.cancelKey,
-      cancelAllTrackedCacheWork: playbackResolver.cancelAllTracked,
-    );
+    if (audioHandler is LxAudioHandler) {
+      final lxHandler = audioHandler as LxAudioHandler;
+      final sourceService = container.read(musicSourceServiceProvider);
+      final playbackResolver = PlaybackUrlResolver<MusicItem>(
+        resolvePlayableUrl: (music, {required preferredQuality}) {
+          return sourceService.resolvePlayableUrl(
+            music,
+            preferredQuality: preferredQuality,
+          );
+        },
+        acquireOrDownload: playbackCache.acquireOrDownload,
+        cancelCacheKey: playbackCache.cancelKey,
+        songIdFor: (music) {
+          if (music.songmid?.isNotEmpty == true) return music.songmid!;
+          if (music.hash?.isNotEmpty == true) return music.hash!;
+          return music.id;
+        },
+      );
+      lxHandler.attachPlaybackCache(
+        classifyExisting: playbackCache.classifyExisting,
+        acquireExisting: playbackCache.acquireExisting,
+        cancelCacheKey: playbackCache.cancelKey,
+        cancelAllTrackedCacheWork: playbackResolver.cancelAllTracked,
+      );
 
-    // 设置 URL 解析器：音质一次解析 → 租约缓存或已校验流式 HTTPS
-    lxHandler.urlResolver = (mediaId, [extras]) async {
-      debugPrint('[urlResolver] 开始解析: mediaId=$mediaId');
-      // 优先用调用方传入的 extras（预加载下一首时 mediaItem 仍是当前曲）
-      final Map<String, dynamic>? rawExtras = extras ??
-          (lxHandler.mediaItem.value?.id == mediaId
-              ? lxHandler.mediaItem.value?.extras
-              : null) ??
-          () {
-            // 仅按 id 从队列查找，禁止回落到“当前曲”extras（会播错歌）
-            if (audioHandler is LxAudioHandler) {
-              for (final m in (audioHandler as LxAudioHandler).queueItems) {
-                if (m.id == mediaId && m.extras != null) {
-                  return Map<String, dynamic>.from(m.extras!);
+      // 设置 URL 解析器：音质一次解析 → 租约缓存或已校验流式 HTTPS
+      lxHandler.urlResolver = (mediaId, [extras]) async {
+        debugPrint('[urlResolver] 开始解析: mediaId=$mediaId');
+        // 优先用调用方传入的 extras（预加载下一首时 mediaItem 仍是当前曲）
+        final Map<String, dynamic>? rawExtras = extras ??
+            (lxHandler.mediaItem.value?.id == mediaId
+                ? lxHandler.mediaItem.value?.extras
+                : null) ??
+            () {
+              // 仅按 id 从队列查找，禁止回落到“当前曲”extras（会播错歌）
+              if (audioHandler is LxAudioHandler) {
+                for (final m in (audioHandler as LxAudioHandler).queueItems) {
+                  if (m.id == mediaId && m.extras != null) {
+                    return Map<String, dynamic>.from(m.extras!);
+                  }
                 }
               }
-            }
+              return null;
+            }();
+        if (rawExtras != null) {
+          final musicItem =
+              MusicItem.fromJson(Map<String, dynamic>.from(rawExtras));
+          debugPrint(
+              '[urlResolver] 歌曲信息: platform=${musicItem.platform}, source=${musicItem.source}, songmid=${musicItem.songmid}');
+          final qualityOption = container.read(audioQualityProvider);
+          const qualityMap = {
+            AudioQualityOption.low: '128k',
+            AudioQualityOption.high: '320k',
+            AudioQualityOption.lossless: 'flac',
+            AudioQualityOption.lossless24: 'flac24bit',
+            AudioQualityOption.hires: 'hires',
+          };
+          // extras 可携带强制音质（改设置后 re-resolve）；否则读全局设置
+          final forced = rawExtras['requestedQuality']?.toString();
+          final requested = (forced != null && forced.isNotEmpty)
+              ? forced
+              : (qualityMap[qualityOption] ?? '320k');
+          if (audioHandler is LxAudioHandler) {
+            (audioHandler as LxAudioHandler).preferredQuality = requested;
+          }
+          final isCurrent = lxHandler.mediaItem.value?.id == mediaId;
+          final resolution = await playbackResolver.resolve(
+            musicItem,
+            preferredQuality: requested,
+            exclusive: isCurrent,
+          );
+          if (resolution == null) {
+            debugPrint('[urlResolver] 源未返回可播地址(q=$requested)');
             return null;
-          }();
-      if (rawExtras != null) {
-        final musicItem =
-            MusicItem.fromJson(Map<String, dynamic>.from(rawExtras));
+          }
+          final resolutionGeneration = rawExtras['_playbackGeneration'];
+          final preloadRequestToken = rawExtras['_preloadRequestToken'];
+          if (resolutionGeneration is int) {
+            lxHandler.acceptResolvedPlayback(
+              mediaId: mediaId,
+              generation: resolutionGeneration,
+              resolution: resolution,
+            );
+          } else if (preloadRequestToken is int) {
+            lxHandler.acceptPreloadedPlayback(
+              mediaId: mediaId,
+              requestToken: preloadRequestToken,
+              resolution: resolution,
+            );
+          } else {
+            // Resolutions without handler authority retain no playback lease.
+            await resolution.leaseOrNull?.release();
+          }
+          return resolution.playableUrl;
+        }
         debugPrint(
-            '[urlResolver] 歌曲信息: platform=${musicItem.platform}, source=${musicItem.source}, songmid=${musicItem.songmid}');
-        final qualityOption = container.read(audioQualityProvider);
-        const qualityMap = {
-          AudioQualityOption.low: '128k',
-          AudioQualityOption.high: '320k',
-          AudioQualityOption.lossless: 'flac',
-          AudioQualityOption.lossless24: 'flac24bit',
-          AudioQualityOption.hires: 'hires',
-        };
-        // extras 可携带强制音质（改设置后 re-resolve）；否则读全局设置
-        final forced = rawExtras['requestedQuality']?.toString();
-        final requested = (forced != null && forced.isNotEmpty)
-            ? forced
-            : (qualityMap[qualityOption] ?? '320k');
-        if (audioHandler is LxAudioHandler) {
-          (audioHandler as LxAudioHandler).preferredQuality = requested;
-        }
-        final isCurrent = lxHandler.mediaItem.value?.id == mediaId;
-        final resolution = await playbackResolver.resolve(
-          musicItem,
-          preferredQuality: requested,
-          exclusive: isCurrent,
-        );
-        if (resolution == null) {
-          debugPrint('[urlResolver] 源未返回可播地址(q=$requested)');
-          return null;
-        }
-        final resolutionGeneration = rawExtras['_playbackGeneration'];
-        final preloadRequestToken = rawExtras['_preloadRequestToken'];
-        if (resolutionGeneration is int) {
-          lxHandler.acceptResolvedPlayback(
-            mediaId: mediaId,
-            generation: resolutionGeneration,
-            resolution: resolution,
-          );
-        } else if (preloadRequestToken is int) {
-          lxHandler.acceptPreloadedPlayback(
-            mediaId: mediaId,
-            requestToken: preloadRequestToken,
-            resolution: resolution,
-          );
-        } else {
-          // Resolutions without handler authority retain no playback lease.
-          await resolution.leaseOrNull?.release();
-        }
-        return resolution.playableUrl;
-      }
-      debugPrint(
-          '[urlResolver] 无法获取歌曲信息: mediaId=$mediaId hasExtras=${rawExtras != null}');
-      return null;
-    };
+            '[urlResolver] 无法获取歌曲信息: mediaId=$mediaId hasExtras=${rawExtras != null}');
+        return null;
+      };
 
-    // 设置错误消息回调
-    lxHandler.onError = (message) {
-      container.read(playerMessageProvider.notifier).state = message;
-    };
-  }
+      // 设置错误消息回调
+      lxHandler.onError = (message) {
+        container.read(playerMessageProvider.notifier).state = message;
+      };
+    }
 
-  runApp(
-    UncontrolledProviderScope(
-      container: container,
-      child: const LxMusicApp(),
-    ),
-  );
+    runApp(
+      OwnedProviderScope(
+        lifecycle: lifecycle,
+        child: const LxMusicApp(),
+      ),
+    );
+  });
 }

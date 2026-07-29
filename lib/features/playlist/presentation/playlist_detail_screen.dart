@@ -30,9 +30,8 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
   Playlist? _resolvePlaylist() {
     final current = ref.watch(currentPlaylistProvider);
     if (current == null) return null;
-    // 始终从 service 取最新，避免打开后列表为空/过期
-    return ref.watch(playlistServiceProvider).getPlaylist(current.id) ??
-        current;
+    // The selected value identifies the route; the service owns live content.
+    return ref.watch(playlistServiceProvider).getPlaylist(current.id);
   }
 
   void _tryScrollToFocus(Playlist playlist) {

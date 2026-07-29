@@ -13,6 +13,7 @@ import '../../download/presentation/download_provider.dart';
 import '../../search/presentation/search_provider.dart';
 import '../../playlist/data/playlist_repository.dart';
 import '../../playlist/presentation/playlist_provider.dart';
+import '../domain/playlist_backup.dart';
 
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
@@ -572,9 +573,7 @@ class SettingsScreen extends ConsumerWidget {
 
       // 恢复歌单
       if (backup['playlists'] != null) {
-        final snapshot = const PlaylistSnapshotCodec().decode(
-          jsonEncode(backup['playlists']),
-        );
+        final snapshot = decodeBackupPlaylists(backup);
         await ref.read(playlistServiceProvider).replaceAll(snapshot.playlists);
       }
       // 恢复搜索历史

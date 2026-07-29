@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lx_music_flutter/features/playlist/data/playlist_repository.dart';
 import 'package:lx_music_flutter/features/playlist/domain/playlist.dart';
+import 'package:lx_music_flutter/features/player/domain/music_item.dart';
 import 'package:lx_music_flutter/features/playlist/presentation/playlist_provider.dart';
 
 const playlistConsumerPaths = [
@@ -42,6 +43,43 @@ void main() {
       final source = File(path).readAsStringSync();
       expect(source, isNot(contains('playlistVersionProvider')), reason: path);
     }
+  });
+
+  test('favorite provider invalidates when replaceAll removes a favorite',
+      () async {
+    final song = MusicItem(
+      id: 'song',
+      name: 'Song',
+      singer: 'Singer',
+      source: 'tx',
+    );
+    final initial = systemSnapshot();
+    final favorite = initial.playlists.first.copyWith(songs: [song]);
+    final repository = MemoryPlaylistRepository(PlaylistSnapshot(
+      schemaVersion: 1,
+      playlists: [favorite, initial.playlists.last],
+    ));
+    final container = ProviderContainer(overrides: [
+      playlistRepositoryProvider.overrideWithValue(repository),
+    ]);
+    addTearDown(container.dispose);
+    final service = container.read(playlistServiceProvider);
+    await service.init();
+    final subscription = container.listen(
+      isSongFavoriteProvider(song.id),
+      (_, __) {},
+      fireImmediately: true,
+    );
+    addTearDown(subscription.close);
+    expect(subscription.read(), isTrue);
+
+    await service.replaceAll([
+      favorite.copyWith(songs: const []),
+      initial.playlists.last,
+    ]);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(subscription.read(), isFalse);
   });
 }
 

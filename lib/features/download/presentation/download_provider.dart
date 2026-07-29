@@ -7,6 +7,7 @@ import '../domain/download_task.dart';
 import '../../player/domain/music_item.dart';
 import '../../search/presentation/search_provider.dart';
 import '../../settings/presentation/settings_provider.dart';
+import '../../../startup_lifecycle.dart';
 
 final downloadServiceProvider = Provider<DownloadService>((ref) {
   final wifiOnly = ref.watch(wifiOnlyDownloadProvider);
@@ -36,6 +37,7 @@ final downloadServiceProvider = Provider<DownloadService>((ref) {
     },
   );
   final musicSourceService = ref.watch(musicSourceServiceProvider);
+  final disposals = ref.read(resourceDisposalTrackerProvider);
   service.setMusicSourceService(musicSourceService);
   final sub = service.tasksStream.listen((_) {
     Future.microtask(() {
@@ -46,7 +48,7 @@ final downloadServiceProvider = Provider<DownloadService>((ref) {
   });
   ref.onDispose(() {
     sub.cancel();
-    unawaited(service.dispose());
+    disposals.track(service.dispose());
   });
   return service;
 });
