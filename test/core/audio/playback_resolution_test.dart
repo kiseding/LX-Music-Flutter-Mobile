@@ -534,7 +534,7 @@ void main() {
       expect(player.sourceInstallCount, 1);
     });
 
-    test('resolver cached lease bypasses file reclassification', () async {
+    test('resolver cached lease commits as active ownership', () async {
       final player = _ReuseAudioPlayer();
       final handler = LxAudioHandler(player: player);
       addTearDown(player.dispose);
@@ -552,7 +552,11 @@ void main() {
         final resolved = CachedPlayback(lease.asLease(), {
           'url': PlaybackCacheService.toPlayableUri(lease.path),
         });
-        handler.noteResolvedPlayback(id, resolved);
+        handler.noteResolvedPlayback(
+          id,
+          resolved,
+          generation: extras!['_playbackGeneration'] as int,
+        );
         return resolved.playableUrl;
       };
 
@@ -562,6 +566,10 @@ void main() {
       expect(player.sourceInstallCount, 1);
       expect(errors, isEmpty);
       expect(lease.releaseCount, 0);
+
+      await handler.stop();
+
+      expect(lease.releaseCount, 1);
     });
 
     test(
@@ -590,6 +598,7 @@ void main() {
           handler.noteResolvedPlayback(
             id,
             CachedPlayback(stale.asLease(), {'url': staleUrl}),
+            generation: extras!['_playbackGeneration'] as int,
           );
           return replacementUrl;
         }
@@ -597,6 +606,7 @@ void main() {
         handler.noteResolvedPlayback(
           id,
           const StreamingPlayback(remoteUrl, {'url': remoteUrl}),
+          generation: extras!['_playbackGeneration'] as int,
         );
         return remoteUrl;
       };
@@ -624,6 +634,142 @@ void main() {
       await handler.setPlaylist([_cachedItem('fails', lease.path)]);
 
       expect(lease.releaseCount, 1);
+    });
+
+    test('stopping a pending cached resolution releases it and replay reacquires',
+        () async {
+      final player = _GatedReuseAudioPlayer();
+      final handler = LxAudioHandler(player: player);
+      addTearDown(player.dispose);
+      final pending = _FakeLease('/cache/pending.mp3', 'pending', (_) {});
+      final replayLeases = <_FakeLease>[];
+      handler.attachPlaybackCache(
+        acquireExisting: (path) async {
+          final lease = _FakeLease(
+            path,
+            'replay-${replayLeases.length}',
+            (_) {},
+          );
+          replayLeases.add(lease);
+          return lease.asLease();
+        },
+      );
+      handler.urlResolver = (id, [extras]) async {
+        final resolution = CachedPlayback(pending.asLease(), {
+          'url': PlaybackCacheService.toPlayableUri(pending.path),
+        });
+        handler.noteResolvedPlayback(
+          id,
+          resolution,
+          generation: extras!['_playbackGeneration'] as int,
+        );
+        return resolution.playableUrl;
+      };
+
+      final firstLoad = handler.setPlaylist([_unresolvedItem('pending')]);
+      await player.firstSourceStarted.future;
+      final stop = handler.stop();
+      expect(pending.releaseCount, 1);
+      player.allowFirstSource.complete();
+      await Future.wait([firstLoad, stop]);
+
+      await handler.setPlaylist([_cachedItem('pending', pending.path)]);
+
+      expect(replayLeases, isNotEmpty);
+      expect(replayLeases.last.releaseCount, 0);
+    });
+
+    test('late cached resolution after stop releases without becoming pending',
+        () async {
+      final player = _ReuseAudioPlayer();
+      final handler = LxAudioHandler(player: player);
+      addTearDown(player.dispose);
+      final started = Completer<int>();
+      final resolve = Completer<String?>();
+      handler.urlResolver = (id, [extras]) async {
+        started.complete(extras!['_playbackGeneration'] as int);
+        return resolve.future;
+      };
+
+      final load = handler.setPlaylist([_unresolvedItem('late')]);
+      final generation = await started.future;
+      await handler.stop();
+      final late = _FakeLease('/cache/late.mp3', 'late', (_) {});
+      handler.noteResolvedPlayback(
+        'late',
+        CachedPlayback(late.asLease(), {
+          'url': PlaybackCacheService.toPlayableUri(late.path),
+        }),
+        generation: generation,
+      );
+      resolve.complete(null);
+      await load;
+
+      expect(late.releaseCount, 1);
+    });
+
+    test('streaming resolution discards an earlier pending cached lease',
+        () async {
+      final player = _ReuseAudioPlayer();
+      final handler = LxAudioHandler(player: player);
+      addTearDown(player.dispose);
+      final cached = _FakeLease('/cache/streaming.mp3', 'cached', (_) {});
+      const remoteUrl = 'https://cdn.example/streaming.mp3';
+      handler.urlResolver = (id, [extras]) async {
+        final generation = extras!['_playbackGeneration'] as int;
+        handler.noteResolvedPlayback(
+          id,
+          CachedPlayback(cached.asLease(), {
+            'url': PlaybackCacheService.toPlayableUri(cached.path),
+          }),
+          generation: generation,
+        );
+        handler.noteResolvedPlayback(
+          id,
+          const StreamingPlayback(remoteUrl, {'url': remoteUrl}),
+          generation: generation,
+        );
+        return remoteUrl;
+      };
+
+      await handler.setPlaylist([_unresolvedItem('streaming')]);
+
+      expect(cached.releaseCount, 1);
+      expect(player.sourceInstallCount, 1);
+      expect(handler.mediaItem.value?.extras?['url'], remoteUrl);
+    });
+
+    test('source switch rejects and releases the prior pending resolution',
+        () async {
+      final player = _ReuseAudioPlayer();
+      final handler = LxAudioHandler(player: player);
+      addTearDown(player.dispose);
+      final firstStarted = Completer<int>();
+      final firstResult = Completer<String?>();
+      handler.urlResolver = (id, [extras]) async {
+        if (id == 'first') {
+          firstStarted.complete(extras!['_playbackGeneration'] as int);
+          return firstResult.future;
+        }
+        return 'https://cdn.example/$id.mp3';
+      };
+
+      final firstLoad = handler.setPlaylist([_unresolvedItem('first')]);
+      final firstGeneration = await firstStarted.future;
+      await handler.setPlaylist([_unresolvedItem('second')]);
+      final stale = _FakeLease('/cache/first.mp3', 'first', (_) {});
+      handler.noteResolvedPlayback(
+        'first',
+        CachedPlayback(stale.asLease(), {
+          'url': PlaybackCacheService.toPlayableUri(stale.path),
+        }),
+        generation: firstGeneration,
+      );
+      firstResult.complete(null);
+      await firstLoad;
+
+      expect(stale.releaseCount, 1);
+      expect(handler.mediaItem.value?.id, 'second');
     });
   });
 }
@@ -680,5 +826,27 @@ class _ReuseAudioPlayer extends AudioPlayer {
   @override
   Future<void> stop() async {
     _playing = false;
+  }
+}
+
+class _GatedReuseAudioPlayer extends _ReuseAudioPlayer {
+  final firstSourceStarted = Completer<void>();
+  final allowFirstSource = Completer<void>();
+
+  @override
+  Future<Duration?> setAudioSource(
+    AudioSource source, {
+    bool preload = true,
+    int? initialIndex,
+    Duration? initialPosition,
+  }) async {
+    sourceInstallCount++;
+    if (sourceInstallCount == 1) {
+      firstSourceStarted.complete();
+      await allowFirstSource.future;
+    }
+    final error = sourceInstallError;
+    if (error != null) throw error;
+    return null;
   }
 }

@@ -152,8 +152,15 @@ void main() async {
         lxHandler.patchQueueItemExtras(mediaId, qualityExtras);
         // Only the authoritative current item retains a playback lease.
         // Preload keeps the durable file:// URL but releases the lease.
-        if (current != null && current.id == mediaId) {
-          lxHandler.noteResolvedPlayback(mediaId, resolution);
+        final resolutionGeneration = rawExtras['_playbackGeneration'];
+        if (current != null &&
+            current.id == mediaId &&
+            resolutionGeneration is int) {
+          lxHandler.noteResolvedPlayback(
+            mediaId,
+            resolution,
+            generation: resolutionGeneration,
+          );
         } else {
           await resolution.leaseOrNull?.release();
         }

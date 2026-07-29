@@ -114,3 +114,38 @@ including re-acquisition for cached URL reuse after preload or stop.
   tests. `flutter test test/core/audio test/core/network` passed 330 tests.
   Targeted analysis of the handler and regression test reported no issues.
 - Full `flutter analyze` reports 23 existing diagnostics outside this change.
+
+## Pending Resolution Lifecycle Review Fix
+
+- Every resolver callback now carries the handler playback generation through
+  resolver extras. `noteResolvedPlayback` accepts a result only for the active
+  media item and exact current generation; late cached results release their
+  lease immediately and never enter the pending map.
+- A generation bump first removes every pending resolution, releases each
+  uncommitted cache lease, and clears session pending ownership. This covers
+  stop, playlist replacement (including empty playlists), source switches, and
+  stale source invalidation. Explicit queue removal also removes/releases that
+  item's pending resolution.
+- Streaming resolutions replace and discard an earlier pending cached result.
+  Committed leases remain in `PlaybackLeaseSession` and are unaffected until
+  their normal replacement or stop lifecycle.
+- `_takePendingLeaseForUrl` rejects released leases defensively. It discards the
+  stale entry and proceeds through the existing cache-path classifier and
+  reacquisition path rather than returning a released owner.
+- Strict RED: the expanded resolver tests failed to compile because
+  `noteResolvedPlayback` had no generation argument. GREEN: the handler now
+  propagates and verifies that provenance.
+
+## Pending Resolution Verification
+
+- `flutter test test/core/audio/playback_resolution_test.dart`: 25 passed.
+- `flutter test test/core/audio test/core/network`: 334 passed.
+- `flutter analyze lib/core/audio/audio_handler.dart lib/core/audio/playback_cache_service.dart lib/main.dart test/core/audio/playback_resolution_test.dart`:
+  no issues.
+
+## Pending Resolution Concerns
+
+- Source-install races can legitimately cause a stale native install recovery
+  to reacquire the same durable cache path. The final authoritative source owns
+  the live replacement lease; intermediate leases are released by existing
+  generation-gated source cleanup.

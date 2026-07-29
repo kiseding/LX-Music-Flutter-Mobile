@@ -60,6 +60,8 @@ class PlaybackCacheLease {
 
   PlaybackCacheLease._(this.path, this.playableUri, this._release);
 
+  bool get isReleased => _released;
+
   /// Test-only constructor for pure lease-session unit tests.
   @visibleForTesting
   factory PlaybackCacheLease.test(

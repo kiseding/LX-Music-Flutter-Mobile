@@ -305,7 +305,17 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   }
 
   /// Called by the production urlResolver after cache-or-stream resolution.
-  void noteResolvedPlayback(String mediaId, PlaybackResolution resolution) {
+  void noteResolvedPlayback(
+    String mediaId,
+    PlaybackResolution resolution, {
+    required int generation,
+  }) {
+    if (generation != _playGeneration ||
+        mediaId != _activeItemId ||
+        mediaItem.value?.id != mediaId) {
+      unawaited(resolution.leaseOrNull?.release());
+      return;
+    }
     final previous = _pendingResolutions.remove(mediaId);
     final previousLease = previous?.leaseOrNull;
     if (previousLease != null &&
@@ -323,6 +333,22 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     }
   }
 
+  void _discardPendingResolution(String mediaId) {
+    final resolution = _pendingResolutions.remove(mediaId);
+    final lease = resolution?.leaseOrNull;
+    if (lease != null) unawaited(_leaseSession.discardPending(lease));
+  }
+
+  void _discardAllPendingResolutions() {
+    final resolutions = _pendingResolutions.values.toList(growable: false);
+    _pendingResolutions.clear();
+    for (final resolution in resolutions) {
+      final lease = resolution.leaseOrNull;
+      if (lease != null) unawaited(lease.release());
+    }
+    _leaseSession.holdPending(null);
+  }
+
   void _cancelForegroundCacheWork() {
     final key = _foregroundCacheKey;
     _foregroundCacheKey = null;
@@ -330,7 +356,10 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     _cancelAllTrackedCacheWork?.call();
   }
 
-  Future<void> _releasePlaybackLeases() => _leaseSession.releaseAll();
+  Future<void> _releasePlaybackLeases() async {
+    _discardAllPendingResolutions();
+    await _leaseSession.releaseAll();
+  }
 
   Future<void> _commitStagedLease({
     required String mediaId,
@@ -375,7 +404,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   ) async {
     final lease = _pendingResolutions[mediaId]?.leaseOrNull;
     if (lease == null) return null;
-    if (_leaseMatchesUrl(lease, url)) return lease;
+    if (!lease.isReleased && _leaseMatchesUrl(lease, url)) return lease;
     await _discardStagedLease(mediaId, lease);
     return null;
   }
@@ -436,7 +465,10 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         _playbackStartBlockGeneration,
       );
 
-  int _bumpGeneration() => ++_playGeneration;
+  int _bumpGeneration() {
+    _discardAllPendingResolutions();
+    return ++_playGeneration;
+  }
 
   bool _isStale(int gen) => gen != _playGeneration;
 
@@ -1167,6 +1199,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
             resolveExtras.remove('url');
             resolveExtras.remove('remoteUrl');
             resolveExtras['requestedQuality'] = preferredQuality;
+            resolveExtras['_playbackGeneration'] = gen;
             url = await urlResolver!(item.id, resolveExtras);
           }
         }
@@ -1223,6 +1256,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
           resolveExtras.remove('url');
           resolveExtras.remove('remoteUrl');
           resolveExtras['requestedQuality'] = preferredQuality;
+          resolveExtras['_playbackGeneration'] = gen;
           url = await urlResolver!(item.id, resolveExtras);
         }
 
@@ -1466,6 +1500,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     final targetId = mediaItem.id;
     var index = _queue.indexWhere((item) => item.id == targetId);
     if (index != -1) {
+      _discardPendingResolution(targetId);
       final currentId = this.mediaItem.value?.id;
       final removedCurrent = currentId == targetId;
       final wasPlaying = _player.playing;
