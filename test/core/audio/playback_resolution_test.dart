@@ -880,7 +880,8 @@ void main() {
       expect(lease.releaseCount, 1);
     });
 
-    test('foreground resolution patches the active duplicate occurrence only',
+    test(
+        'foreground resolution installs and plays the active duplicate occurrence only',
         () async {
       final player = _ReuseAudioPlayer();
       final handler = LxAudioHandler(player: player);
@@ -910,8 +911,13 @@ void main() {
       );
 
       expect(handler.queueItems[0].extras?['actualQuality'], isNull);
+      expect(handler.queueItems[0].extras?['url'], isNull);
       expect(handler.queueItems[1].extras?['actualQuality'], 'flac');
       expect(handler.mediaItem.value?.extras?['actualQuality'], 'flac');
+      expect(player.sourceInstallCount, 1);
+      expect(player.lastInstalledUri, 'https://cdn.example/duplicate.mp3');
+      expect(player.lastInstalledTag, same(handler.queueItems[1]));
+      expect(player.playing, isTrue);
     });
 
     test('preload resolution patches the requested second duplicate occurrence',
@@ -1094,6 +1100,8 @@ class _ReuseAudioPlayer extends AudioPlayer {
   bool _playing = false;
   Object? sourceInstallError;
   var sourceInstallCount = 0;
+  String? lastInstalledUri;
+  MediaItem? lastInstalledTag;
 
   @override
   bool get playing => _playing;
@@ -1109,6 +1117,13 @@ class _ReuseAudioPlayer extends AudioPlayer {
     Duration? initialPosition,
   }) async {
     sourceInstallCount++;
+    if (source is ProgressiveAudioSource) {
+      lastInstalledUri = source.uri.toString();
+      lastInstalledTag = source.tag as MediaItem?;
+    } else {
+      lastInstalledUri = null;
+      lastInstalledTag = null;
+    }
     final error = sourceInstallError;
     if (error != null) throw error;
     return null;

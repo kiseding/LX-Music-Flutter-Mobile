@@ -256,11 +256,11 @@ class _PreloadRequest {
 }
 
 class _ForegroundResolutionRequest {
-  const _ForegroundResolutionRequest(this.generation, this.index, this.item);
+  _ForegroundResolutionRequest(this.generation, this.index, this.item);
 
   final int generation;
   final int index;
-  final MediaItem item;
+  MediaItem item;
 
   String get mediaId => item.id;
 }
@@ -357,6 +357,9 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       unawaited(resolution.leaseOrNull?.release());
       return false;
     }
+    // The exact-slot patch creates a new immutable MediaItem; retain it as the
+    // request identity so the subsequent source commit targets this occurrence.
+    request.item = _queue[request.index];
     final previous = _pendingResolutions.remove(mediaId);
     final previousLease = previous?.leaseOrNull;
     if (previousLease != null &&
@@ -1220,8 +1223,8 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       if (!preserveUserIntent) _userWantsPlay = true;
       final item = _queue[index];
       final itemId = item.id;
-      _foregroundResolutionRequest =
-          _ForegroundResolutionRequest(gen, index, item);
+      final foregroundRequest = _ForegroundResolutionRequest(gen, index, item);
+      _foregroundResolutionRequest = foregroundRequest;
       final commandToken = sourceCommandToken ??
           _commands.requestSource(
             mediaId: itemId,
@@ -1232,12 +1235,16 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         if (_isStale(gen) ||
             !_commands.ownsSourceRequest(commandToken) ||
             _activeItemId != itemId ||
-            mediaItem.value?.id != itemId) {
+            mediaItem.value?.id != itemId ||
+            _currentIndex != foregroundRequest.index ||
+            foregroundRequest.index < 0 ||
+            foregroundRequest.index >= _queue.length ||
+            !identical(
+                _queue[foregroundRequest.index], foregroundRequest.item) ||
+            !identical(mediaItem.value, foregroundRequest.item)) {
           return -1;
         }
-        final relocated =
-            _queue.indexWhere((queueItem) => queueItem.id == itemId);
-        return relocated >= 0 && _currentIndex == relocated ? relocated : -1;
+        return foregroundRequest.index;
       }
 
       _activeItemId = itemId;
@@ -1408,6 +1415,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         _queue[transactionIndex] = updatedItem;
         queue.add(List.from(_queue));
         mediaItem.add(updatedItem);
+        foregroundRequest.item = updatedItem;
         _activeItemId = itemId;
 
         // URL 解析在协调器外；提交结果时必须仍拥有源请求。

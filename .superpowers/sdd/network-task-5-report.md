@@ -195,3 +195,27 @@ including re-acquisition for cached URL reuse after preload or stop.
 - Preload cache leases remain intentionally short-lived. A preloaded durable
   file is reclassified and re-leased only when an authoritative source request
   installs it, so eviction can require a normal re-resolution before playback.
+
+## Foreground Duplicate Occurrence Fix
+
+- Foreground source transactions now retain the request's exact queue index and
+  `MediaItem` identity through metadata acceptance, source installation, and
+  commit. The request updates its identity only when its own exact-slot metadata
+  patch creates an immutable replacement item.
+- Active lookup no longer relocates by media ID. It accepts only the original
+  current slot while that tracked occurrence and `mediaItem` identity still
+  match, so a second duplicate installs its own resolved source rather than
+  being rejected by the first duplicate occurrence.
+- Existing source-command ownership, generation checks, lease staging, queue
+  metadata targeting, and audio coordinator behavior remain unchanged. External
+  replacement or movement of the occurrence still invalidates the request.
+
+## Foreground Duplicate TDD
+
+- RED: the expanded active-duplicate regression failed with
+  `sourceInstallCount` equal to `0` after resolution metadata had been accepted,
+  proving the ID-based active lookup selected the first duplicate before source
+  installation.
+- GREEN: the regression proves the second duplicate's resolved URL installs and
+  plays, while the first duplicate remains unmodified. Existing replaced and
+  moved duplicate cases remain rejected.
