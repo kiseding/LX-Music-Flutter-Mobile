@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../network/app_http_client.dart';
 import '../network/outbound_url.dart';
+import '../network/play_url_result.dart';
 
 typedef PlaybackDownloader = Future<void> Function(
   String url,
@@ -59,10 +60,275 @@ class PlaybackCacheLease {
 
   PlaybackCacheLease._(this.path, this.playableUri, this._release);
 
+  /// Test-only constructor for pure lease-session unit tests.
+  @visibleForTesting
+  factory PlaybackCacheLease.test(
+    String path,
+    String playableUri,
+    Future<void> Function() release,
+  ) {
+    return PlaybackCacheLease._(path, playableUri, release);
+  }
+
   Future<void> release() async {
     if (_released) return;
     _released = true;
     await _release();
+  }
+}
+
+/// Cache-or-stream outcome for a single playable media URL resolution.
+sealed class PlaybackResolution {
+  const PlaybackResolution();
+
+  String get playableUrl;
+  Map<String, dynamic> get qualityExtras;
+  PlaybackCacheLease? get leaseOrNull;
+}
+
+final class CachedPlayback extends PlaybackResolution {
+  final PlaybackCacheLease lease;
+  final Map<String, dynamic> _qualityExtras;
+
+  const CachedPlayback(this.lease, this._qualityExtras);
+
+  @override
+  String get playableUrl => lease.playableUri;
+
+  @override
+  Map<String, dynamic> get qualityExtras =>
+      Map<String, dynamic>.from(_qualityExtras);
+
+  @override
+  PlaybackCacheLease? get leaseOrNull => lease;
+}
+
+final class StreamingPlayback extends PlaybackResolution {
+  final String remoteUrl;
+  final Map<String, dynamic> _qualityExtras;
+
+  const StreamingPlayback(this.remoteUrl, this._qualityExtras);
+
+  @override
+  String get playableUrl => remoteUrl;
+
+  @override
+  Map<String, dynamic> get qualityExtras =>
+      Map<String, dynamic>.from(_qualityExtras);
+
+  @override
+  PlaybackCacheLease? get leaseOrNull => null;
+}
+
+typedef PlaybackLeaseAcquirer = Future<PlaybackCacheLease?> Function({
+  required String remoteUrl,
+  required String platform,
+  required String songId,
+  required String quality,
+});
+
+/// Resolves quality once, then cache-or-stream with generation-safe cancel.
+class PlaybackUrlResolver<T> {
+  final Future<PlayUrlResult?> Function(
+    T music, {
+    required String preferredQuality,
+  }) resolvePlayableUrl;
+  final PlaybackLeaseAcquirer acquireOrDownload;
+  final void Function(String key)? cancelCacheKey;
+  final String Function(T music) songIdFor;
+  final bool Function(String? url) isPlayableUrl;
+
+  int _generation = 0;
+  final Map<int, Set<String>> _generationKeys = {};
+
+  PlaybackUrlResolver({
+    required this.resolvePlayableUrl,
+    required this.acquireOrDownload,
+    required this.songIdFor,
+    this.cancelCacheKey,
+    this.isPlayableUrl = isPlayableMediaUrl,
+  });
+
+  int beginGeneration({bool cancelPrevious = false}) {
+    if (cancelPrevious) {
+      cancelAllTracked();
+    }
+    final gen = ++_generation;
+    _generationKeys[gen] = <String>{};
+    return gen;
+  }
+
+  bool isGenerationCurrent(int generation) =>
+      _generationKeys.containsKey(generation);
+
+  void noteCacheKey(int generation, String key) {
+    final keys = _generationKeys[generation];
+    if (keys == null) return;
+    keys.add(key);
+  }
+
+  void cancelGeneration(int generation) {
+    final keys = _generationKeys.remove(generation);
+    if (keys == null) return;
+    final cancel = cancelCacheKey;
+    if (cancel == null) return;
+    for (final key in keys) {
+      cancel(key);
+    }
+  }
+
+  /// Cancels every tracked key from generations older than [current].
+  void cancelObsoleteGenerations(int current) {
+    final stale = _generationKeys.keys
+        .where((generation) => generation < current)
+        .toList(growable: false);
+    for (final generation in stale) {
+      cancelGeneration(generation);
+    }
+  }
+
+  void cancelAllTracked() {
+    final generations = _generationKeys.keys.toList(growable: false);
+    for (final generation in generations) {
+      cancelGeneration(generation);
+    }
+  }
+
+  Future<PlaybackResolution?> resolve(
+    T music, {
+    required String preferredQuality,
+    int? generation,
+    bool exclusive = false,
+  }) async {
+    final gen = generation ?? beginGeneration(cancelPrevious: exclusive);
+    if (!_generationKeys.containsKey(gen) && generation != null) {
+      return null;
+    }
+    if (generation == null && !_generationKeys.containsKey(gen)) {
+      _generationKeys[gen] = <String>{};
+    }
+
+    final result = await resolvePlayableUrl(
+      music,
+      preferredQuality: preferredQuality,
+    );
+    if (!_generationKeys.containsKey(gen)) return null;
+    if (result == null || !isPlayableUrl(result.url)) return null;
+
+    final songId = songIdFor(music);
+    final qualityKey =
+        result.actualQuality.isNotEmpty ? result.actualQuality : preferredQuality;
+    final key = PlaybackCacheService.cacheKey(
+      platform: result.platform,
+      songId: songId,
+      quality: qualityKey,
+    );
+    noteCacheKey(gen, key);
+    if (!_generationKeys.containsKey(gen)) {
+      cancelCacheKey?.call(key);
+      return null;
+    }
+
+    final lease = await acquireOrDownload(
+      remoteUrl: result.url,
+      platform: result.platform,
+      songId: songId,
+      quality: qualityKey,
+    );
+    if (!_generationKeys.containsKey(gen)) {
+      if (lease != null) {
+        await lease.release();
+      } else {
+        cancelCacheKey?.call(key);
+      }
+      return null;
+    }
+
+    // Resolution completed; stop tracking this generation for cancel purposes.
+    _generationKeys.remove(gen);
+
+    final qualityExtras = <String, dynamic>{
+      'remoteUrl': result.url,
+      'actualQuality': result.actualQuality,
+      'requestedQuality': result.requestedQuality,
+      'platform': result.platform,
+      'cacheKey': key,
+      'songId': songId,
+    };
+
+    if (lease != null) {
+      qualityExtras['url'] = lease.playableUri;
+      return CachedPlayback(lease, qualityExtras);
+    }
+
+    qualityExtras['url'] = result.url;
+    return StreamingPlayback(result.url, qualityExtras);
+  }
+}
+
+/// Owns the currently playing cache lease and any pending replacement lease.
+class PlaybackLeaseSession {
+  PlaybackCacheLease? _active;
+  PlaybackCacheLease? _pending;
+
+  PlaybackCacheLease? get activeLease => _active;
+  PlaybackCacheLease? get pendingLease => _pending;
+
+  void holdPending(PlaybackCacheLease? lease) {
+    if (identical(_pending, lease)) return;
+    final previous = _pending;
+    _pending = lease;
+    if (previous != null && !identical(previous, _active)) {
+      unawaited(previous.release());
+    }
+  }
+
+  Future<void> discardPending(PlaybackCacheLease? lease) async {
+    if (lease == null) return;
+    if (!identical(_pending, lease)) {
+      if (!identical(lease, _active)) await lease.release();
+      return;
+    }
+    _pending = null;
+    if (!identical(lease, _active)) await lease.release();
+  }
+
+  Future<void> commitAuthoritative(PlaybackCacheLease? lease) async {
+    final previous = _active;
+    if (identical(_pending, lease)) _pending = null;
+    if (identical(previous, lease)) {
+      _active = lease;
+      return;
+    }
+    _active = lease;
+    if (previous != null) await previous.release();
+  }
+
+  Future<bool> commitIfGeneration({
+    required int generation,
+    required int Function() currentGeneration,
+    required PlaybackCacheLease? lease,
+  }) async {
+    if (generation != currentGeneration()) {
+      await discardPending(lease);
+      if (lease != null && !identical(lease, _pending) && !identical(lease, _active)) {
+        await lease.release();
+      }
+      return false;
+    }
+    await commitAuthoritative(lease);
+    return true;
+  }
+
+  Future<void> releaseAll() async {
+    final active = _active;
+    final pending = _pending;
+    _active = null;
+    _pending = null;
+    if (pending != null && !identical(pending, active)) {
+      await pending.release();
+    }
+    if (active != null) await active.release();
   }
 }
 

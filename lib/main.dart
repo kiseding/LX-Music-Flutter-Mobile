@@ -4,7 +4,6 @@ import 'package:audio_service/audio_service.dart';
 import 'package:lx_music_flutter/app.dart';
 import 'package:lx_music_flutter/core/audio/audio_handler.dart';
 import 'package:lx_music_flutter/core/audio/playback_cache_service.dart';
-import 'package:lx_music_flutter/core/network/play_url_result.dart';
 import 'package:lx_music_flutter/features/custom_source/presentation/custom_source_provider.dart';
 import 'package:lx_music_flutter/features/search/presentation/search_provider.dart';
 import 'package:lx_music_flutter/features/playlist/presentation/playlist_provider.dart';
@@ -71,8 +70,27 @@ void main() async {
   if (audioHandler is LxAudioHandler) {
     final lxHandler = audioHandler as LxAudioHandler;
     final sourceService = container.read(musicSourceServiceProvider);
+    final playbackResolver = PlaybackUrlResolver<MusicItem>(
+      resolvePlayableUrl: (music, {required preferredQuality}) {
+        return sourceService.resolvePlayableUrl(
+          music,
+          preferredQuality: preferredQuality,
+        );
+      },
+      acquireOrDownload: playbackCache.acquireOrDownload,
+      cancelCacheKey: playbackCache.cancelKey,
+      songIdFor: (music) {
+        if (music.songmid?.isNotEmpty == true) return music.songmid!;
+        if (music.hash?.isNotEmpty == true) return music.hash!;
+        return music.id;
+      },
+    );
+    lxHandler.attachPlaybackCache(
+      cancelCacheKey: playbackCache.cancelKey,
+      cancelAllTrackedCacheWork: playbackResolver.cancelAllTracked,
+    );
 
-    // 设置 URL 解析器：解析远程地址 → 下载到本地缓存 → 返回 file:// 供播放
+    // 设置 URL 解析器：音质一次解析 → 租约缓存或已校验流式 HTTPS
     lxHandler.urlResolver = (mediaId, [extras]) async {
       debugPrint('[urlResolver] 开始解析: mediaId=$mediaId');
       // 优先用调用方传入的 extras（预加载下一首时 mediaItem 仍是当前曲）
@@ -112,39 +130,17 @@ void main() async {
         if (audioHandler is LxAudioHandler) {
           (audioHandler as LxAudioHandler).preferredQuality = requested;
         }
-        final result = await sourceService.resolvePlayableUrl(
+        final isCurrent = lxHandler.mediaItem.value?.id == mediaId;
+        final resolution = await playbackResolver.resolve(
           musicItem,
           preferredQuality: requested,
+          exclusive: isCurrent,
         );
-        if (result == null || !isPlayableMediaUrl(result.url)) {
+        if (resolution == null) {
           debugPrint('[urlResolver] 源未返回可播地址(q=$requested)');
           return null;
         }
-        final songId = (musicItem.songmid?.isNotEmpty == true)
-            ? musicItem.songmid!
-            : (musicItem.hash?.isNotEmpty == true
-                ? musicItem.hash!
-                : musicItem.id);
-        final qualityKey =
-            result.actualQuality.isNotEmpty ? result.actualQuality : requested;
-        final localPath = await playbackCache.getOrDownload(
-          remoteUrl: result.url,
-          platform: result.platform,
-          songId: songId,
-          quality: qualityKey,
-        );
-        final playUrl = PlaybackCacheService.cachedPlayableUri(localPath);
-        if (playUrl == null) {
-          debugPrint('[urlResolver] 本地缓存失败(q=$qualityKey)');
-          return null;
-        }
-        final qualityExtras = <String, dynamic>{
-          'url': playUrl,
-          'remoteUrl': result.url,
-          'actualQuality': result.actualQuality,
-          'requestedQuality': result.requestedQuality,
-          'platform': result.platform,
-        };
+        final qualityExtras = resolution.qualityExtras;
         final current = lxHandler.mediaItem.value;
         if (current != null && current.id == mediaId) {
           final extras = Map<String, dynamic>.from(current.extras ?? {});
@@ -152,7 +148,14 @@ void main() async {
           lxHandler.mediaItem.add(current.copyWith(extras: extras));
         }
         lxHandler.patchQueueItemExtras(mediaId, qualityExtras);
-        return playUrl;
+        // Only the authoritative current item retains a playback lease.
+        // Preload keeps the durable file:// URL but releases the lease.
+        if (current != null && current.id == mediaId) {
+          lxHandler.noteResolvedPlayback(mediaId, resolution);
+        } else {
+          await resolution.leaseOrNull?.release();
+        }
+        return resolution.playableUrl;
       }
       debugPrint(
           '[urlResolver] 无法获取歌曲信息: mediaId=$mediaId hasExtras=${rawExtras != null}');
