@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/music_source_service.dart';
 import '../../../core/storage/storage_service.dart';
@@ -36,101 +35,158 @@ final selectedSourceIdProvider = StateProvider<String>((ref) => 'tx');
 class SearchState {
   final List<MusicItem> items;
   final int page;
+  final int generation;
   final bool isLoading;
   final bool hasMore;
   final String? error;
+  final String query;
+  final String sourceId;
 
   SearchState({
     this.items = const [],
     this.page = 1,
+    this.generation = 0,
     this.isLoading = false,
     this.hasMore = true,
     this.error,
+    this.query = '',
+    this.sourceId = '',
   });
 
   SearchState copyWith({
     List<MusicItem>? items,
     int? page,
+    int? generation,
     bool? isLoading,
     bool? hasMore,
     String? error,
+    String? query,
+    String? sourceId,
   }) {
     return SearchState(
       items: items ?? this.items,
       page: page ?? this.page,
+      generation: generation ?? this.generation,
       isLoading: isLoading ?? this.isLoading,
       hasMore: hasMore ?? this.hasMore,
       error: error,
+      query: query ?? this.query,
+      sourceId: sourceId ?? this.sourceId,
     );
   }
 }
 
+typedef SearchLoader = Future<List<MusicItem>> Function(
+  String query,
+  String sourceId,
+  int page,
+);
+
 class SearchNotifier extends StateNotifier<SearchState> {
-  final MusicSourceService _service;
-  final Ref _ref;
+  SearchNotifier(this._load, this._readSelectedSource) : super(SearchState());
 
-  SearchNotifier(this._service, this._ref) : super(SearchState());
+  final SearchLoader _load;
+  final String Function() _readSelectedSource;
+  int _generation = 0;
 
-  Future<void> search(String query, {bool isLoadMore = false}) async {
-    final timestamp = DateTime.now().millisecondsSinceEpoch;
-    debugPrint(' [SearchFlow] [$timestamp] SearchNotifier.search START: query=$query, isLoadMore=$isLoadMore');
-    
+  Future<void> search(String rawQuery) async {
+    final query = rawQuery.trim();
+    final generation = ++_generation;
     if (query.isEmpty) {
-      state = SearchState();
+      state = SearchState(generation: generation);
       return;
     }
+    final sourceId = _readSelectedSource();
+    state = SearchState(
+      generation: generation,
+      isLoading: true,
+      query: query,
+      sourceId: sourceId,
+    );
+    await _loadPage(
+      generation: generation,
+      query: query,
+      sourceId: sourceId,
+      page: 1,
+      append: false,
+    );
+  }
 
-    // 防止重复搜索
-    if (state.isLoading && !isLoadMore) {
-      debugPrint(' [SearchFlow] [$timestamp] SearchNotifier.search IGNORED: Already loading');
-      return;
-    }
-    if (isLoadMore && (!state.hasMore || state.isLoading)) return;
-
-    final currentPage = isLoadMore ? state.page + 1 : 1;
-    final sourceId = _ref.read(selectedSourceIdProvider);
-
+  Future<void> loadMore() async {
+    if (state.isLoading || !state.hasMore || state.query.isEmpty) return;
+    final generation = state.generation;
+    final query = state.query;
+    final sourceId = state.sourceId;
+    final page = state.page + 1;
     state = state.copyWith(isLoading: true, error: null);
+    await _loadPage(
+      generation: generation,
+      query: query,
+      sourceId: sourceId,
+      page: page,
+      append: true,
+    );
+  }
 
-    final stopwatch = Stopwatch()..start();
+  Future<void> _loadPage({
+    required int generation,
+    required String query,
+    required String sourceId,
+    required int page,
+    required bool append,
+  }) async {
     try {
-      debugPrint(' [SearchFlow] [$timestamp] Calling Service.search: source=$sourceId, type=music');
-      final results = await _service.search(
-        query,
-        customSourceId: sourceId,
-        page: currentPage,
-        type: 'music',
-      );
-      
-      stopwatch.stop();
-      debugPrint(' [SearchFlow] [$timestamp] Service.search SUCCESS: found ${results.length} items, duration=${stopwatch.elapsedMilliseconds}ms');
-
+      final results = await _load(query, sourceId, page);
+      if (!_owns(generation, query, sourceId)) return;
       state = state.copyWith(
-        items: isLoadMore ? [...state.items, ...results] : results,
-        page: currentPage,
+        items: append ? [...state.items, ...results] : results,
+        page: page,
         isLoading: false,
-        hasMore: results.isNotEmpty && results.length >= 20,
+        hasMore: results.length >= 20,
+        error: null,
       );
-    } catch (e, stack) {
-      stopwatch.stop();
-      debugPrint(' [SearchFlow] [$timestamp] Service.search ERROR: $e, duration=${stopwatch.elapsedMilliseconds}ms');
-      debugPrint(stack.toString());
-      state = state.copyWith(isLoading: false, error: e.toString());
+    } catch (error) {
+      if (!_owns(generation, query, sourceId)) return;
+      state = state.copyWith(isLoading: false, error: error.toString());
     }
   }
 
+  bool _owns(int generation, String query, String sourceId) =>
+      mounted &&
+      generation == _generation &&
+      state.generation == generation &&
+      state.query == query &&
+      state.sourceId == sourceId;
+
   void reset() {
-    state = SearchState();
+    final generation = ++_generation;
+    state = SearchState(generation: generation);
+  }
+
+  @override
+  void dispose() {
+    _generation++;
+    super.dispose();
   }
 }
 
-final searchStateProvider = StateNotifierProvider<SearchNotifier, SearchState>((ref) {
+final searchStateProvider =
+    StateNotifierProvider<SearchNotifier, SearchState>((ref) {
   final service = ref.watch(musicSourceServiceProvider);
-  return SearchNotifier(service, ref);
+  return SearchNotifier(
+    (query, sourceId, page) => service.search(
+      query,
+      customSourceId: sourceId,
+      page: page,
+      type: 'music',
+    ),
+    () => ref.read(selectedSourceIdProvider),
+  );
 });
 
 // 搜索历史记录（持久化）
-final searchHistoryProvider = StateNotifierProvider<SearchHistoryNotifier, List<String>>((ref) {
+final searchHistoryProvider =
+    StateNotifierProvider<SearchHistoryNotifier, List<String>>((ref) {
   return SearchHistoryNotifier();
 });
 
@@ -174,7 +230,8 @@ final hotSearchProvider = FutureProvider<List<String>>((ref) async {
   if (kwSource == null) return _defaultHotSearch;
   try {
     final dio = kwSource.createDioForService();
-    final response = await dio.get('https://search.kuwo.cn/r.s', queryParameters: {
+    final response =
+        await dio.get('https://search.kuwo.cn/r.s', queryParameters: {
       'client': 'kt',
       'rn': '20',
       'pn': '0',
@@ -188,11 +245,26 @@ final hotSearchProvider = FutureProvider<List<String>>((ref) async {
     if (data is Map) {
       final list = data['musiclist'] as List?;
       if (list != null) {
-        return list.take(20).map((item) => (item as Map)['SONGNAME'] as String? ?? '').where((s) => s.isNotEmpty).toList();
+        return list
+            .take(20)
+            .map((item) => (item as Map)['SONGNAME'] as String? ?? '')
+            .where((s) => s.isNotEmpty)
+            .toList();
       }
     }
   } catch (_) {}
   return _defaultHotSearch;
 });
 
-const _defaultHotSearch = ['周杰伦', '薛之谦', '陈奕迅', '林俊杰', '邓紫棋', '毛不易', '华晨宇', '李荣浩', '周深', '张杰'];
+const _defaultHotSearch = [
+  '周杰伦',
+  '薛之谦',
+  '陈奕迅',
+  '林俊杰',
+  '邓紫棋',
+  '毛不易',
+  '华晨宇',
+  '李荣浩',
+  '周深',
+  '张杰'
+];

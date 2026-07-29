@@ -49,6 +49,7 @@ class PlaybackCommandCoordinator {
   _DesiredSource? _desiredSource;
   int? _installedSourceToken;
   bool _stopDesired = false;
+  bool _stopApplied = false;
   bool _desiredPlaying = false;
   final Set<PreservingPauseOwner> _preservingPauseOwners = {};
   int _intentRevision = 0;
@@ -73,6 +74,10 @@ class PlaybackCommandCoordinator {
   int? _failedPlaySourceToken;
   int? _failedSourceToken;
   SourceCommitFailed? _failedSourceCommit;
+  bool _shutdown = false;
+  bool _stoppingAndWaiting = false;
+  Object? _shutdownError;
+  StackTrace? _shutdownStackTrace;
 
   PlaybackCommandCoordinator(
     this._player, {
@@ -99,28 +104,35 @@ class PlaybackCommandCoordinator {
 
   int requestSource({
     required String mediaId,
-    required int queueIndex,
+    required int occurrenceId,
     required Duration position,
   }) {
+    if (_shutdown) return -1;
     final token = ++_sourceToken;
     _desiredSource = _DesiredSource(
       token: token,
       mediaId: mediaId,
-      queueIndex: queueIndex,
+      occurrenceId: occurrenceId,
       position: position,
     );
     _failedSourceToken = null;
     _failedSourceCommit = null;
     _stopDesired = false;
+    _stopApplied = false;
     _desiredSeek = null;
     _appliedSeekRevision = _seekRevision;
     _markDirty();
     return token;
   }
 
-  bool ownsSourceRequest(int token) => _desiredSource?.token == token;
+  bool ownsSourceRequest(int token, int occurrenceId) {
+    if (_shutdown) return false;
+    final desired = _desiredSource;
+    return desired?.token == token && desired?.occurrenceId == occurrenceId;
+  }
 
   Future<SourceCommitResult> commitSource(int token, AudioSource source) async {
+    if (_shutdown) return const SourceCommitStale();
     final desired = _desiredSource;
     if (desired == null || desired.token != token) {
       return const SourceCommitStale();
@@ -139,6 +151,7 @@ class PlaybackCommandCoordinator {
   }
 
   Future<void> recordExplicitPlayIntent() {
+    if (_shutdown) return Future<void>.value();
     _intentRevision++;
     _desiredPlaying = true;
     _stopDesired = false;
@@ -147,12 +160,14 @@ class PlaybackCommandCoordinator {
   }
 
   Future<void> recordExplicitPauseIntent() {
+    if (_shutdown) return Future<void>.value();
     _intentRevision++;
     _desiredPlaying = false;
     return _markDirty();
   }
 
   Future<PreservingPauseOwner> pausePreservingIntent() async {
+    if (_shutdown) return PreservingPauseOwner._(_intentRevision, null);
     final owner = PreservingPauseOwner._(
       _intentRevision,
       _desiredSource?.token,
@@ -166,6 +181,7 @@ class PlaybackCommandCoordinator {
     PreservingPauseOwner owner, {
     bool stopIfStillOwnsIntent = false,
   }) {
+    if (_shutdown) return Future<void>.value();
     if (!_preservingPauseOwners.remove(owner)) return settled;
     if (stopIfStillOwnsIntent &&
         owner._intentRevision == _intentRevision &&
@@ -177,6 +193,7 @@ class PlaybackCommandCoordinator {
   }
 
   Future<void> setDesiredPlayingPreservingIntent(bool playing) {
+    if (_shutdown) return Future<void>.value();
     _desiredPlaying = playing;
     if (playing) {
       _retirePausedPlayLifecycle();
@@ -184,24 +201,65 @@ class PlaybackCommandCoordinator {
     return _markDirty();
   }
 
-  Future<void> reconcilePlayingIntent() => _markDirty();
+  Future<void> reconcilePlayingIntent() =>
+      _shutdown ? Future<void>.value() : _markDirty();
 
   Future<void> recoverIdleSource() {
+    if (_shutdown) return Future<void>.value();
     _installedSourceToken = null;
     _activePlayCommandToken = null;
     return _markDirty();
   }
 
   Future<void> stop() {
+    if (_shutdown) return settle();
+    _prepareStop();
+    return _markDirty();
+  }
+
+  Future<void> stopAndWait() async {
+    if (_shutdown) {
+      await settle();
+      if (_shutdownError case final error?) {
+        Error.throwWithStackTrace(error, _shutdownStackTrace!);
+      }
+      return;
+    }
+    _shutdown = true;
+    _stoppingAndWaiting = true;
+    _shutdownError = null;
+    _shutdownStackTrace = null;
+    _prepareStop();
+    try {
+      await _markDirty(awaitApplication: true);
+      await settle();
+      if (_shutdownError case final error?) {
+        Error.throwWithStackTrace(error, _shutdownStackTrace!);
+      }
+    } finally {
+      _stoppingAndWaiting = false;
+    }
+  }
+
+  Future<void> settle() async {
+    while (true) {
+      final tail = _tail;
+      await tail;
+      if (identical(tail, _tail)) return;
+    }
+  }
+
+  void _prepareStop() {
     _intentRevision++;
     _desiredPlaying = false;
     _desiredSource = null;
     _stopDesired = true;
+    _stopApplied = false;
     _sourceToken++;
-    return _markDirty();
   }
 
   Future<bool> seek(Duration position) async {
+    if (_shutdown) return false;
     _desiredSeek = position;
     final revision = ++_seekRevision;
     await _markDirty(awaitApplication: true);
@@ -209,16 +267,19 @@ class PlaybackCommandCoordinator {
   }
 
   Future<void> setLoopMode(LoopMode mode) {
+    if (_shutdown) return Future<void>.value();
     _desiredLoopMode = mode;
     return _markDirty();
   }
 
   Future<void> setShuffleModeEnabled(bool enabled) {
+    if (_shutdown) return Future<void>.value();
     _desiredShuffleEnabled = enabled;
     return _markDirty();
   }
 
   Future<void> beginInterruption() {
+    if (_shutdown) return Future<void>.value();
     if (_interruptionDepth == 0) {
       _interruptionMayResume = true;
       _interruptionBeginIntentRevision = _intentRevision;
@@ -231,6 +292,7 @@ class PlaybackCommandCoordinator {
     required bool mayResume,
     bool allowAutomaticResume = true,
   }) {
+    if (_shutdown) return Future<void>.value();
     if (_interruptionDepth == 0) return settled;
     if (!mayResume) _interruptionMayResume = false;
     _interruptionDepth--;
@@ -247,6 +309,7 @@ class PlaybackCommandCoordinator {
   }
 
   Future<void> becomingNoisy() {
+    if (_shutdown) return Future<void>.value();
     _interruptionDepth = 0;
     _interruptionMayResume = true;
     _intentRevision++;
@@ -296,15 +359,18 @@ class PlaybackCommandCoordinator {
       }
 
       if (_stopDesired) {
-        if (_installedSourceToken != null ||
-            _player.playing ||
-            _player.processingState != ProcessingState.idle) {
+        if (!_stopApplied &&
+            (_installedSourceToken != null ||
+                _player.playing ||
+                _player.processingState != ProcessingState.idle)) {
           final playToken = _activePlayCommandToken;
           if (playToken != null) {
             _playEndReasons[playToken] = _PlayEndReason.stop;
           }
+          _stopApplied = true;
           await _player.stop();
         }
+        _stopApplied = true;
         _installedSourceToken = null;
         _activePlayCommandToken = null;
         _notifyIfCurrent(commandRevision);
@@ -396,6 +462,10 @@ class PlaybackCommandCoordinator {
         }
       }
     } catch (error, stackTrace) {
+      if (_stoppingAndWaiting) {
+        _shutdownError ??= error;
+        _shutdownStackTrace ??= stackTrace;
+      }
       _onError?.call('reconcile', error, stackTrace);
       _notifyIfCurrent(commandRevision);
     }
@@ -471,14 +541,14 @@ enum _PlayEndReason { preservingPause, pause, stop, completed, unknown }
 class _DesiredSource {
   final int token;
   final String mediaId;
-  final int queueIndex;
+  final int occurrenceId;
   final Duration position;
   AudioSource? source;
 
   _DesiredSource({
     required this.token,
     required this.mediaId,
-    required this.queueIndex,
+    required this.occurrenceId,
     required this.position,
   });
 }

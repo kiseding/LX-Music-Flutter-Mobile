@@ -1,8 +1,9 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+
 import '../domain/lyric.dart';
 import '../domain/lyric_service.dart';
-import '../../player/presentation/player_provider.dart';
 import '../../player/domain/music_item.dart';
+import '../../player/presentation/player_provider.dart';
 import '../../search/presentation/search_provider.dart';
 
 final lyricServiceProvider = Provider<LyricService>((ref) {
@@ -11,33 +12,89 @@ final lyricServiceProvider = Provider<LyricService>((ref) {
   return LyricService(musicSourceService);
 });
 
-// 当前歌词
-final currentLyricProvider = StateNotifierProvider<LyricNotifier, Lyrics>((ref) {
-  return LyricNotifier(ref);
+typedef LyricLoader = Future<Lyrics> Function(MusicItem music);
+
+final lyricLoaderProvider = Provider<LyricLoader>((ref) {
+  return ref.read(lyricServiceProvider).fetchLyric;
 });
 
-class LyricNotifier extends StateNotifier<Lyrics> {
-  final Ref _ref;
-  String? _lastSongId;
+final currentLyricLoadProvider =
+    StateNotifierProvider<LyricNotifier, LyricLoadState>((ref) {
+  final notifier = LyricNotifier(ref.read(lyricLoaderProvider));
+  ref.listen<MusicItem?>(currentMusicProvider, (_, next) {
+    notifier.select(next).ignore();
+  }, fireImmediately: true);
+  return notifier;
+});
 
-  LyricNotifier(this._ref) : super(Lyrics.empty()) {
-    // 监听当前播放歌曲，自动加载歌词
-    _ref.listen(currentMusicProvider, (previous, next) {
-      if (next != null && next.id != _lastSongId) {
-        _lastSongId = next.id;
-        loadLyric(next);
-      } else if (next == null) {
-        state = Lyrics.empty();
-        _lastSongId = null;
-      }
-    });
+final currentLyricProvider = Provider<Lyrics>((ref) {
+  return ref.watch(currentLyricLoadProvider).lyrics;
+});
+
+class LyricLoadState {
+  const LyricLoadState({
+    required this.lyrics,
+    this.isLoading = false,
+    this.error,
+    this.stackTrace,
+  });
+
+  factory LyricLoadState.empty() => LyricLoadState(lyrics: Lyrics.empty());
+
+  final Lyrics lyrics;
+  final bool isLoading;
+  final Object? error;
+  final StackTrace? stackTrace;
+}
+
+class LyricNotifier extends StateNotifier<LyricLoadState> {
+  LyricNotifier(this._load) : super(LyricLoadState.empty());
+
+  final LyricLoader _load;
+  int _generation = 0;
+  MusicItem? _selectedMusic;
+  String? _selectedSongId;
+
+  Future<void> select(MusicItem? music) async {
+    final generation = ++_generation;
+    _selectedMusic = music;
+    _selectedSongId = music?.id;
+    state = LyricLoadState(
+      lyrics: Lyrics.empty(),
+      isLoading: music != null,
+    );
+    if (music == null) return;
+
+    try {
+      final lyrics = await _load(music);
+      if (!_owns(generation, music.id)) return;
+      state = LyricLoadState(lyrics: lyrics);
+    } catch (error, stackTrace) {
+      if (!_owns(generation, music.id)) return;
+      state = LyricLoadState(
+        lyrics: Lyrics.empty(),
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
   }
 
-  Future<void> loadLyric(MusicItem music) async {
-    final lyricService = _ref.read(lyricServiceProvider);
-    state = Lyrics.empty(); // 重置
-    final lyrics = await lyricService.fetchLyric(music);
-    state = lyrics;
+  Future<void> retry() async {
+    final music = _selectedMusic;
+    if (music == null) return;
+    await select(music);
+  }
+
+  bool _owns(int generation, String songId) {
+    return mounted && generation == _generation && songId == _selectedSongId;
+  }
+
+  @override
+  void dispose() {
+    _generation++;
+    _selectedMusic = null;
+    _selectedSongId = null;
+    super.dispose();
   }
 }
 
@@ -45,7 +102,7 @@ class LyricNotifier extends StateNotifier<Lyrics> {
 final currentLineIndexProvider = Provider<int>((ref) {
   final position = ref.watch(playerPositionProvider);
   final lyrics = ref.watch(currentLyricProvider);
-  
+
   final pos = position;
   return lyrics.getCurrentLineIndex(pos);
 });

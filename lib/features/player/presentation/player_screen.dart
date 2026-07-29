@@ -9,6 +9,7 @@ import '../../../core/network/play_url_result.dart';
 import '../domain/music_item.dart';
 import '../domain/player_service.dart';
 import 'player_provider.dart';
+import 'scrub_session.dart';
 import '../../playlist/presentation/playlist_provider.dart';
 import '../../playlist/presentation/playlist_picker.dart';
 import '../../download/presentation/download_provider.dart';
@@ -28,7 +29,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   bool _seeking = false;
   double _seekValue = 0; // 0..1 only while finger is down
   bool _wasPlayingBeforeSeek = false;
-  Future<int> _scrubFuture = Future<int>.value(0);
+  late final ScrubSession _scrubSession;
+  ScrubOperation? _dragOperation;
   double _dragOffset = 0;
   bool _draggingDown = false;
 
@@ -36,10 +38,25 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   void initState() {
     super.initState();
     _pageController = PageController();
+    _scrubSession = ScrubSession(
+      begin: ref.read(beginScrubProvider),
+      finish: ref.read(finishScrubProvider),
+      cancel: ref.read(cancelScrubProvider),
+    );
+  }
+
+  void _cancelActiveScrub() {
+    final operation = _dragOperation;
+    _dragOperation = null;
+    final cancelledCurrent =
+        operation != null ? _scrubSession.cancel(operation) : false;
+    if (cancelledCurrent) _seeking = false;
   }
 
   @override
   void dispose() {
+    _dragOperation = null;
+    _scrubSession.dispose();
     _pageController.dispose();
     super.dispose();
   }
@@ -561,7 +578,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                       _wasPlayingBeforeSeek = playing;
                       _seekValue = (d.localPosition.dx / width).clamp(0.0, 1.0);
                     });
-                    _scrubFuture = ref.read(beginScrubProvider)();
+                    _dragOperation = _scrubSession.begin();
                   },
                   onHorizontalDragUpdate: (d) {
                     setState(() {
@@ -571,13 +588,23 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                   onHorizontalDragEnd: (_) async {
                     final target =
                         Duration(milliseconds: (_seekValue * totalMs).round());
-                    final generation = await _scrubFuture;
-                    await ref.read(finishScrubProvider)(
-                      generation,
+                    final operation = _dragOperation;
+                    if (operation == null) return;
+                    final mayClear = await _scrubSession.finish(
+                      operation,
                       target,
                       resumeAfter: _wasPlayingBeforeSeek,
                     );
-                    if (mounted) setState(() => _seeking = false);
+                    if (mounted && mayClear) {
+                      if (identical(_dragOperation, operation)) {
+                        _dragOperation = null;
+                      }
+                      setState(() => _seeking = false);
+                    }
+                  },
+                  onHorizontalDragCancel: () {
+                    _cancelActiveScrub();
+                    if (mounted) setState(() {});
                   },
                   onTapUp: (d) async {
                     final playing =
@@ -590,13 +617,15 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                       _seeking = true;
                       _wasPlayingBeforeSeek = playing;
                     });
-                    final generation = await ref.read(beginScrubProvider)();
-                    await ref.read(finishScrubProvider)(
-                      generation,
+                    final operation = _scrubSession.begin();
+                    final mayClear = await _scrubSession.finish(
+                      operation,
                       target,
                       resumeAfter: playing,
                     );
-                    if (mounted) setState(() => _seeking = false);
+                    if (mounted && mayClear) {
+                      setState(() => _seeking = false);
+                    }
                   },
                   child: SizedBox(
                     height: 28,

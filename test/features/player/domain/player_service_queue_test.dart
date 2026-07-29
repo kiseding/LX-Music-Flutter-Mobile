@@ -50,8 +50,9 @@ void main() {
     audioHandler = handler;
     const currentId = 'B';
     MediaItem item(String id) => MediaItem(id: id, title: id);
-    await handler.updateQueue([item(currentId)]);
-    await handler.updateQueue([item('A'), item(currentId), item('C')]);
+    final current = item(currentId);
+    await handler.updateQueue([current]);
+    await handler.updateQueue([item('A'), current, item('C')]);
 
     await PlayerService().playNext(MusicItem(
       id: 'A',
@@ -69,7 +70,8 @@ void main() {
     final releaseResolver = Completer<void>();
     final errors = <String>[];
     MediaItem item(String id) => MediaItem(id: id, title: id);
-    await handler.updateQueue([item('A'), item('B')]);
+    final active = item('B');
+    await handler.updateQueue([item('A'), active]);
     handler.onError = errors.add;
     handler.urlResolver = (id, [extras]) async {
       resolverStarted.complete();
@@ -79,7 +81,7 @@ void main() {
 
     final load = handler.skipToQueueItem(1);
     await resolverStarted.future;
-    await handler.updateQueue([item('B')]);
+    await handler.updateQueue([active]);
     releaseResolver.complete();
     await load;
 
@@ -91,8 +93,9 @@ void main() {
   test('removing before current preserves current item and shifts index',
       () async {
     MediaItem item(String id) => MediaItem(id: id, title: id);
-    await handler.updateQueue([item('B')]);
-    await handler.updateQueue([item('A'), item('B'), item('C')]);
+    final current = item('B');
+    await handler.updateQueue([current]);
+    await handler.updateQueue([item('A'), current, item('C')]);
 
     await handler.removeQueueItem(item('A'));
 
@@ -110,8 +113,9 @@ void main() {
             'requestedQuality': '320k',
           },
         );
-    await handler.updateQueue([item('B')]);
-    await handler.updateQueue([item('A'), item('B'), item('C')]);
+    final current = item('B');
+    await handler.updateQueue([current]);
+    await handler.updateQueue([item('A'), current, item('C')]);
 
     await handler.removeQueueItem(item('B'));
 
@@ -129,8 +133,9 @@ void main() {
             'requestedQuality': '320k',
           },
         );
-    await handler.updateQueue([item('C')]);
-    await handler.updateQueue([item('A'), item('B'), item('C')]);
+    final current = item('C');
+    await handler.updateQueue([current]);
+    await handler.updateQueue([item('A'), item('B'), current]);
 
     await handler.removeQueueItem(item('C'));
 
@@ -141,8 +146,9 @@ void main() {
 
   test('removing a non-current last item preserves current state', () async {
     MediaItem item(String id) => MediaItem(id: id, title: id);
-    await handler.updateQueue([item('B')]);
-    await handler.updateQueue([item('A'), item('B'), item('C')]);
+    final current = item('B');
+    await handler.updateQueue([current]);
+    await handler.updateQueue([item('A'), current, item('C')]);
 
     await handler.removeQueueItem(item('C'));
 
@@ -224,11 +230,12 @@ void main() {
     final current = item('B');
     await handler.updateQueue([item('A'), current, item('C')]);
     await handler.skipToQueueItem(1);
+    final liveCurrent = handler.queueItems[1];
     player.gateNextPause();
 
-    final removal = handler.removeQueueItem(current);
+    final removal = handler.removeQueueItem(liveCurrent);
     await player.pauseStarted.future;
-    await handler.updateQueue([current, item('A'), item('C')]);
+    await handler.updateQueue([liveCurrent, item('A'), item('C')]);
     player.releasePause.complete();
     await removal;
 
@@ -264,6 +271,44 @@ void main() {
     expect(handler.mediaItem.value?.id, 'A');
     expect(player.playing, isTrue);
   });
+
+  for (final direction in ['next', 'previous']) {
+    test('$direction follows its occurrence when queue moves during pause',
+        () async {
+      MediaItem item(String id) => MediaItem(
+            id: id,
+            title: id,
+            extras: {
+              'url': 'file:///tmp/$id.mp3',
+              'requestedQuality': '320k',
+            },
+          );
+      final a = item('A');
+      final b = item('B');
+      final c = item('C');
+      await handler.setPlaylist(
+        [a, b, c],
+        initialIndex: direction == 'next' ? 0 : 2,
+      );
+      final liveA = handler.queueItems[0];
+      final liveB = handler.queueItems[1];
+      final liveC = handler.queueItems[2];
+      player.gateNextPause();
+
+      final navigation =
+          direction == 'next' ? handler.skipToNext() : handler.skipToPrevious();
+      await player.pauseStarted.future;
+      await handler.updateQueue(
+        direction == 'next' ? [liveA, liveC, liveB] : [liveB, liveA, liveC],
+      );
+      player.releasePause.complete();
+      await navigation;
+
+      expect(handler.mediaItem.value?.id, 'B');
+      expect(handler.currentQueueIndex, direction == 'next' ? 2 : 0);
+      expect((player.loadedSource as ProgressiveAudioSource).tag.id, 'B');
+    });
+  }
 
   for (final replacementId in [null, 'D']) {
     test(

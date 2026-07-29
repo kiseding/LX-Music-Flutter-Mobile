@@ -1715,6 +1715,98 @@ void main() {
     await lease.release();
   });
 
+  test('dispose drains gated acquireOrDownload and prevents a late lease',
+      () async {
+    final validationStarted = Completer<void>();
+    final releaseValidation = Completer<void>();
+    var gateValidation = false;
+    final gatedCache = PlaybackCacheService(
+      cacheRootOverride: tempDir.path,
+      indexStore: MemoryPlaybackCacheIndexStore(),
+      beforeLeaseValidation: (_) async {
+        if (!gateValidation) return;
+        validationStarted.complete();
+        await releaseValidation.future;
+      },
+      downloader: (url, savePath, {cancelToken}) async {
+        await File(savePath).writeAsBytes(List<int>.filled(32, 1));
+      },
+    );
+    await cache.dispose();
+    cache = gatedCache;
+    await cache.getOrDownload(
+      remoteUrl: 'https://cdn.example.com/dispose-acquire.mp3',
+      platform: 'tx',
+      songId: 'dispose-acquire',
+      quality: '320k',
+    );
+    gateValidation = true;
+    final acquiring = cache.acquireOrDownload(
+      remoteUrl: 'https://cdn.example.com/dispose-acquire.mp3',
+      platform: 'tx',
+      songId: 'dispose-acquire',
+      quality: '320k',
+    );
+    await validationStarted.future;
+
+    var disposed = false;
+    final disposing = cache.dispose().then((_) => disposed = true);
+    await Future<void>.delayed(Duration.zero);
+    expect(disposed, isFalse);
+    releaseValidation.complete();
+
+    expect(await acquiring, isNull);
+    await disposing;
+    expect(disposed, isTrue);
+  });
+
+  for (final operation in ['classifyExisting', 'acquireExisting']) {
+    test('dispose drains gated $operation and prevents a late lease', () async {
+      final validationStarted = Completer<void>();
+      final releaseValidation = Completer<void>();
+      var gateValidation = false;
+      final gatedCache = PlaybackCacheService(
+        cacheRootOverride: tempDir.path,
+        indexStore: MemoryPlaybackCacheIndexStore(),
+        beforeExistingLeaseValidation: (_) async {
+          if (!gateValidation) return;
+          validationStarted.complete();
+          await releaseValidation.future;
+        },
+        downloader: (url, savePath, {cancelToken}) async {
+          await File(savePath).writeAsBytes(List<int>.filled(32, 1));
+        },
+      );
+      await cache.dispose();
+      cache = gatedCache;
+      final path = await cache.getOrDownload(
+        remoteUrl: 'https://cdn.example.com/$operation.mp3',
+        platform: 'tx',
+        songId: operation,
+        quality: '320k',
+      );
+      gateValidation = true;
+      final acquisition = operation == 'classifyExisting'
+          ? cache.classifyExisting(path!)
+          : cache.acquireExisting(path!);
+      await validationStarted.future;
+
+      var disposed = false;
+      final disposing = cache.dispose().then((_) => disposed = true);
+      await Future<void>.delayed(Duration.zero);
+      expect(disposed, isFalse);
+      releaseValidation.complete();
+
+      final result = await acquisition;
+      if (operation == 'classifyExisting') {
+        expect(result, isA<RejectedPlaybackCachePath>());
+      } else {
+        expect(result, isNull);
+      }
+      await disposing;
+    });
+  }
+
   test('lease acquisition losing to size purge retries to a valid file',
       () async {
     var now = DateTime(2026, 1, 1);

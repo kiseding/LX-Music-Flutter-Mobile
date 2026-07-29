@@ -356,10 +356,24 @@ class PlaybackLeaseSession {
     final pending = _pending;
     _active = null;
     _pending = null;
-    if (pending != null && !identical(pending, active)) {
-      await pending.release();
+    Object? firstError;
+    StackTrace? firstStackTrace;
+    Future<void> release(PlaybackCacheLease lease) async {
+      try {
+        await lease.release();
+      } catch (error, stackTrace) {
+        firstError ??= error;
+        firstStackTrace ??= stackTrace;
+      }
     }
-    if (active != null) await active.release();
+
+    if (pending != null && !identical(pending, active)) {
+      await release(pending);
+    }
+    if (active != null) await release(active);
+    if (firstError case final error?) {
+      Error.throwWithStackTrace(error, firstStackTrace!);
+    }
   }
 }
 
@@ -385,6 +399,7 @@ class PlaybackCacheService {
   final PlaybackCacheIndexStore _indexStore;
   final DateTime Function() _clock;
   final PlaybackCacheKeyHook? _beforeLeaseValidation;
+  final PlaybackCacheKeyHook? _beforeExistingLeaseValidation;
   final Duration ttl;
   final int maxBytes;
 
@@ -393,6 +408,7 @@ class PlaybackCacheService {
   final Map<String, _CacheEntry> _index = {};
   final Map<String, _InflightOperation> _inflight = {};
   final Set<_InflightOperation> _activeOperations = {};
+  final Set<Future<void>> _activeAcquisitions = {};
   final Map<String, int> _generations = {};
   final Map<String, int> _leaseCounts = {};
   final Map<String, Future<void>> _keyTransactionTails = {};
@@ -411,13 +427,15 @@ class PlaybackCacheService {
     PlaybackCacheIndexStore? indexStore,
     DateTime Function()? clock,
     PlaybackCacheKeyHook? beforeLeaseValidation,
+    @visibleForTesting PlaybackCacheKeyHook? beforeExistingLeaseValidation,
     this.ttl = defaultTtl,
     this.maxBytes = defaultMaxBytes,
   })  : _dio = dio ?? _createDownloadDio(),
         _downloader = downloader,
         _indexStore = indexStore ?? PrefsPlaybackCacheIndexStore(),
         _clock = clock ?? DateTime.now,
-        _beforeLeaseValidation = beforeLeaseValidation;
+        _beforeLeaseValidation = beforeLeaseValidation,
+        _beforeExistingLeaseValidation = beforeExistingLeaseValidation;
 
   static Dio _createDownloadDio() {
     return AppHttpClient.create(
@@ -532,6 +550,9 @@ class PlaybackCacheService {
         } catch (_) {}
       }));
     }
+    while (_activeAcquisitions.isNotEmpty) {
+      await Future.wait(_activeAcquisitions.toList(growable: false));
+    }
     while (true) {
       final tail = _pendingIndexWrite;
       try {
@@ -564,8 +585,46 @@ class PlaybackCacheService {
     required String platform,
     required String songId,
     required String quality,
+  }) {
+    return _trackAcquisition<PlaybackCacheLease?>(
+      () => _acquireOrDownload(
+        remoteUrl: remoteUrl,
+        platform: platform,
+        songId: songId,
+        quality: quality,
+      ),
+      disposedResult: null,
+      releaseLate: (lease) => lease?.release() ?? Future<void>.value(),
+    );
+  }
+
+  Future<T> _trackAcquisition<T>(
+    Future<T> Function() operation, {
+    required T disposedResult,
+    required Future<void> Function(T result) releaseLate,
+  }) {
+    if (_disposed) return Future<T>.value(disposedResult);
+    final acquisition = () async {
+      final result = await operation();
+      if (!_disposed) return result;
+      await releaseLate(result);
+      return disposedResult;
+    }();
+    final tracked = acquisition.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace __) {},
+    );
+    _activeAcquisitions.add(tracked);
+    tracked.whenComplete(() => _activeAcquisitions.remove(tracked)).ignore();
+    return acquisition;
+  }
+
+  Future<PlaybackCacheLease?> _acquireOrDownload({
+    required String remoteUrl,
+    required String platform,
+    required String songId,
+    required String quality,
   }) async {
-    if (_disposed) return null;
     final key = cacheKey(
       platform: platform,
       songId: songId,
@@ -580,29 +639,54 @@ class PlaybackCacheService {
         quality: quality,
       );
       if (path == null) return null;
+      if (_disposed) return null;
       await _beforeLeaseValidation?.call(key);
+      if (_disposed) return null;
       final lease = await _withKeyTransaction(
         key,
-        () => _acquireLeaseLocked(key, path),
+        () async => _disposed ? null : await _acquireLeaseLocked(key, path),
       );
-      if (lease != null) return lease;
+      if (lease != null) {
+        if (_disposed) {
+          await lease.release();
+          return null;
+        }
+        return lease;
+      }
     }
     return null;
   }
 
   /// Reacquires a lease for an already indexed exact stable cache file.
   /// This never downloads and rejects paths not owned by this cache instance.
-  Future<PlaybackCacheLease?> acquireExisting(String path) async {
-    final classification = await classifyExisting(path);
-    return switch (classification) {
-      LeasedPlaybackCachePath(:final lease) => lease,
-      _ => null,
-    };
+  Future<PlaybackCacheLease?> acquireExisting(String path) {
+    return _trackAcquisition<PlaybackCacheLease?>(
+      () async {
+        final classification = await _classifyExisting(path);
+        return switch (classification) {
+          LeasedPlaybackCachePath(:final lease) => lease,
+          _ => null,
+        };
+      },
+      disposedResult: null,
+      releaseLate: (lease) => lease?.release() ?? Future<void>.value(),
+    );
   }
 
   /// Classifies a local file path at this cache's boundary. Cache-shaped files
   /// under the cache root are never treated as ordinary local media.
-  Future<PlaybackCachePathClassification> classifyExisting(String path) async {
+  Future<PlaybackCachePathClassification> classifyExisting(String path) {
+    return _trackAcquisition<PlaybackCachePathClassification>(
+      () => _classifyExisting(path),
+      disposedResult: const RejectedPlaybackCachePath(),
+      releaseLate: (classification) => switch (classification) {
+        LeasedPlaybackCachePath(:final lease) => lease.release(),
+        _ => Future<void>.value(),
+      },
+    );
+  }
+
+  Future<PlaybackCachePathClassification> _classifyExisting(String path) async {
     if (_disposed) return const RejectedPlaybackCachePath();
     await init();
     if (_disposed) return const RejectedPlaybackCachePath();
@@ -615,6 +699,8 @@ class PlaybackCacheService {
     final match = _stableCacheName.firstMatch(name);
     if (match == null) return const NonCacheLocalPlaybackPath();
     final key = match.group(1)!;
+    await _beforeExistingLeaseValidation?.call(key);
+    if (_disposed) return const RejectedPlaybackCachePath();
     return _withKeyTransaction(
       key,
       () async {
@@ -635,11 +721,13 @@ class PlaybackCacheService {
     String path, {
     bool persistAccessedAt = false,
   }) async {
+    if (_disposed) return null;
     final entry = _index[key];
     final validated = entry == null ? null : await _validatedStableEntry(entry);
+    if (_disposed) return null;
     if (validated == null ||
         path != validated.path ||
-         (_generations[key] ?? validated.generation) != validated.generation) {
+        (_generations[key] ?? validated.generation) != validated.generation) {
       return null;
     }
     if (persistAccessedAt) {
@@ -650,6 +738,7 @@ class PlaybackCacheService {
       _index[key] = updated;
       try {
         await _saveIndex();
+        if (_disposed) return null;
       } catch (_) {
         if (_index[key]?.revision == updated.revision) {
           _index[key] = validated;
@@ -659,6 +748,7 @@ class PlaybackCacheService {
     } else {
       _index[key] = validated;
     }
+    if (_disposed) return null;
     _leaseCounts[key] = (_leaseCounts[key] ?? 0) + 1;
     return PlaybackCacheLease._(
       validated.path,

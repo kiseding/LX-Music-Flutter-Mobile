@@ -375,6 +375,35 @@ void main() {
       expect(session.pendingLease, isNull);
     });
 
+    test('releaseAll continues from pending failure to active release',
+        () async {
+      final pendingFailure = StateError('pending release');
+      var pendingReleases = 0;
+      var activeReleases = 0;
+      final active = PlaybackCacheLease.test(
+        '/cache/active.mp3',
+        'file:///cache/active.mp3',
+        () async => activeReleases++,
+      );
+      final pending = PlaybackCacheLease.test(
+        '/cache/pending.mp3',
+        'file:///cache/pending.mp3',
+        () async {
+          pendingReleases++;
+          throw pendingFailure;
+        },
+      );
+      final session = PlaybackLeaseSession();
+      session.holdPending(active);
+      await session.commitAuthoritative(active);
+      session.holdPending(pending);
+
+      await expectLater(session.releaseAll(), throwsA(same(pendingFailure)));
+
+      expect(pendingReleases, 1);
+      expect(activeReleases, 1);
+    });
+
     test('generation race: only matching commit adopts lease', () async {
       final released = <String>[];
       final first = _FakeLease('/tmp/first.mp3', 'first', released.add);
@@ -532,6 +561,71 @@ void main() {
           .setPlaylist([_cachedItem('local-boundary', '/tmp/local.mp3')]);
 
       expect(player.sourceInstallCount, 1);
+    });
+
+    test('cached classification follows an occurrence moved while awaiting',
+        () async {
+      final player = _ReuseAudioPlayer();
+      final handler = LxAudioHandler(player: player);
+      addTearDown(player.dispose);
+      final classificationStarted = Completer<void>();
+      final releaseClassification = Completer<void>();
+      handler.attachPlaybackCache(
+        classifyExisting: (path) async {
+          classificationStarted.complete();
+          await releaseClassification.future;
+          return const RejectedPlaybackCachePath();
+        },
+      );
+      handler.urlResolver =
+          (id, [extras]) async => 'https://cdn.example/active.mp3';
+      final first = _cachedItem('first', '/cache/first.mp3');
+      final active = _cachedItem('active', '/cache/active.mp3');
+
+      final loading = handler.setPlaylist([first, active], initialIndex: 1);
+      await classificationStarted.future;
+      await handler.updateQueue([active, first]);
+      releaseClassification.complete();
+      await loading;
+
+      expect(handler.currentQueueIndex, 0);
+      expect(handler.mediaItem.value, same(handler.queueItems[0]));
+      expect(handler.queueItems[1], same(first));
+      expect(player.lastInstalledUri, 'https://cdn.example/active.mp3');
+      expect(player.sourceInstallCount, 1);
+    });
+
+    test('resolver file classification rejects a replaced occurrence lease',
+        () async {
+      final player = _ReuseAudioPlayer();
+      final handler = LxAudioHandler(player: player);
+      addTearDown(player.dispose);
+      final classificationStarted = Completer<void>();
+      final releaseClassification = Completer<void>();
+      final lease = _FakeLease('/cache/stale.mp3', 'stale', (_) {});
+      handler.attachPlaybackCache(
+        classifyExisting: (path) async {
+          classificationStarted.complete();
+          await releaseClassification.future;
+          return LeasedPlaybackCachePath(lease.asLease());
+        },
+      );
+      handler.urlResolver = (id, [extras]) async =>
+          PlaybackCacheService.toPlayableUri(lease.path);
+      final stale = _unresolvedItem('duplicate');
+      final replacement = _unresolvedItem('duplicate');
+
+      final loading = handler.setPlaylist([stale]);
+      await classificationStarted.future;
+      await handler.updateQueue([replacement]);
+      releaseClassification.complete();
+      await loading;
+
+      expect(handler.queueItems.single, same(replacement));
+      expect(handler.queueItems.single.extras?['url'], isNull);
+      expect(handler.mediaItem.value, same(replacement));
+      expect(player.sourceInstallCount, 0);
+      expect(lease.releaseCount, 1);
     });
 
     test('resolver cached lease commits as active ownership', () async {
@@ -964,33 +1058,55 @@ void main() {
       expect(player.sourceInstallCount, greaterThanOrEqualTo(4));
     });
 
-    for (final replacement in [false, true]) {
-      test(
-          'skip to a ${replacement ? 'replaced' : 'moved'} duplicate rejects the stale occurrence',
-          () async {
-        final player = _ReuseAudioPlayer();
-        final handler = LxAudioHandler(player: player);
-        addTearDown(player.dispose);
-        final first = _cachedItem('duplicate', '/tmp/first.mp3');
-        final second = _cachedItem('duplicate', '/tmp/second.mp3');
-        await handler.setPlaylist([first, second]);
-        final pauseGate = player.gateNextPause();
+    test('active occurrence moved during resolution still installs once',
+        () async {
+      final player = _ReuseAudioPlayer();
+      final handler = LxAudioHandler(player: player);
+      addTearDown(player.dispose);
+      final started = Completer<void>();
+      final release = Completer<void>();
+      handler.urlResolver = (id, [extras]) async {
+        started.complete();
+        await release.future;
+        return 'https://cdn.example/active.mp3';
+      };
+      final first = _cachedItem('duplicate', '/tmp/first.mp3');
+      final active = _unresolvedItem('duplicate');
 
-        final selection = handler.skipToQueueItem(1, playAfterLoad: false);
-        await pauseGate.started.future;
-        await handler.updateQueue(replacement
-            ? [handler.queueItems[0], _cachedItem('duplicate', '/tmp/new.mp3')]
-            : [handler.queueItems[1], handler.queueItems[0]]);
-        pauseGate.release.complete();
-        await selection;
+      final loading = handler.setPlaylist([first, active], initialIndex: 1);
+      await started.future;
+      await handler.updateQueue([active, first]);
+      release.complete();
+      await loading;
 
-        expect(player.sourceInstallCount, 1);
-        expect(
-            handler.queueItems[0].extras?['url'],
-            PlaybackCacheService.toPlayableUri(
-                replacement ? '/tmp/first.mp3' : '/tmp/second.mp3'));
-      });
-    }
+      expect(handler.currentQueueIndex, 0);
+      expect(handler.mediaItem.value, same(handler.queueItems[0]));
+      expect(player.lastInstalledUri, 'https://cdn.example/active.mp3');
+      expect(player.sourceInstallCount, 1);
+    });
+
+    test('replacing an occurrence during resolution rejects its result',
+        () async {
+      final player = _ReuseAudioPlayer();
+      final handler = LxAudioHandler(player: player);
+      addTearDown(player.dispose);
+      final started = Completer<void>();
+      final release = Completer<void>();
+      handler.urlResolver = (id, [extras]) async {
+        started.complete();
+        await release.future;
+        return 'https://cdn.example/stale.mp3';
+      };
+      final loading = handler.setPlaylist([_unresolvedItem('duplicate')]);
+      await started.future;
+
+      await handler.updateQueue([_unresolvedItem('duplicate')]);
+      release.complete();
+      await loading;
+
+      expect(player.sourceInstallCount, 0);
+      expect(handler.queueItems.single.extras?['url'], isNull);
+    });
 
     test('preload resolution patches the requested second duplicate occurrence',
         () async {
@@ -1030,80 +1146,6 @@ void main() {
 
       expect(handler.queueItems[1].extras?['actualQuality'], isNull);
       expect(handler.queueItems[2].extras?['actualQuality'], 'flac');
-    });
-
-    test('stale foreground resolution cannot patch a replaced duplicate',
-        () async {
-      final player = _ReuseAudioPlayer();
-      final handler = LxAudioHandler(player: player);
-      addTearDown(player.dispose);
-      final started = Completer<int>();
-      final result = Completer<String?>();
-      handler.urlResolver = (id, [extras]) async {
-        started.complete(extras!['_playbackGeneration'] as int);
-        return result.future;
-      };
-
-      final loading = handler.setPlaylist([_unresolvedItem('duplicate')]);
-      final generation = await started.future;
-      await handler.updateQueue([_unresolvedItem('duplicate')]);
-      final lease = _FakeLease('/cache/duplicate.mp3', 'duplicate', (_) {});
-
-      final accepted = handler.acceptResolvedPlayback(
-        mediaId: 'duplicate',
-        generation: generation,
-        resolution: CachedPlayback(lease.asLease(), {
-          'url': PlaybackCacheService.toPlayableUri(lease.path),
-          'actualQuality': 'flac',
-        }),
-      );
-      result.complete(null);
-      await loading;
-
-      expect(accepted, isFalse);
-      expect(lease.releaseCount, 1);
-      expect(handler.queueItems.single.extras?['actualQuality'], isNull);
-    });
-
-    test('stale foreground resolution cannot patch a moved duplicate',
-        () async {
-      final player = _ReuseAudioPlayer();
-      final handler = LxAudioHandler(player: player);
-      addTearDown(player.dispose);
-      final started = Completer<int>();
-      final result = Completer<String?>();
-      handler.urlResolver = (id, [extras]) async {
-        started.complete(extras!['_playbackGeneration'] as int);
-        return result.future;
-      };
-
-      final loading = handler.setPlaylist(
-        [
-          _cachedItem('duplicate', '/tmp/first.mp3'),
-          _unresolvedItem('duplicate')
-        ],
-        initialIndex: 1,
-      );
-      final generation = await started.future;
-      final first = handler.queueItems[0];
-      final active = handler.queueItems[1];
-      await handler.updateQueue([active, first]);
-
-      final accepted = handler.acceptResolvedPlayback(
-        mediaId: 'duplicate',
-        generation: generation,
-        resolution:
-            const StreamingPlayback('https://cdn.example/duplicate.mp3', {
-          'url': 'https://cdn.example/duplicate.mp3',
-          'actualQuality': 'flac',
-        }),
-      );
-      result.complete(null);
-      await loading;
-
-      expect(accepted, isFalse);
-      expect(handler.queueItems[0].extras?['actualQuality'], isNull);
-      expect(handler.queueItems[1].extras?['actualQuality'], isNull);
     });
 
     test('late preload cannot overwrite an item after it becomes current',

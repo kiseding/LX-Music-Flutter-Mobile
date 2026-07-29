@@ -9,6 +9,7 @@ import '../../../core/audio/playback_command_coordinator.dart';
 import '../../playlist/presentation/playlist_provider.dart';
 import '../domain/music_item.dart';
 import '../domain/player_service.dart';
+import 'fire_and_forget_observer.dart';
 
 final playerServiceProvider = Provider<PlayerService>((ref) {
   return PlayerService();
@@ -184,49 +185,93 @@ final recentPlayRecorderProvider = Provider<void>((ref) {
 });
 
 // 定时停止播放
-class SleepTimerNotifier extends StateNotifier<Duration?> {
+sealed class SleepTimerState {
+  const SleepTimerState();
+
+  DateTime? get endTime => null;
+}
+
+final class SleepTimerIdle extends SleepTimerState {
+  const SleepTimerIdle();
+}
+
+final class SleepTimerRunning extends SleepTimerState {
+  const SleepTimerRunning(this.duration, this.scheduledEndTime);
+
+  final Duration duration;
+  final DateTime scheduledEndTime;
+
+  @override
+  DateTime get endTime => scheduledEndTime;
+}
+
+enum SleepTimerFailureReason { pauseFailed }
+
+final class SleepTimerFailed extends SleepTimerState {
+  const SleepTimerFailed(this.reason, this.duration);
+
+  final SleepTimerFailureReason reason;
+  final Duration duration;
+}
+
+class SleepTimerNotifier extends StateNotifier<SleepTimerState> {
+  SleepTimerNotifier(this._pause) : super(const SleepTimerIdle());
+
+  final Future<void> Function() _pause;
   Timer? _timer;
-  DateTime? _endTime;
-
-  SleepTimerNotifier() : super(null);
-
-  DateTime? get endTime => _endTime;
+  int _generation = 0;
 
   void startTimer(Duration duration) {
     _timer?.cancel();
-    _endTime = DateTime.now().add(duration);
-    state = duration;
+    final generation = ++_generation;
+    state = SleepTimerRunning(duration, DateTime.now().add(duration));
 
-    _timer = Timer(duration, () {
-      // 停止播放
-      audioHandler.pause();
-      state = null;
-      _endTime = null;
+    _timer = Timer(duration, () async {
+      try {
+        await _pause();
+        if (!mounted || generation != _generation) return;
+        _timer = null;
+        state = const SleepTimerIdle();
+      } catch (_) {
+        if (!mounted || generation != _generation) return;
+        _timer = null;
+        state = SleepTimerFailed(
+          SleepTimerFailureReason.pauseFailed,
+          duration,
+        );
+      }
     });
   }
 
+  void retryTimer() {
+    if (state case SleepTimerFailed(:final duration)) {
+      startTimer(duration);
+    }
+  }
+
   void cancelTimer() {
+    _generation++;
     _timer?.cancel();
     _timer = null;
-    state = null;
-    _endTime = null;
+    state = const SleepTimerIdle();
   }
 
   @override
   void dispose() {
+    _generation++;
     _timer?.cancel();
+    _timer = null;
     super.dispose();
   }
 }
 
 final sleepTimerProvider =
-    StateNotifierProvider<SleepTimerNotifier, Duration?>((ref) {
-  return SleepTimerNotifier();
+    StateNotifierProvider<SleepTimerNotifier, SleepTimerState>((ref) {
+  return SleepTimerNotifier(audioHandler.pause);
 });
 
 final sleepTimerEndProvider = Provider<DateTime?>((ref) {
-  ref.watch(sleepTimerProvider);
-  return ref.read(sleepTimerProvider.notifier).endTime;
+  return ref.watch(sleepTimerProvider).endTime;
 });
 
 // 全局播放消息通知（用于展示 SnackBar）
@@ -351,6 +396,32 @@ class ScrubCoordinator {
     }
   }
 
+  Future<void> cancel(int generation) async {
+    final transaction = _transactions[generation];
+    if (transaction == null) return;
+    final ownsCurrent = generation == _generation;
+    if (ownsCurrent) _generation++;
+    await _releaseTransaction(transaction, resumeAfter: true);
+    if (ownsCurrent && _generation == generation + 1) {
+      _position.unfreeze(_playback.position);
+    }
+  }
+
+  Future<void> cancelAll() async {
+    final transactions = _transactions.values.toList(growable: false);
+    if (transactions.isEmpty) return;
+    final cancelledGeneration = _generation;
+    _generation++;
+    await Future.wait(
+      transactions.map(
+        (transaction) => _releaseTransaction(transaction, resumeAfter: true),
+      ),
+    );
+    if (_generation == cancelledGeneration + 1) {
+      _position.unfreeze(_playback.position);
+    }
+  }
+
   Future<void> _releaseTransaction(
     _ScrubTransaction transaction, {
     required bool resumeAfter,
@@ -468,10 +539,11 @@ class _HandlerScrubPlayback implements ScrubPlayback {
 }
 
 final scrubCoordinatorProvider = Provider<ScrubCoordinator>((ref) {
+  final observe = FireAndForgetObserver();
   final position = ref.read(playerPositionProvider.notifier);
   final handler =
       audioHandler is LxAudioHandler ? audioHandler as LxAudioHandler : null;
-  return ScrubCoordinator(
+  final coordinator = ScrubCoordinator(
     _HandlerScrubPlayback(
       handler,
       ref.read(playerServiceProvider),
@@ -479,6 +551,8 @@ final scrubCoordinatorProvider = Provider<ScrubCoordinator>((ref) {
     ),
     position,
   );
+  ref.onDispose(() => observe(coordinator.cancelAll()));
+  return coordinator;
 });
 
 final beginScrubProvider = Provider<Future<int> Function()>((ref) {
@@ -489,6 +563,10 @@ final finishScrubProvider =
     Provider<Future<void> Function(int, Duration, {required bool resumeAfter})>(
         (ref) {
   return ref.read(scrubCoordinatorProvider).finish;
+});
+
+final cancelScrubProvider = Provider<Future<void> Function(int)>((ref) {
+  return ref.read(scrubCoordinatorProvider).cancel;
 });
 
 /// 点击歌词行：使用同一 seek 事务，避免另一套时钟。

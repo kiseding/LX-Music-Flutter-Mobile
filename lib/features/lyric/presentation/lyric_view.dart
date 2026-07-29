@@ -31,7 +31,8 @@ class _LyricViewState extends ConsumerState<LyricView> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToCurrent(force: true));
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => _scrollToCurrent(force: true));
   }
 
   void _attachScrollListener() {
@@ -82,8 +83,7 @@ class _LyricViewState extends ConsumerState<LyricView> {
     final position = _scrollController.position;
     final viewport = position.viewportDimension;
     // 固定行高估算：ListView.builder 未构建的行 ensureVisible 会失败
-    final rawOffset =
-        _verticalPadding + index * _itemExtent - viewport * 0.38;
+    final rawOffset = _verticalPadding + index * _itemExtent - viewport * 0.38;
     final target = rawOffset.clamp(0.0, position.maxScrollExtent);
 
     _programmaticScroll = true;
@@ -100,7 +100,8 @@ class _LyricViewState extends ConsumerState<LyricView> {
 
   @override
   Widget build(BuildContext context) {
-    final lyrics = ref.watch(currentLyricProvider);
+    final loadState = ref.watch(currentLyricLoadProvider);
+    final lyrics = loadState.lyrics;
     final currentLineIndex = ref.watch(currentLineIndexProvider);
     final currentMusic = ref.watch(currentMusicProvider);
     final position = ref.watch(playerPositionProvider);
@@ -130,8 +131,48 @@ class _LyricViewState extends ConsumerState<LyricView> {
           .addPostFrameCallback((_) => _attachScrollListener());
     }
 
+    if (loadState.isLoading) {
+      return _buildStatusState(
+        icon: CircularProgressIndicator(
+          strokeWidth: 2.5,
+          color: accent,
+        ),
+        title: '正在加载歌词',
+        message: currentMusic == null
+            ? '正在获取歌词内容'
+            : '${currentMusic.name} - ${currentMusic.singer}',
+        primary: primary,
+        muted: muted,
+        secondary: secondary,
+      );
+    }
+
+    if (loadState.error != null) {
+      return _buildStatusState(
+        icon: Icon(Icons.error_outline, size: 34, color: muted),
+        title: '歌词加载失败',
+        message: '请检查网络连接后重试',
+        actionLabel: '重试',
+        onAction: () => _retryLyric(currentMusic),
+        primary: primary,
+        muted: muted,
+        secondary: secondary,
+      );
+    }
+
     if (lyrics.isEmpty) {
-      return _buildEmptyState(currentMusic, primary, muted, secondary);
+      return _buildStatusState(
+        icon: Icon(Icons.music_note, size: 34, color: muted),
+        title: '暂无歌词',
+        message: currentMusic != null
+            ? '${currentMusic.name} - ${currentMusic.singer}'
+            : '该歌曲暂时没有可用的歌词文件',
+        actionLabel: '搜索歌词',
+        onAction: () => _retryLyric(currentMusic),
+        primary: primary,
+        muted: muted,
+        secondary: secondary,
+      );
     }
 
     return ShaderMask(
@@ -224,8 +265,16 @@ class _LyricViewState extends ConsumerState<LyricView> {
     );
   }
 
-  Widget _buildEmptyState(
-      MusicItem? currentMusic, Color primary, Color muted, Color secondary) {
+  Widget _buildStatusState({
+    required Widget icon,
+    required String title,
+    required String message,
+    required Color primary,
+    required Color muted,
+    required Color secondary,
+    String? actionLabel,
+    VoidCallback? onAction,
+  }) {
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(40),
@@ -240,53 +289,51 @@ class _LyricViewState extends ConsumerState<LyricView> {
                 shape: BoxShape.circle,
                 border: Border.all(color: AppColors.cardBorder(context)),
               ),
-              child: Icon(Icons.music_note, size: 34, color: muted),
+              child: Center(child: icon),
             ),
             const SizedBox(height: 16),
-            Text('暂无歌词',
+            Text(title,
                 style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                    color: primary)),
+                    fontSize: 16, fontWeight: FontWeight.w600, color: primary)),
             const SizedBox(height: 6),
             Text(
-              currentMusic != null
-                  ? '${currentMusic.name} - ${currentMusic.singer}'
-                  : '该歌曲暂时没有可用的歌词文件',
+              message,
               style: TextStyle(fontSize: 12, color: muted),
               textAlign: TextAlign.center,
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
             ),
-            const SizedBox(height: 20),
-            GestureDetector(
-              onTap: () => _searchLyric(currentMusic),
-              child: Container(
-                height: 38,
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                decoration: BoxDecoration(
-                  color: AppColors.fill(context),
-                  borderRadius: BorderRadius.circular(999),
-                  border: Border.all(color: AppColors.cardBorder(context)),
-                ),
-                child: Center(
-                  child: Text('搜索歌词',
-                      style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: secondary)),
+            if (actionLabel != null && onAction != null) ...[
+              const SizedBox(height: 20),
+              GestureDetector(
+                onTap: onAction,
+                child: Container(
+                  height: 38,
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  decoration: BoxDecoration(
+                    color: AppColors.fill(context),
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(color: AppColors.cardBorder(context)),
+                  ),
+                  child: Center(
+                    child: Text(actionLabel,
+                        style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: secondary)),
+                  ),
                 ),
               ),
-            ),
+            ],
           ],
         ),
       ),
     );
   }
 
-  Future<void> _searchLyric(MusicItem? music) async {
+  Future<void> _retryLyric(MusicItem? music) async {
     if (music == null) return;
-    ref.invalidate(currentLyricProvider);
+    await ref.read(currentLyricLoadProvider.notifier).retry();
   }
 }
 

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:audio_service/audio_service.dart';
 import 'package:lx_music_flutter/app.dart';
 import 'package:lx_music_flutter/core/audio/audio_handler.dart';
+import 'package:lx_music_flutter/core/audio/audio_runtime.dart';
 import 'package:lx_music_flutter/core/audio/playback_cache_service.dart';
 import 'package:lx_music_flutter/features/custom_source/presentation/custom_source_provider.dart';
 import 'package:lx_music_flutter/features/search/presentation/search_provider.dart';
@@ -20,42 +21,7 @@ import 'package:lx_music_flutter/startup_lifecycle.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // 1. 初始化 audio_service 基础实例
-  audioHandler = await AudioService.init(
-    builder: () => LxAudioHandler(),
-    config: const AudioServiceConfig(
-      androidNotificationChannelId: 'com.lxmusic.flutter.audio',
-      androidNotificationChannelName: 'LX Music Playback',
-      androidNotificationOngoing: true,
-      androidStopForegroundOnPause: true,
-      androidNotificationIcon: 'mipmap/ic_launcher',
-      // 预加载锁屏控件，减少后台切歌时控件丢失
-      fastForwardInterval: Duration(seconds: 10),
-      rewindInterval: Duration(seconds: 10),
-    ),
-  );
-
-  // Handler 必须先存在，中断与路由事件才能应用同一套播放所有权策略。
-  final session = await AudioSession.instance;
-  await session.configure(const AudioSessionConfiguration.music());
-  if (audioHandler is LxAudioHandler) {
-    final lxHandler = audioHandler as LxAudioHandler;
-    session.interruptionEventStream.listen((event) async {
-      if (event.type == AudioInterruptionType.duck) return;
-      if (event.begin) {
-        await lxHandler.beginAudioInterruption();
-      } else {
-        await lxHandler.endAudioInterruption(
-          mayResume: event.type == AudioInterruptionType.pause,
-        );
-      }
-    });
-    session.becomingNoisyEventStream.listen((_) async {
-      await lxHandler.handleBecomingNoisy();
-    });
-  }
-
-  // 2. 创建 Riverpod Container 以在应用启动前访问 Providers
+  // 创建 Riverpod Container 以在应用启动前访问 Providers
   final preferences = await SharedPreferences.getInstance();
   final documents = await getApplicationDocumentsDirectory();
   final playlistRepository = FilePlaylistRepository(
@@ -70,6 +36,42 @@ void main() async {
   final lifecycle = StartupLifecycle(container, disposals);
 
   await lifecycle.run(() async {
+    final lxHandler = LxAudioHandler();
+    final runtime = await initializeOwnedAudioRuntime(
+      registerDisposal: disposals.register,
+      disposeHandler: lxHandler.dispose,
+      initialize: (_) async {},
+    );
+    audioHandler = await AudioService.init(
+      builder: () => lxHandler,
+      config: const AudioServiceConfig(
+        androidNotificationChannelId: 'com.lxmusic.flutter.audio',
+        androidNotificationChannelName: 'LX Music Playback',
+        androidNotificationOngoing: true,
+        androidStopForegroundOnPause: true,
+        androidNotificationIcon: 'mipmap/ic_launcher',
+        fastForwardInterval: Duration(seconds: 10),
+        rewindInterval: Duration(seconds: 10),
+      ),
+    );
+    final session = await AudioSession.instance;
+    await session.configure(const AudioSessionConfiguration.music());
+    runtime.attachAudioSession<AudioInterruptionEvent>(
+      interruptionEvents: session.interruptionEventStream,
+      noisyEvents: session.becomingNoisyEventStream,
+      onInterruption: (event) async {
+        if (event.type == AudioInterruptionType.duck) return;
+        if (event.begin) {
+          await lxHandler.beginAudioInterruption();
+        } else {
+          await lxHandler.endAudioInterruption(
+            mayResume: event.type == AudioInterruptionType.pause,
+          );
+        }
+      },
+      onNoisy: lxHandler.handleBecomingNoisy,
+    );
+
     // 3. 初始化自定义音源
     await container.read(customSourceServiceProvider).init();
 
@@ -81,11 +83,10 @@ void main() async {
 
     // 4. 关键：连接 AudioHandler 和 MusicSourceService + 播放缓存
     final playbackCache = PlaybackCacheService();
-    disposals.register(playbackCache.dispose);
+    runtime.ownCache(playbackCache.dispose);
     await playbackCache.init();
 
-    if (audioHandler is LxAudioHandler) {
-      final lxHandler = audioHandler as LxAudioHandler;
+    {
       final sourceService = container.read(musicSourceServiceProvider);
       final playbackResolver = PlaybackUrlResolver<MusicItem>(
         resolvePlayableUrl: (music, {required preferredQuality}) {

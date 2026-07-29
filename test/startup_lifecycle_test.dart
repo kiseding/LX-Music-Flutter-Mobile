@@ -42,6 +42,25 @@ void main() {
     );
   });
 
+  test('audio runtime disposes subscriptions before handler before cache',
+      () async {
+    final events = <String>[];
+    final tracker = ResourceDisposalTracker();
+    tracker.register(() async => events.add('cache'));
+    tracker.register(() async => events.add('handler'));
+    tracker.register(() async => events.add('interruption-subscription'));
+    tracker.register(() async => events.add('noisy-subscription'));
+
+    await tracker.disposeAndDrain();
+
+    expect(events, [
+      'noisy-subscription',
+      'interruption-subscription',
+      'handler',
+      'cache',
+    ]);
+  });
+
   test('overlapping direct drains share completion failure and allow reuse',
       () async {
     final releaseCleanup = Completer<void>();

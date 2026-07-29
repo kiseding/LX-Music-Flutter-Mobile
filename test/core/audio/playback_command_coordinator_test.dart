@@ -14,7 +14,7 @@ void main() {
     final sourceGate = player.gateNextMutation();
     final request = coordinator.requestSource(
       mediaId: 'A',
-      queueIndex: 0,
+      occurrenceId: 1,
       position: Duration.zero,
     );
 
@@ -31,6 +31,167 @@ void main() {
     await Future.wait([install, seek, pause]);
 
     expect(player.maxConcurrentMutations, 1);
+  });
+
+  test('stopAndWait drains a queued source install before native stop',
+      () async {
+    final player = _SerializedAudioPlayer();
+    final coordinator = PlaybackCommandCoordinator(player);
+    addTearDown(player.dispose);
+    final sourceGate = player.gateNextMutation();
+    final request = coordinator.requestSource(
+      mediaId: 'A',
+      occurrenceId: 1,
+      position: Duration.zero,
+    );
+    final install = coordinator.commitSource(
+      request,
+      AudioSource.uri(Uri.parse('file:///tmp/A.mp3')),
+    );
+    await sourceGate.started.future;
+
+    var stopped = false;
+    final stopping = coordinator.stopAndWait().then((_) => stopped = true);
+    await pumpEventQueue();
+
+    expect(stopped, isFalse);
+    expect(player.calls, ['source']);
+    sourceGate.release.complete();
+    await Future.wait([install, stopping]);
+    expect(player.calls, ['source', 'stop']);
+  });
+
+  test('stopAndWait drains a queued pause before native stop', () async {
+    final player = _SerializedAudioPlayer();
+    final coordinator = PlaybackCommandCoordinator(player);
+    addTearDown(player.dispose);
+    await _install(coordinator);
+    await coordinator.recordExplicitPlayIntent();
+    final pauseGate = player.gateNextMutation();
+    final pause = coordinator.recordExplicitPauseIntent();
+    await pauseGate.started.future;
+
+    var stopped = false;
+    final stopping = coordinator.stopAndWait().then((_) => stopped = true);
+    await pumpEventQueue();
+
+    expect(stopped, isFalse);
+    expect(player.calls.last, 'pause');
+    pauseGate.release.complete();
+    await Future.wait([pause, stopping]);
+    expect(player.calls.sublist(player.calls.length - 2), ['pause', 'stop']);
+  });
+
+  test('stopAndWait rethrows a native stop failure after settling', () async {
+    final failure = StateError('stop');
+    final player = _SerializedAudioPlayer()..stopError = failure;
+    final coordinator = PlaybackCommandCoordinator(player);
+    addTearDown(player.dispose);
+
+    await expectLater(coordinator.stopAndWait(), throwsA(same(failure)));
+    expect(player.calls, ['stop']);
+  });
+
+  test('stopAndWait makes later public mutations permanently inert', () async {
+    final player = _SerializedAudioPlayer();
+    final coordinator = PlaybackCommandCoordinator(player);
+    addTearDown(player.dispose);
+    final sourceGate = player.gateNextMutation();
+    final request = coordinator.requestSource(
+      mediaId: 'A',
+      occurrenceId: 1,
+      position: Duration.zero,
+    );
+    final install = coordinator.commitSource(
+      request,
+      AudioSource.uri(Uri.parse('file:///tmp/A.mp3')),
+    );
+    await sourceGate.started.future;
+    final stopping = coordinator.stopAndWait();
+
+    final rejected = coordinator.requestSource(
+      mediaId: 'B',
+      occurrenceId: 2,
+      position: Duration.zero,
+    );
+    await Future.wait([
+      coordinator.recordExplicitPlayIntent(),
+      coordinator.recordExplicitPauseIntent(),
+      coordinator.setDesiredPlayingPreservingIntent(true),
+      coordinator.seek(const Duration(seconds: 3)),
+      coordinator.setLoopMode(LoopMode.one),
+      coordinator.setShuffleModeEnabled(true),
+      coordinator.beginInterruption(),
+      coordinator.becomingNoisy(),
+    ]);
+    expect(
+      await coordinator.commitSource(
+        rejected,
+        AudioSource.uri(Uri.parse('file:///tmp/B.mp3')),
+      ),
+      isA<SourceCommitStale>(),
+    );
+
+    sourceGate.release.complete();
+    await Future.wait([install, stopping]);
+    expect(player.calls, ['source', 'stop']);
+  });
+
+  test('queued source and failed stop attempt execute stop exactly once',
+      () async {
+    final failure = StateError('stop');
+    final player = _SerializedAudioPlayer()..stopError = failure;
+    final coordinator = PlaybackCommandCoordinator(player);
+    addTearDown(player.dispose);
+    final sourceGate = player.gateNextMutation();
+    final request = coordinator.requestSource(
+      mediaId: 'A',
+      occurrenceId: 1,
+      position: Duration.zero,
+    );
+    final install = coordinator.commitSource(
+      request,
+      AudioSource.uri(Uri.parse('file:///tmp/A.mp3')),
+    );
+    await sourceGate.started.future;
+    final stopping = coordinator.stopAndWait();
+    coordinator.requestSource(
+      mediaId: 'late',
+      occurrenceId: 2,
+      position: Duration.zero,
+    );
+    await coordinator.recordExplicitPlayIntent();
+
+    sourceGate.release.complete();
+    await install;
+    await expectLater(stopping, throwsA(same(failure)));
+    await coordinator.setShuffleModeEnabled(true);
+
+    expect(player.calls, ['source', 'stop']);
+  });
+
+  test('queued pause and failed stop attempt execute stop exactly once',
+      () async {
+    final failure = StateError('stop');
+    final player = _SerializedAudioPlayer();
+    final coordinator = PlaybackCommandCoordinator(player);
+    addTearDown(player.dispose);
+    await _install(coordinator);
+    await coordinator.recordExplicitPlayIntent();
+    final pauseGate = player.gateNextMutation();
+    final pause = coordinator.recordExplicitPauseIntent();
+    await pauseGate.started.future;
+    player.stopError = failure;
+    final stopping = coordinator.stopAndWait();
+    await coordinator.recordExplicitPlayIntent();
+
+    pauseGate.release.complete();
+    await pause;
+    await expectLater(stopping, throwsA(same(failure)));
+    await coordinator.seek(const Duration(seconds: 1));
+
+    expect(player.calls.where((call) => call == 'stop'), hasLength(1));
+    expect(player.calls.sublist(player.calls.length - 2), ['pause', 'stop']);
   });
 
   test('loop and shuffle apply in coordinator order without overlap', () async {
@@ -58,7 +219,7 @@ void main() {
     addTearDown(player.dispose);
     final request = coordinator.requestSource(
       mediaId: 'A',
-      queueIndex: 0,
+      occurrenceId: 1,
       position: Duration.zero,
     );
     await coordinator.commitSource(
@@ -261,7 +422,7 @@ void main() {
     await coordinator.recordExplicitPlayIntent();
     coordinator.requestSource(
       mediaId: 'B',
-      queueIndex: 1,
+      occurrenceId: 2,
       position: Duration.zero,
     );
     await coordinator.settled;
@@ -289,7 +450,7 @@ void main() {
     await coordinator.recordExplicitPlayIntent();
     coordinator.requestSource(
       mediaId: 'B',
-      queueIndex: 1,
+      occurrenceId: 2,
       position: Duration.zero,
     );
     await coordinator.settled;
@@ -326,12 +487,12 @@ void main() {
     addTearDown(player.dispose);
     final stale = coordinator.requestSource(
       mediaId: 'A',
-      queueIndex: 0,
+      occurrenceId: 1,
       position: Duration.zero,
     );
     final current = coordinator.requestSource(
       mediaId: 'B',
-      queueIndex: 1,
+      occurrenceId: 2,
       position: Duration.zero,
     );
 
@@ -358,7 +519,7 @@ void main() {
     addTearDown(player.dispose);
     final request = coordinator.requestSource(
       mediaId: 'A',
-      queueIndex: 0,
+      occurrenceId: 1,
       position: Duration.zero,
     );
 
@@ -407,7 +568,7 @@ void main() {
 Future<void> _install(PlaybackCommandCoordinator coordinator) async {
   final request = coordinator.requestSource(
     mediaId: 'A',
-    queueIndex: 0,
+    occurrenceId: 1,
     position: Duration.zero,
   );
   await coordinator.commitSource(
@@ -424,6 +585,7 @@ class _SerializedAudioPlayer extends AudioPlayer {
   final calls = <String>[];
   final _mutationGates = <_Gate>[];
   final _playGates = <_Gate>[];
+  Object? stopError;
 
   _Gate gateNextMutation() {
     final gate = _Gate();
@@ -479,7 +641,11 @@ class _SerializedAudioPlayer extends AudioPlayer {
       });
 
   @override
-  Future<void> stop() => _mutate('stop', () => _playing = false);
+  Future<void> stop() => _mutate('stop', () {
+        final error = stopError;
+        if (error != null) throw error;
+        _playing = false;
+      });
 
   @override
   Future<void> setLoopMode(LoopMode mode) =>

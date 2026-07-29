@@ -54,12 +54,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   }
 
   void _loadMore() {
-    final searchState = ref.read(searchStateProvider);
-    if (searchState.isLoading || !searchState.hasMore) return;
-    final query = _searchController.text;
-    if (query.isNotEmpty) {
-      ref.read(searchStateProvider.notifier).search(query, isLoadMore: true);
-    }
+    ref.read(searchStateProvider.notifier).loadMore();
   }
 
   void _onSearch(String query) {

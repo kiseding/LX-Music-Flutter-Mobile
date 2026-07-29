@@ -6,6 +6,7 @@ import '../../../../core/widgets/artwork_image.dart';
 import '../../../../core/widgets/pressable.dart';
 import '../../../../core/widgets/play_pulse_button.dart';
 import '../player_provider.dart';
+import '../scrub_session.dart';
 import '../../../lyric/presentation/lyric_provider.dart';
 
 /// 迷你播放条：顶部时间 + 进度条（与全屏同逻辑）
@@ -27,7 +28,33 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer> {
   bool _seeking = false;
   double _seekValue = 0;
   bool _wasPlayingBeforeSeek = false;
-  Future<int> _scrubFuture = Future<int>.value(0);
+  late final ScrubSession _scrubSession;
+  ScrubOperation? _dragOperation;
+
+  @override
+  void initState() {
+    super.initState();
+    _scrubSession = ScrubSession(
+      begin: ref.read(beginScrubProvider),
+      finish: ref.read(finishScrubProvider),
+      cancel: ref.read(cancelScrubProvider),
+    );
+  }
+
+  void _cancelActiveScrub() {
+    final operation = _dragOperation;
+    _dragOperation = null;
+    final cancelledCurrent =
+        operation != null ? _scrubSession.cancel(operation) : false;
+    if (cancelledCurrent) _seeking = false;
+  }
+
+  @override
+  void dispose() {
+    _dragOperation = null;
+    _scrubSession.dispose();
+    super.dispose();
+  }
 
   String _fmt(Duration d) {
     final m = d.inMinutes.remainder(60).toString().padLeft(1, '0');
@@ -137,8 +164,7 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer> {
                                       _seekValue = (d.localPosition.dx / w)
                                           .clamp(0.0, 1.0);
                                     });
-                                    _scrubFuture =
-                                        ref.read(beginScrubProvider)();
+                                    _dragOperation = _scrubSession.begin();
                                   },
                             onHorizontalDragUpdate: !canSeek
                                 ? null
@@ -154,15 +180,26 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer> {
                                     final target = Duration(
                                         milliseconds:
                                             (_seekValue * totalMs).round());
-                                    final generation = await _scrubFuture;
-                                    await ref.read(finishScrubProvider)(
-                                      generation,
+                                    final operation = _dragOperation;
+                                    if (operation == null) return;
+                                    final mayClear = await _scrubSession.finish(
+                                      operation,
                                       target,
                                       resumeAfter: _wasPlayingBeforeSeek,
                                     );
-                                    if (mounted) {
+                                    if (mounted && mayClear) {
+                                      if (identical(
+                                          _dragOperation, operation)) {
+                                        _dragOperation = null;
+                                      }
                                       setState(() => _seeking = false);
                                     }
+                                  },
+                            onHorizontalDragCancel: !canSeek
+                                ? null
+                                : () {
+                                    _cancelActiveScrub();
+                                    if (mounted) setState(() {});
                                   },
                             onTapUp: !canSeek
                                 ? null
@@ -176,14 +213,13 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer> {
                                       _seeking = true;
                                       _wasPlayingBeforeSeek = isPlayingValue;
                                     });
-                                    final generation =
-                                        await ref.read(beginScrubProvider)();
-                                    await ref.read(finishScrubProvider)(
-                                      generation,
+                                    final operation = _scrubSession.begin();
+                                    final mayClear = await _scrubSession.finish(
+                                      operation,
                                       target,
                                       resumeAfter: isPlayingValue,
                                     );
-                                    if (mounted) {
+                                    if (mounted && mayClear) {
                                       setState(() => _seeking = false);
                                     }
                                   },

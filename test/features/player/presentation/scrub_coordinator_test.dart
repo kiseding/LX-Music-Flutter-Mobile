@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:lx_music_flutter/core/audio/audio_handler.dart';
 import 'package:lx_music_flutter/core/audio/playback_command_coordinator.dart';
+import 'package:lx_music_flutter/features/player/presentation/fire_and_forget_observer.dart';
 import 'package:lx_music_flutter/features/player/presentation/player_provider.dart';
 
 void main() {
@@ -353,6 +354,122 @@ void main() {
     expect(playback.resumeCalls, 1);
   });
 
+  test('cancel releases preserving pause once without seeking', () async {
+    final playback = _FakeScrubPlayback(
+      playing: true,
+      position: const Duration(seconds: 18),
+      seekResult: const Duration(seconds: 50),
+    );
+    final position = _FakeScrubPosition();
+    final coordinator = ScrubCoordinator(playback, position);
+    final generation = await coordinator.begin();
+
+    await coordinator.cancel(generation);
+    await coordinator.cancel(generation);
+
+    expect(playback.seekCalls, 0);
+    expect(playback.releaseCalls, 1);
+    expect(playback.resumeCalls, 1);
+    expect(position.unfreezes, [const Duration(seconds: 18)]);
+  });
+
+  test('cancel invalidates generation before owner release completes',
+      () async {
+    final releaseGate = _Gate();
+    final playback = _FakeScrubPlayback(
+      playing: true,
+      position: const Duration(seconds: 18),
+      seekResult: const Duration(seconds: 50),
+    )..releaseGate = releaseGate;
+    final position = _FakeScrubPosition();
+    final coordinator = ScrubCoordinator(playback, position);
+    final generation = await coordinator.begin();
+
+    final cancellation = coordinator.cancel(generation);
+    await releaseGate.started.future;
+    final finish = coordinator.finish(
+      generation,
+      const Duration(seconds: 50),
+      resumeAfter: true,
+    );
+    await pumpEventQueue();
+
+    expect(playback.seekCalls, 0);
+    releaseGate.release.complete();
+    await Future.wait([cancellation, finish]);
+    expect(playback.releaseCalls, 1);
+  });
+
+  test('cancelAll releases a pending pause after disposal', () async {
+    final pauseGate = _Gate();
+    final playback = _FakeScrubPlayback(
+      playing: true,
+      position: const Duration(seconds: 7),
+    )..pauseGate = pauseGate;
+    final position = _FakeScrubPosition();
+    final coordinator = ScrubCoordinator(playback, position);
+
+    final begin = coordinator.begin();
+    await pauseGate.started.future;
+    final cancellation = coordinator.cancelAll();
+    pauseGate.release.complete();
+    await Future.wait([begin, cancellation]);
+
+    expect(playback.seekCalls, 0);
+    expect(playback.releaseCalls, 1);
+    expect(position.unfreezes, [const Duration(seconds: 7)]);
+  });
+
+  test('cancelAll pause failure is observed once without escaping', () async {
+    final pauseError = StateError('pause failed');
+    final playback = _FakeScrubPlayback(
+      playing: true,
+      position: const Duration(seconds: 7),
+      pauseError: pauseError,
+    );
+    final coordinator = ScrubCoordinator(playback, _FakeScrubPosition());
+    final reported = Completer<Object>();
+    var reportCalls = 0;
+    final observer = FireAndForgetObserver(
+      onError: (error, stackTrace) {
+        reportCalls++;
+        if (!reported.isCompleted) reported.complete(error);
+      },
+    );
+
+    final begin = coordinator.begin();
+    observer(coordinator.cancelAll());
+
+    await expectLater(begin, throwsA(same(pauseError)));
+    expect(await reported.future, same(pauseError));
+    await pumpEventQueue();
+    expect(reportCalls, 1);
+  });
+
+  test('cancelAll release failure is observed once without escaping', () async {
+    final releaseError = StateError('release failed');
+    final playback = _FakeScrubPlayback(
+      playing: true,
+      position: const Duration(seconds: 7),
+    )..releaseError = releaseError;
+    final coordinator = ScrubCoordinator(playback, _FakeScrubPosition());
+    final reported = Completer<Object>();
+    var reportCalls = 0;
+    final observer = FireAndForgetObserver(
+      onError: (error, stackTrace) {
+        reportCalls++;
+        if (!reported.isCompleted) reported.complete(error);
+      },
+    );
+
+    await coordinator.begin();
+    observer(coordinator.cancelAll());
+
+    expect(await reported.future, same(releaseError));
+    await pumpEventQueue();
+    expect(reportCalls, 1);
+  });
+
   test('newer scrub resume survives older preserving pause completion',
       () async {
     final oldPauseGate = _Gate();
@@ -499,10 +616,13 @@ class _FakeScrubPlayback implements ScrubPlayback {
   Duration? seekResult;
   Object? seekError;
   Object? pauseError;
+  Object? releaseError;
   _Gate? seekGate;
   _Gate? pauseGate;
+  _Gate? releaseGate;
   int pauseCalls = 0;
   int seekCalls = 0;
+  int releaseCalls = 0;
   int resumeCalls = 0;
 
   _FakeScrubPlayback({
@@ -550,6 +670,13 @@ class _FakeScrubPlayback implements ScrubPlayback {
     required int interruptionGeneration,
     required int startBlockGeneration,
   }) async {
+    releaseCalls++;
+    final gate = releaseGate;
+    if (gate != null) {
+      gate.started.complete();
+      await gate.release.future;
+    }
+    if (releaseError != null) throw releaseError!;
     if (resumeAfter) {
       resumeCalls++;
       playing = true;
