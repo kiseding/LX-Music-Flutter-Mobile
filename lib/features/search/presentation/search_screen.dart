@@ -491,9 +491,16 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                   color: AppColors.onScaffold(context)),
               title: Text('收藏',
                   style: TextStyle(color: AppColors.onScaffold(context))),
-              onTap: () {
+              onTap: () async {
                 Navigator.pop(ctx);
-                ref.read(toggleFavoriteProvider)(item);
+                try {
+                  await ref.read(toggleFavoriteProvider)(item);
+                } catch (error) {
+                  if (!mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('收藏失败: $error')),
+                  );
+                }
               },
             ),
             ListTile(

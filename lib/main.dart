@@ -12,6 +12,9 @@ import 'package:lx_music_flutter/features/player/domain/music_item.dart';
 import 'package:lx_music_flutter/features/settings/presentation/settings_provider.dart';
 import 'package:lx_music_flutter/features/player/presentation/player_provider.dart';
 import 'package:audio_session/audio_session.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:lx_music_flutter/features/playlist/data/file_playlist_repository.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -52,7 +55,15 @@ void main() async {
   }
 
   // 2. 创建 Riverpod Container 以在应用启动前访问 Providers
-  final container = ProviderContainer();
+  final preferences = await SharedPreferences.getInstance();
+  final documents = await getApplicationDocumentsDirectory();
+  final playlistRepository = FilePlaylistRepository(
+    directory: () async => documents,
+    preferences: preferences,
+  );
+  final container = ProviderContainer(overrides: [
+    playlistRepositoryProvider.overrideWithValue(playlistRepository),
+  ]);
 
   // 3. 初始化自定义音源
   await container.read(customSourceServiceProvider).init();

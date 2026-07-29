@@ -179,7 +179,7 @@ final recentPlayRecorderProvider = Provider<void>((ref) {
   final music = ref.watch(currentMusicProvider);
   if (music != null) {
     final playlistService = ref.read(playlistServiceProvider);
-    playlistService.addToRecent(music);
+    unawaited(playlistService.addToRecent(music));
   }
 });
 

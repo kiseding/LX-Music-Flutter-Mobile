@@ -11,6 +11,8 @@ import 'settings_provider.dart';
 import '../../equalizer/presentation/equalizer_provider.dart';
 import '../../download/presentation/download_provider.dart';
 import '../../search/presentation/search_provider.dart';
+import '../../playlist/data/playlist_repository.dart';
+import '../../playlist/presentation/playlist_provider.dart';
 
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
@@ -500,10 +502,14 @@ class SettingsScreen extends ConsumerWidget {
   Future<void> _backupData(BuildContext context, WidgetRef ref) async {
     try {
       final storage = await StorageService.instance;
+      final playlists = ref.read(playlistServiceProvider).playlists;
+      final playlistSnapshot = const PlaylistSnapshotCodec().encode(
+        PlaylistSnapshot(schemaVersion: 1, playlists: playlists),
+      );
       final backup = <String, dynamic>{
         'version': 1,
         'timestamp': DateTime.now().toIso8601String(),
-        'playlists': storage.getJsonList('playlists'),
+        'playlists': jsonDecode(playlistSnapshot),
         'search_history': storage.getStringList('search_history'),
         'theme_mode': storage.getInt('theme_mode'),
         'audio_quality': storage.getInt('audio_quality'),
@@ -550,7 +556,7 @@ class SettingsScreen extends ConsumerWidget {
       final jsonStr = await file.readAsString();
       final backup = jsonDecode(jsonStr) as Map<String, dynamic>;
 
-      if (backup['version'] == null) {
+      if (backup['version'] != 1) {
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
@@ -566,10 +572,10 @@ class SettingsScreen extends ConsumerWidget {
 
       // 恢复歌单
       if (backup['playlists'] != null) {
-        await storage.setJsonList(
-          'playlists',
-          (backup['playlists'] as List).cast<Map<String, dynamic>>(),
+        final snapshot = const PlaylistSnapshotCodec().decode(
+          jsonEncode(backup['playlists']),
         );
+        await ref.read(playlistServiceProvider).replaceAll(snapshot.playlists);
       }
       // 恢复搜索历史
       if (backup['search_history'] != null) {
@@ -601,7 +607,7 @@ class SettingsScreen extends ConsumerWidget {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('数据恢复成功，请重启应用生效'),
+            content: Text('数据恢复成功'),
             duration: Duration(seconds: 3),
           ),
         );

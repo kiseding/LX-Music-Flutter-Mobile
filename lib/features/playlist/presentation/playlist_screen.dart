@@ -683,14 +683,22 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
             ),
           ),
           TextButton(
-            onPressed: () {
+            onPressed: () async {
               if (nameController.text.isNotEmpty) {
-                ref.read(createPlaylistProvider)(
-                  nameController.text,
-                  description:
-                      descController.text.isEmpty ? null : descController.text,
-                );
-                Navigator.pop(context);
+                try {
+                  await ref.read(createPlaylistProvider)(
+                    nameController.text,
+                    description: descController.text.isEmpty
+                        ? null
+                        : descController.text,
+                  );
+                  if (context.mounted) Navigator.pop(context);
+                } catch (error) {
+                  if (!context.mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('创建失败: $error')),
+                  );
+                }
               }
             },
             child: Text(
@@ -761,17 +769,23 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
             ),
           ),
           TextButton(
-            onPressed: () {
+            onPressed: () async {
               if (nameController.text.isNotEmpty) {
-                ref.read(playlistServiceProvider).updatePlaylist(
-                      id: playlist.id,
-                      name: nameController.text,
-                      description: descController.text.isEmpty
-                          ? null
-                          : descController.text,
-                    );
-                setState(() {});
-                Navigator.pop(ctx);
+                try {
+                  await ref.read(playlistServiceProvider).updatePlaylist(
+                        id: playlist.id,
+                        name: nameController.text,
+                        description: descController.text.isEmpty
+                            ? null
+                            : descController.text,
+                      );
+                  if (ctx.mounted) Navigator.pop(ctx);
+                } catch (error) {
+                  if (!ctx.mounted) return;
+                  ScaffoldMessenger.of(ctx).showSnackBar(
+                    SnackBar(content: Text('保存失败: $error')),
+                  );
+                }
               }
             },
             child: Text(
@@ -1088,21 +1102,13 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
                                     ),
                                   );
                                   if (ok == true) {
-                                    final created = ref
+                                    await ref
                                         .read(playlistServiceProvider)
                                         .createPlaylist(
                                           name: imported.name,
                                           description: '导入自${imported.source}',
-                                        );
-                                    ref
-                                        .read(playlistServiceProvider)
-                                        .updatePlaylist(
-                                          id: created.id,
                                           songs: imported.songs,
                                         );
-                                    ref
-                                        .read(playlistVersionProvider.notifier)
-                                        .state++;
                                     if (ctx.mounted) Navigator.pop(ctx);
                                     if (context.mounted) {
                                       ScaffoldMessenger.of(context)
@@ -1259,13 +1265,20 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
                             action(
                               icon: Icons.favorite_border_rounded,
                               label: '全部添加到我喜欢的音乐',
-                              onTap: () {
-                                final added = ref
-                                    .read(playlistServiceProvider)
-                                    .addAllSongsToFavorites(playlist.id);
-                                ref
-                                    .read(playlistVersionProvider.notifier)
-                                    .state++;
+                              onTap: () async {
+                                final int added;
+                                try {
+                                  added = await ref
+                                      .read(playlistServiceProvider)
+                                      .addAllSongsToFavorites(playlist.id);
+                                } catch (error) {
+                                  if (!context.mounted) return;
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(content: Text('添加失败: $error')),
+                                  );
+                                  return;
+                                }
+                                if (!dialogCtx.mounted) return;
                                 Navigator.pop(dialogCtx);
                                 if (!context.mounted) return;
                                 ScaffoldMessenger.of(context).showSnackBar(
@@ -1285,13 +1298,19 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
                               icon: Icons.delete_outline_rounded,
                               label: '删除歌单',
                               destructive: true,
-                              onTap: () {
-                                ref
-                                    .read(playlistServiceProvider)
-                                    .deletePlaylist(playlist.id);
-                                ref
-                                    .read(playlistVersionProvider.notifier)
-                                    .state++;
+                              onTap: () async {
+                                try {
+                                  await ref
+                                      .read(playlistServiceProvider)
+                                      .deletePlaylist(playlist.id);
+                                } catch (error) {
+                                  if (!context.mounted) return;
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(content: Text('删除失败: $error')),
+                                  );
+                                  return;
+                                }
+                                if (!dialogCtx.mounted) return;
                                 Navigator.pop(dialogCtx);
                               },
                             ),

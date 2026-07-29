@@ -4,6 +4,7 @@ import '../../../core/theme/app_colors.dart';
 import '../../cloud/presentation/cloud_provider.dart';
 import '../../cloud/domain/cloud_api_client.dart';
 import '../../playlist/presentation/playlist_provider.dart';
+import '../../playlist/domain/playlist.dart';
 import '../../player/domain/music_item.dart';
 
 /// 同步页：对接 workers 云端（账号 + 歌单），不再强制首次启动登录。
@@ -326,12 +327,18 @@ class _SyncScreenState extends ConsumerState<SyncScreen> {
       final love = (data['loveList'] as List?) ?? [];
       final userList = (data['userList'] as List?) ?? [];
       final playlistService = ref.read(playlistServiceProvider);
+      final playlists = {
+        for (final playlist in playlistService.playlists) playlist.id: playlist
+      };
 
       // 同步「我喜欢」
       final favSongs = love.map(_songFromCloud).whereType<MusicItem>().toList();
-      final fav = playlistService.getPlaylist('favorites');
+      final fav = playlists['favorites'];
       if (fav != null) {
-        playlistService.updatePlaylist(id: 'favorites', songs: favSongs);
+        playlists['favorites'] = fav.copyWith(
+          songs: favSongs,
+          updatedAt: DateTime.now(),
+        );
       }
 
       for (final pl in userList) {
@@ -343,26 +350,35 @@ class _SyncScreenState extends ConsumerState<SyncScreen> {
             .map(_songFromCloud)
             .whereType<MusicItem>()
             .toList();
-        final existing = playlistService.getPlaylist(id);
+        final existing = playlists[id];
         if (existing != null) {
-          playlistService.updatePlaylist(id: id, name: name, songs: songs);
+          playlists[id] = existing.copyWith(
+            name: name,
+            songs: songs,
+            updatedAt: DateTime.now(),
+          );
         } else {
-          final created = playlistService.createPlaylist(
+          final now = DateTime.now();
+          playlists[id] = Playlist(
+            id: id,
             name: name,
             description: '云端同步',
+            songs: songs,
+            createdAt: now,
+            updatedAt: now,
           );
-          // 用服务端 id 更稳：直接再 update 一次 songs，本地 id 可能不同
-          playlistService.updatePlaylist(id: created.id, songs: songs);
         }
       }
-      ref.read(playlistVersionProvider.notifier).state++;
+      await playlistService.replaceAll(playlists.values.toList());
+      if (!mounted) return;
       setState(
         () => _message = '已同步：喜欢 ${favSongs.length} 首，歌单 ${userList.length} 个',
       );
     } catch (e) {
+      if (!mounted) return;
       setState(() => _message = '同步失败: $e');
     } finally {
-      setState(() => _busy = false);
+      if (mounted) setState(() => _busy = false);
     }
   }
 

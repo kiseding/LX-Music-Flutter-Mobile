@@ -1,17 +1,29 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../data/playlist_repository.dart';
 import '../domain/playlist_service.dart';
 import '../domain/playlist.dart';
 import '../../player/domain/music_item.dart';
 
-final playlistServiceProvider = Provider<PlaylistService>((ref) {
-  return PlaylistService();
+final playlistRepositoryProvider = Provider<PlaylistRepository>((ref) {
+  throw StateError('playlistRepositoryProvider must be overridden at startup');
 });
 
-// 版本号，用于触发 UI 刷新
-final playlistVersionProvider = StateProvider<int>((ref) => 0);
+final playlistServiceProvider = Provider<PlaylistService>((ref) {
+  final service = PlaylistService(
+    repository: ref.watch(playlistRepositoryProvider),
+  );
+  ref.onDispose(() => unawaited(service.dispose()));
+  return service;
+});
+
+final playlistRevisionProvider = StreamProvider<int>((ref) {
+  return ref.watch(playlistServiceProvider).revisions;
+});
 
 final playlistsProvider = Provider<List<Playlist>>((ref) {
-  ref.watch(playlistVersionProvider); // 依赖版本号，变更时重建
+  ref.watch(playlistRevisionProvider);
   final playlistService = ref.watch(playlistServiceProvider);
   return playlistService.playlists;
 });
@@ -24,39 +36,39 @@ final currentPlaylistProvider = StateProvider<Playlist?>((ref) {
 final playlistFocusSongIdProvider = StateProvider<String?>((ref) => null);
 
 final isSongFavoriteProvider = Provider.family<bool, String>((ref, songId) {
-  ref.watch(playlistVersionProvider); // 依赖版本号，变更时重建
+  ref.watch(playlistRevisionProvider);
   final playlistService = ref.watch(playlistServiceProvider);
   return playlistService.isSongInPlaylist('favorites', songId);
 });
 
 // 切换收藏状态
-final toggleFavoriteProvider = Provider<Future<void> Function(MusicItem)>((ref) {
+final toggleFavoriteProvider =
+    Provider<Future<void> Function(MusicItem)>((ref) {
   return (MusicItem song) async {
     final playlistService = ref.read(playlistServiceProvider);
     final isFavorite = playlistService.isSongInPlaylist('favorites', song.id);
     if (isFavorite) {
-      playlistService.removeSongFromPlaylist('favorites', song.id);
+      await playlistService.removeSongFromPlaylist('favorites', song.id);
     } else {
-      playlistService.addSongToPlaylist('favorites', song);
+      await playlistService.addSongToPlaylist('favorites', song);
     }
-    ref.read(playlistVersionProvider.notifier).state++;
   };
 });
 
 // 添加歌曲到指定歌单
-final addSongToPlaylistProvider = Provider<Future<void> Function(String playlistId, MusicItem)>((ref) {
+final addSongToPlaylistProvider =
+    Provider<Future<void> Function(String playlistId, MusicItem)>((ref) {
   return (String playlistId, MusicItem song) async {
     final playlistService = ref.read(playlistServiceProvider);
-    playlistService.addSongToPlaylist(playlistId, song);
-    ref.read(playlistVersionProvider.notifier).state++;
+    await playlistService.addSongToPlaylist(playlistId, song);
   };
 });
 
 // 创建新歌单
-final createPlaylistProvider = Provider<Future<void> Function(String name, {String? description})>((ref) {
+final createPlaylistProvider =
+    Provider<Future<void> Function(String name, {String? description})>((ref) {
   return (String name, {String? description}) async {
     final playlistService = ref.read(playlistServiceProvider);
-    playlistService.createPlaylist(name: name, description: description);
-    ref.read(playlistVersionProvider.notifier).state++;
+    await playlistService.createPlaylist(name: name, description: description);
   };
 });

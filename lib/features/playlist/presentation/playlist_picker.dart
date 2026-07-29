@@ -26,10 +26,12 @@ class _PlaylistPickerContent extends ConsumerStatefulWidget {
   const _PlaylistPickerContent({required this.song});
 
   @override
-  ConsumerState<_PlaylistPickerContent> createState() => _PlaylistPickerContentState();
+  ConsumerState<_PlaylistPickerContent> createState() =>
+      _PlaylistPickerContentState();
 }
 
-class _PlaylistPickerContentState extends ConsumerState<_PlaylistPickerContent> {
+class _PlaylistPickerContentState
+    extends ConsumerState<_PlaylistPickerContent> {
   final _newPlaylistController = TextEditingController();
   bool _showCreateField = false;
 
@@ -39,26 +41,42 @@ class _PlaylistPickerContentState extends ConsumerState<_PlaylistPickerContent> 
     super.dispose();
   }
 
-  void _addToPlaylist(String playlistId) {
-    ref.read(addSongToPlaylistProvider)(playlistId, widget.song);
-    Navigator.pop(context);
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('已添加到歌单'), duration: Duration(seconds: 1)),
-    );
+  Future<void> _addToPlaylist(String playlistId) async {
+    try {
+      await ref.read(addSongToPlaylistProvider)(playlistId, widget.song);
+      if (!mounted) return;
+      Navigator.pop(context);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('已添加到歌单'), duration: Duration(seconds: 1)),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('添加失败: $error')),
+      );
+    }
   }
 
-  void _createAndAdd() {
+  Future<void> _createAndAdd() async {
     final name = _newPlaylistController.text.trim();
     if (name.isEmpty) return;
-    ref.read(createPlaylistProvider)(name);
-    // 创建后获取新歌单并添加
-    final playlists = ref.read(playlistsProvider);
-    final newPlaylist = playlists.lastWhere((p) => p.name == name);
-    ref.read(addSongToPlaylistProvider)(newPlaylist.id, widget.song);
-    Navigator.pop(context);
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('已创建歌单并添加'), duration: Duration(seconds: 1)),
-    );
+    try {
+      await ref.read(playlistServiceProvider).createPlaylist(
+        name: name,
+        songs: [widget.song],
+      );
+      if (!mounted) return;
+      Navigator.pop(context);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text('已创建歌单并添加'), duration: Duration(seconds: 1)),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('创建失败: $error')),
+      );
+    }
   }
 
   @override
@@ -77,10 +95,15 @@ class _PlaylistPickerContentState extends ConsumerState<_PlaylistPickerContent> 
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text('添加到歌单', style: TextStyle(color: AppColors.onScaffold(context), fontSize: 18, fontWeight: FontWeight.bold)),
+                Text('添加到歌单',
+                    style: TextStyle(
+                        color: AppColors.onScaffold(context),
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold)),
                 IconButton(
                   icon: Icon(Icons.add, color: AppColors.amber),
-                  onPressed: () => setState(() => _showCreateField = !_showCreateField),
+                  onPressed: () =>
+                      setState(() => _showCreateField = !_showCreateField),
                 ),
               ],
             ),
@@ -96,33 +119,44 @@ class _PlaylistPickerContentState extends ConsumerState<_PlaylistPickerContent> 
                       style: TextStyle(color: AppColors.onScaffold(context)),
                       decoration: InputDecoration(
                         hintText: '新歌单名称',
-                        hintStyle: TextStyle(color: AppColors.secondaryText(context)),
+                        hintStyle:
+                            TextStyle(color: AppColors.secondaryText(context)),
                         filled: true,
                         fillColor: AppColors.surface,
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                        border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8)),
+                        contentPadding:
+                            EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                       ),
-                      onSubmitted: (_) => _createAndAdd(),
+                      onSubmitted: (_) async => _createAndAdd(),
                     ),
                   ),
                   const SizedBox(width: 8),
                   TextButton(
                     onPressed: _createAndAdd,
-                    child: const Text('创建', style: TextStyle(color: AppColors.amber)),
+                    child: const Text('创建',
+                        style: TextStyle(color: AppColors.amber)),
                   ),
                 ],
               ),
             ),
           Divider(color: AppColors.fill(context)),
           ...userPlaylists.map((playlist) => ListTile(
-            leading: Icon(
-              playlist.id == 'favorites' ? Icons.favorite : Icons.queue_music,
-              color: playlist.id == 'favorites' ? AppColors.error : AppColors.textSecondary,
-            ),
-            title: Text(playlist.name, style: TextStyle(color: AppColors.onScaffold(context))),
-            subtitle: Text('${playlist.songCount} 首', style: TextStyle(color: AppColors.secondaryText(context), fontSize: 12)),
-            onTap: () => _addToPlaylist(playlist.id),
-          )),
+                leading: Icon(
+                  playlist.id == 'favorites'
+                      ? Icons.favorite
+                      : Icons.queue_music,
+                  color: playlist.id == 'favorites'
+                      ? AppColors.error
+                      : AppColors.textSecondary,
+                ),
+                title: Text(playlist.name,
+                    style: TextStyle(color: AppColors.onScaffold(context))),
+                subtitle: Text('${playlist.songCount} 首',
+                    style: TextStyle(
+                        color: AppColors.secondaryText(context), fontSize: 12)),
+                onTap: () async => _addToPlaylist(playlist.id),
+              )),
           const SizedBox(height: 8),
         ],
       ),

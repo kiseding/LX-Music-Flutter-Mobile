@@ -410,7 +410,16 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                   : AppColors.secondaryText(context),
               size: 28,
             ),
-            onPressed: () => ref.read(toggleFavoriteProvider)(music),
+            onPressed: () async {
+              try {
+                await ref.read(toggleFavoriteProvider)(music);
+              } catch (error) {
+                if (!mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('收藏失败: $error')),
+                );
+              }
+            },
           ),
         ],
       ),
@@ -911,9 +920,16 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                     color: AppColors.onScaffold(context)),
                 title: Text('收藏',
                     style: TextStyle(color: AppColors.onScaffold(context))),
-                onTap: () {
+                onTap: () async {
                   Navigator.pop(context);
-                  ref.read(toggleFavoriteProvider)(music);
+                  try {
+                    await ref.read(toggleFavoriteProvider)(music);
+                  } catch (error) {
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(this.context).showSnackBar(
+                      SnackBar(content: Text('收藏失败: $error')),
+                    );
+                  }
                 }),
             ListTile(
                 leading: Icon(Icons.playlist_add,

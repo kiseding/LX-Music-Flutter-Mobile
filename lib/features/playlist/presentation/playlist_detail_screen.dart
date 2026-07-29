@@ -53,7 +53,7 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
-    ref.watch(playlistVersionProvider);
+    ref.watch(playlistRevisionProvider);
     final playlist = _resolvePlaylist();
     final playerService = ref.watch(playerServiceProvider);
     final focusId = ref.watch(playlistFocusSongIdProvider);
@@ -126,12 +126,16 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
               ),
             if (_isEditing)
               TextButton(
-                onPressed: () {
-                  ref
-                      .read(playlistServiceProvider)
-                      .updatePlaylist(id: playlist.id, songs: _reorderedSongs);
-                  ref.read(playlistVersionProvider.notifier).state++;
-                  setState(() => _isEditing = false);
+                onPressed: () async {
+                  try {
+                    await ref.read(playlistServiceProvider).updatePlaylist(
+                          id: playlist.id,
+                          songs: _reorderedSongs,
+                        );
+                    if (mounted) setState(() => _isEditing = false);
+                  } catch (error) {
+                    _showMutationError('保存失败', error);
+                  }
                 },
                 child: Text('保存',
                     style: TextStyle(color: AppColors.accentOf(context))),
@@ -142,65 +146,69 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                 icon:
                     Icon(Icons.more_vert, color: AppColors.onScaffold(context)),
                 color: AppColors.dialogBg(context),
-                onSelected: (value) {
-                  switch (value) {
-                    case 'play_all':
-                      if (playlist.songs.isNotEmpty) {
-                        playerService.setQueue(playlist.songs, startIndex: 0);
-                      }
-                    case 'edit':
-                      _showEditDialog(context, ref, playlist);
-                    case 'sort_name':
-                      ref
-                          .read(playlistServiceProvider)
-                          .sortSongsByName(playlist.id);
-                      ref.read(playlistVersionProvider.notifier).state++;
-                      setState(() {
-                        _reorderedSongs
-                          ..clear()
-                          ..addAll(ref
-                                  .read(playlistServiceProvider)
-                                  .getPlaylist(playlist.id)
-                                  ?.songs ??
-                              []);
-                      });
-                    case 'sort_artist':
-                      ref
-                          .read(playlistServiceProvider)
-                          .sortSongsByArtist(playlist.id);
-                      ref.read(playlistVersionProvider.notifier).state++;
-                      setState(() {
-                        _reorderedSongs
-                          ..clear()
-                          ..addAll(ref
-                                  .read(playlistServiceProvider)
-                                  .getPlaylist(playlist.id)
-                                  ?.songs ??
-                              []);
-                      });
-                    case 'sort_duration':
-                      ref
-                          .read(playlistServiceProvider)
-                          .sortSongsByDuration(playlist.id);
-                      ref.read(playlistVersionProvider.notifier).state++;
-                      setState(() {
-                        _reorderedSongs
-                          ..clear()
-                          ..addAll(ref
-                                  .read(playlistServiceProvider)
-                                  .getPlaylist(playlist.id)
-                                  ?.songs ??
-                              []);
-                      });
-                    case 'reorder':
-                      setState(() {
-                        _isEditing = true;
-                        _reorderedSongs
-                          ..clear()
-                          ..addAll(playlist.songs);
-                      });
-                    case 'delete':
-                      _showDeleteDialog(context, ref, playlist);
+                onSelected: (value) async {
+                  try {
+                    switch (value) {
+                      case 'play_all':
+                        if (playlist.songs.isNotEmpty) {
+                          playerService.setQueue(playlist.songs, startIndex: 0);
+                        }
+                      case 'edit':
+                        _showEditDialog(context, ref, playlist);
+                      case 'sort_name':
+                        await ref
+                            .read(playlistServiceProvider)
+                            .sortSongsByName(playlist.id);
+                        if (!mounted) return;
+                        setState(() {
+                          _reorderedSongs
+                            ..clear()
+                            ..addAll(ref
+                                    .read(playlistServiceProvider)
+                                    .getPlaylist(playlist.id)
+                                    ?.songs ??
+                                []);
+                        });
+                      case 'sort_artist':
+                        await ref
+                            .read(playlistServiceProvider)
+                            .sortSongsByArtist(playlist.id);
+                        if (!mounted) return;
+                        setState(() {
+                          _reorderedSongs
+                            ..clear()
+                            ..addAll(ref
+                                    .read(playlistServiceProvider)
+                                    .getPlaylist(playlist.id)
+                                    ?.songs ??
+                                []);
+                        });
+                      case 'sort_duration':
+                        await ref
+                            .read(playlistServiceProvider)
+                            .sortSongsByDuration(playlist.id);
+                        if (!mounted) return;
+                        setState(() {
+                          _reorderedSongs
+                            ..clear()
+                            ..addAll(ref
+                                    .read(playlistServiceProvider)
+                                    .getPlaylist(playlist.id)
+                                    ?.songs ??
+                                []);
+                        });
+                      case 'reorder':
+                        setState(() {
+                          _isEditing = true;
+                          _reorderedSongs
+                            ..clear()
+                            ..addAll(playlist.songs);
+                        });
+                      case 'delete':
+                        _showDeleteDialog(context, ref, playlist);
+                    }
+                  } catch (error) {
+                    _showMutationError('操作失败', error);
                   }
                 },
                 itemBuilder: (context) {
@@ -337,13 +345,17 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                         ListTile(
                           leading: const Icon(Icons.delete_outline),
                           title: const Text('从歌单移除'),
-                          onTap: () {
-                            ref
-                                .read(playlistServiceProvider)
-                                .removeSongFromPlaylist(playlist.id, song.id);
-                            ref.read(playlistVersionProvider.notifier).state++;
+                          onTap: () async {
+                            try {
+                              await ref
+                                  .read(playlistServiceProvider)
+                                  .removeSongFromPlaylist(playlist.id, song.id);
+                            } catch (error) {
+                              if (mounted) _showMutationError('移除失败', error);
+                              return;
+                            }
+                            if (!ctx.mounted) return;
                             Navigator.pop(ctx);
-                            setState(() {});
                           },
                         ),
                       ],
@@ -393,15 +405,19 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
               child: Text('取消',
                   style: TextStyle(color: AppColors.mutedText(context)))),
           TextButton(
-            onPressed: () {
-              ref.read(playlistServiceProvider).updatePlaylist(
-                    id: playlist.id,
-                    name: nameController.text,
-                    description: descController.text,
-                  );
-              ref.read(playlistVersionProvider.notifier).state++;
+            onPressed: () async {
+              try {
+                await ref.read(playlistServiceProvider).updatePlaylist(
+                      id: playlist.id,
+                      name: nameController.text,
+                      description: descController.text,
+                    );
+              } catch (error) {
+                if (mounted) _showMutationError('保存失败', error);
+                return;
+              }
+              if (!ctx.mounted) return;
               Navigator.pop(ctx);
-              setState(() {});
             },
             child: Text('保存',
                 style: TextStyle(color: AppColors.accentOf(context))),
@@ -427,9 +443,16 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
               child: Text('取消',
                   style: TextStyle(color: AppColors.mutedText(context)))),
           TextButton(
-            onPressed: () {
-              ref.read(playlistServiceProvider).deletePlaylist(playlist.id);
-              ref.read(playlistVersionProvider.notifier).state++;
+            onPressed: () async {
+              try {
+                await ref
+                    .read(playlistServiceProvider)
+                    .deletePlaylist(playlist.id);
+              } catch (error) {
+                if (mounted) _showMutationError('删除失败', error);
+                return;
+              }
+              if (!ctx.mounted || !context.mounted) return;
               Navigator.pop(ctx);
               Navigator.pop(context);
             },
@@ -437,6 +460,13 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  void _showMutationError(String action, Object error) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('$action: $error')),
     );
   }
 }
