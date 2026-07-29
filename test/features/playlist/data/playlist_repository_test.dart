@@ -37,6 +37,45 @@ void main() {
         throwsUnsupportedError,
       );
     });
+
+    test('deeply copies and freezes constructor song meta', () {
+      final nested = <String, dynamic>{'number': 1};
+      final tags = <dynamic>['one', <String, dynamic>{'value': 'two'}];
+      final meta = <String, dynamic>{'nested': nested, 'tags': tags};
+      final snapshot = PlaylistSnapshot(
+        schemaVersion: 1,
+        playlists: [playlistFixture(songs: [songFixture(meta: meta)])],
+      );
+
+      meta['new'] = true;
+      nested['number'] = 2;
+      (tags[1] as Map<String, dynamic>)['value'] = 'changed';
+
+      final stored = snapshot.playlists.single.songs.single.meta!;
+      expect(stored, {
+        'nested': {'number': 1},
+        'tags': ['one', {'value': 'two'}],
+      });
+      expect(() => stored['new'] = true, throwsUnsupportedError);
+      expect(() => (stored['nested'] as Map<String, dynamic>)['number'] = 2,
+          throwsUnsupportedError);
+      expect(() => (stored['tags'] as List<dynamic>).add('three'),
+          throwsUnsupportedError);
+    });
+
+    test('rejects non-JSON constructor meta at its field path', () {
+      expectFormatException(
+        () => PlaylistSnapshot(
+          schemaVersion: 1,
+          playlists: [
+            playlistFixture(
+              songs: [songFixture(meta: {'nested': DateTime.utc(2026)})],
+            ),
+          ],
+        ),
+        'playlists[0].songs[0].meta.nested',
+      );
+    });
   });
 
   group('PlaylistSnapshotCodec', () {
@@ -87,6 +126,26 @@ void main() {
         () => decoded.playlists.single.songs.add(songFixture()),
         throwsUnsupportedError,
       );
+    });
+
+    test('deeply freezes decoded song meta', () {
+      final decoded = codec.decode(jsonEncode({
+        'schemaVersion': 1,
+        'playlists': [
+          playlistJson('one', songs: [songJson()])
+        ],
+      }));
+      final meta = decoded.playlists.single.songs.single.meta!;
+
+      expect(() => meta['new'] = true, throwsUnsupportedError);
+      expect(() => (meta['nested'] as Map<String, dynamic>)['number'] = 2,
+          throwsUnsupportedError);
+      expect(() => (meta['tags'] as List<dynamic>).add('three'),
+          throwsUnsupportedError);
+      expect(meta, {
+        'nested': {'number': 1},
+        'tags': ['one', 'two'],
+      });
     });
 
     test('decoder rejects unknown version at schemaVersion', () {
@@ -183,7 +242,7 @@ Playlist playlistFixture({String id = 'one', List<MusicItem>? songs}) {
   );
 }
 
-MusicItem songFixture() {
+MusicItem songFixture({Map<String, dynamic>? meta}) {
   return MusicItem(
     id: 'song-id',
     name: 'Song name',
@@ -198,10 +257,11 @@ MusicItem songFixture() {
     isPlayable: false,
     songmid: 'song-mid',
     hash: 'song-hash',
-    meta: {
-      'nested': {'number': 1},
-      'tags': ['one', 'two'],
-    },
+    meta: meta ??
+        {
+          'nested': {'number': 1},
+          'tags': ['one', 'two'],
+        },
   );
 }
 

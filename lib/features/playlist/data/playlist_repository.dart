@@ -7,10 +7,7 @@ final class PlaylistSnapshot {
   PlaylistSnapshot({
     required this.schemaVersion,
     required List<Playlist> playlists,
-  }) : playlists = List.unmodifiable([
-          for (final playlist in playlists)
-            playlist.copyWith(songs: List.unmodifiable(playlist.songs)),
-        ]) {
+  }) : playlists = _copyPlaylists(schemaVersion, playlists) {
     if (schemaVersion != 1) {
       throw const FormatException('schemaVersion must be 1');
     }
@@ -18,6 +15,74 @@ final class PlaylistSnapshot {
 
   final int schemaVersion;
   final List<Playlist> playlists;
+
+  static List<Playlist> _copyPlaylists(
+    int schemaVersion,
+    List<Playlist> playlists,
+  ) {
+    if (schemaVersion != 1) {
+      throw const FormatException('schemaVersion must be 1');
+    }
+    return List.unmodifiable([
+      for (var playlistIndex = 0;
+          playlistIndex < playlists.length;
+          playlistIndex++)
+        playlists[playlistIndex].copyWith(songs: List.unmodifiable([
+          for (var songIndex = 0;
+              songIndex < playlists[playlistIndex].songs.length;
+              songIndex++)
+            _copySong(
+              playlists[playlistIndex].songs[songIndex],
+              'playlists[$playlistIndex].songs[$songIndex].meta',
+            ),
+        ])),
+    ]);
+  }
+
+  static MusicItem _copySong(MusicItem song, String metaPath) {
+    return MusicItem(
+      id: song.id,
+      name: song.name,
+      singer: song.singer,
+      album: song.album,
+      duration: song.duration,
+      source: song.source,
+      platform: song.platform,
+      artwork: song.artwork,
+      url: song.url,
+      lyricsUrl: song.lyricsUrl,
+      isPlayable: song.isPlayable,
+      songmid: song.songmid,
+      hash: song.hash,
+      meta: song.meta == null
+          ? null
+          : _copyJsonObject(song.meta!, metaPath),
+    );
+  }
+
+  static Map<String, dynamic> _copyJsonObject(Map value, String path) {
+    final copy = <String, dynamic>{};
+    for (final entry in value.entries) {
+      if (entry.key is! String) {
+        throw FormatException('$path must use string keys');
+      }
+      copy[entry.key as String] = _copyJsonValue(entry.value, '$path.${entry.key}');
+    }
+    return Map.unmodifiable(copy);
+  }
+
+  static dynamic _copyJsonValue(dynamic value, String path) {
+    if (value == null || value is String || value is bool) return value;
+    if (value is num && value.isFinite) return value;
+    if (value is List) {
+      return List.unmodifiable([
+        for (var index = 0; index < value.length; index++)
+          _copyJsonValue(value[index], '$path[$index]'),
+      ]);
+    }
+    if (value is Map) return _copyJsonObject(value, path);
+    throw FormatException('$path must be a JSON value');
+  }
 }
 
 abstract interface class PlaylistRepository {

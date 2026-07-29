@@ -9,10 +9,13 @@
 
 ## Contract
 
-- Snapshots accept only schema version `1` and expose immutable playlist and
-  song lists.
+- Snapshots accept only schema version `1`, expose immutable playlist and song
+  lists, and own recursively immutable copies of every song `meta` graph.
 - The codec preserves every `MusicItem` JSON field, including optional fields
   and nested `meta` values.
+- Constructor `meta` accepts JSON-compatible scalar values, maps with string
+  keys, and lists only. Invalid values fail with a path-specific
+  `FormatException`.
 - Decoding requires the exact envelope shape, non-empty unique playlist IDs and
   names, integer millisecond timestamps, object song entries, required song
   `id`, `name`, `singer`, and `source`, plus a non-negative integer duration.
@@ -23,9 +26,10 @@
 - RED: `flutter test test/features/playlist/data/playlist_repository_test.dart`
   failed because `playlist_repository.dart`, `PlaylistSnapshot`, and
   `PlaylistSnapshotCodec` did not exist.
-- RED: the immutable-song-list regression test failed before defensive copying
-  was added to `PlaylistSnapshot`.
-- GREEN: the focused contract and existing model suite passes 23 tests.
+- RED: direct-construction meta mutation changed the snapshot before recursive
+  defensive copying was added to `PlaylistSnapshot`.
+- GREEN: direct construction and decode tests verify source mutation cannot
+  change snapshots, and exposed nested maps and lists reject mutation.
 
 ## Verification
 
