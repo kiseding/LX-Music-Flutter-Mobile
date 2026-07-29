@@ -771,6 +771,158 @@ void main() {
       expect(stale.releaseCount, 1);
       expect(handler.mediaItem.value?.id, 'second');
     });
+
+    test('late cached A resolution after B switch cannot publish A extras',
+        () async {
+      final player = _ReuseAudioPlayer();
+      final handler = LxAudioHandler(player: player);
+      addTearDown(player.dispose);
+      final started = Completer<int>();
+      final lateResult = Completer<String?>();
+      handler.urlResolver = (id, [extras]) async {
+        if (id == 'A') {
+          started.complete(extras!['_playbackGeneration'] as int);
+          return lateResult.future;
+        }
+        return 'https://cdn.example/B.mp3';
+      };
+
+      final loadingA = handler.setPlaylist([
+        _unresolvedItem('A'),
+        _unresolvedItem('B'),
+      ]);
+      final generationA = await started.future;
+      await handler.skipToQueueItem(1, playAfterLoad: false);
+      final leaseA = _FakeLease('/cache/A.mp3', 'A', (_) {});
+      final accepted = handler.acceptResolvedPlayback(
+        mediaId: 'A',
+        generation: generationA,
+        resolution: CachedPlayback(leaseA.asLease(), {
+          'url': PlaybackCacheService.toPlayableUri(leaseA.path),
+          'actualQuality': 'flac',
+        }),
+      );
+      lateResult.complete(null);
+      await loadingA;
+
+      expect(accepted, isFalse);
+      expect(leaseA.releaseCount, 1);
+      expect(handler.queueItems[0].extras?['url'], isNull);
+      expect(handler.queueItems[0].extras?['actualQuality'], isNull);
+      expect(handler.mediaItem.value?.id, 'B');
+    });
+
+    test('stale streaming resolution cannot publish metadata', () async {
+      final player = _ReuseAudioPlayer();
+      final handler = LxAudioHandler(player: player);
+      addTearDown(player.dispose);
+      final started = Completer<int>();
+      final lateResult = Completer<String?>();
+      handler.urlResolver = (id, [extras]) async {
+        if (id == 'A') {
+          started.complete(extras!['_playbackGeneration'] as int);
+          return lateResult.future;
+        }
+        return 'https://cdn.example/B.mp3';
+      };
+
+      final loadingA = handler.setPlaylist([
+        _unresolvedItem('A'),
+        _unresolvedItem('B'),
+      ]);
+      final generationA = await started.future;
+      await handler.skipToQueueItem(1, playAfterLoad: false);
+      final accepted = handler.acceptResolvedPlayback(
+        mediaId: 'A',
+        generation: generationA,
+        resolution: const StreamingPlayback('https://cdn.example/A.mp3', {
+          'url': 'https://cdn.example/A.mp3',
+          'actualQuality': 'flac',
+        }),
+      );
+      lateResult.complete(null);
+      await loadingA;
+
+      expect(accepted, isFalse);
+      expect(handler.queueItems[0].extras?['url'], isNull);
+      expect(handler.queueItems[0].extras?['actualQuality'], isNull);
+    });
+
+    test('current resolution atomically publishes extras and stages its lease',
+        () async {
+      final player = _ReuseAudioPlayer();
+      final handler = LxAudioHandler(player: player);
+      addTearDown(player.dispose);
+      final lease = _FakeLease('/cache/current.mp3', 'current', (_) {});
+      handler.urlResolver = (id, [extras]) async {
+        final resolution = CachedPlayback(lease.asLease(), {
+          'url': PlaybackCacheService.toPlayableUri(lease.path),
+          'actualQuality': 'flac',
+        });
+        expect(
+          handler.acceptResolvedPlayback(
+            mediaId: id,
+            generation: extras!['_playbackGeneration'] as int,
+            resolution: resolution,
+          ),
+          isTrue,
+        );
+        return resolution.playableUrl;
+      };
+
+      await handler.setPlaylist([_unresolvedItem('current')]);
+
+      expect(handler.mediaItem.value?.extras?['actualQuality'], 'flac');
+      expect(handler.queueItems.single.extras?['actualQuality'], 'flac');
+      expect(lease.releaseCount, 0);
+      await handler.stop();
+      expect(lease.releaseCount, 1);
+    });
+
+    test('late preload cannot overwrite an item after it becomes current',
+        () async {
+      final player = _ReuseAudioPlayer();
+      final handler = LxAudioHandler(player: player);
+      addTearDown(player.dispose);
+      final preloadStarted = Completer<int>();
+      final allowPreload = Completer<void>();
+      final lease = _FakeLease('/cache/B.mp3', 'B', (_) {});
+      handler.urlResolver = (id, [extras]) async {
+        final preloadToken = extras?['_preloadRequestToken'];
+        if (preloadToken is int) {
+          preloadStarted.complete(preloadToken);
+          await allowPreload.future;
+          final resolution = CachedPlayback(lease.asLease(), {
+            'url': PlaybackCacheService.toPlayableUri(lease.path),
+            'actualQuality': 'flac',
+          });
+          expect(
+            handler.acceptPreloadedPlayback(
+              mediaId: id,
+              requestToken: preloadToken,
+              resolution: resolution,
+            ),
+            isFalse,
+          );
+          return resolution.playableUrl;
+        }
+        return 'https://cdn.example/$id.mp3';
+      };
+
+      await handler.setPlaylist([
+        _cachedItem('A', '/tmp/A.mp3'),
+        _unresolvedItem('B'),
+      ]);
+      await preloadStarted.future;
+      await handler.skipToQueueItem(1, playAfterLoad: false);
+      allowPreload.complete();
+      await pumpEventQueue();
+
+      expect(lease.releaseCount, 1);
+      expect(handler.mediaItem.value?.id, 'B');
+      expect(handler.queueItems[1].extras?['actualQuality'], isNull);
+      expect(handler.queueItems[1].extras?['url'], 'https://cdn.example/B.mp3');
+    });
   });
 }
 

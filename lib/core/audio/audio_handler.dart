@@ -245,6 +245,14 @@ class PlaybackStartProvenance {
   );
 }
 
+class _PreloadRequest {
+  const _PreloadRequest(this.generation, this.index, this.mediaId);
+
+  final int generation;
+  final int index;
+  final String mediaId;
+}
+
 class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   final AudioPlayer _player;
   late final PlaybackCommandCoordinator _commands;
@@ -283,6 +291,8 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
   final PlaybackLeaseSession _leaseSession = PlaybackLeaseSession();
   final Map<String, PlaybackResolution> _pendingResolutions = {};
+  final Map<int, _PreloadRequest> _preloadRequests = {};
+  int _nextPreloadRequestToken = 0;
   Future<PlaybackCachePathClassification> Function(String path)?
       _classifyExistingCache;
   Future<PlaybackCacheLease?> Function(String path)? _acquireExistingCache;
@@ -304,18 +314,20 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     _cancelAllTrackedCacheWork = cancelAllTrackedCacheWork;
   }
 
-  /// Called by the production urlResolver after cache-or-stream resolution.
-  void noteResolvedPlayback(
-    String mediaId,
-    PlaybackResolution resolution, {
+  /// Atomically accepts metadata and lease ownership for the current playback
+  /// request. A late resolver result must never publish queue or media extras.
+  bool acceptResolvedPlayback({
+    required String mediaId,
     required int generation,
+    required PlaybackResolution resolution,
   }) {
     if (generation != _playGeneration ||
         mediaId != _activeItemId ||
         mediaItem.value?.id != mediaId) {
       unawaited(resolution.leaseOrNull?.release());
-      return;
+      return false;
     }
+    patchQueueItemExtras(mediaId, resolution.qualityExtras);
     final previous = _pendingResolutions.remove(mediaId);
     final previousLease = previous?.leaseOrNull;
     if (previousLease != null &&
@@ -331,6 +343,44 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     if (key != null && key.isNotEmpty) {
       _foregroundCacheKey = key;
     }
+    return true;
+  }
+
+  /// Preloads have separate authority: only their original queue slot and
+  /// request generation may receive metadata, and never once the item is live.
+  bool acceptPreloadedPlayback({
+    required String mediaId,
+    required int requestToken,
+    required PlaybackResolution resolution,
+  }) {
+    final request = _preloadRequests.remove(requestToken);
+    final valid = request != null &&
+        request.generation == _playGeneration &&
+        request.index < _queue.length &&
+        request.mediaId == mediaId &&
+        _queue[request.index].id == mediaId &&
+        _currentIndex != request.index &&
+        mediaItem.value?.id != mediaId;
+    if (!valid) {
+      unawaited(resolution.leaseOrNull?.release());
+      return false;
+    }
+    patchQueueItemExtras(mediaId, resolution.qualityExtras);
+    unawaited(resolution.leaseOrNull?.release());
+    return true;
+  }
+
+  /// Legacy test seam. Production callers must use [acceptResolvedPlayback].
+  void noteResolvedPlayback(
+    String mediaId,
+    PlaybackResolution resolution, {
+    required int generation,
+  }) {
+    acceptResolvedPlayback(
+      mediaId: mediaId,
+      generation: generation,
+      resolution: resolution,
+    );
   }
 
   void _discardPendingResolution(String mediaId) {
@@ -467,6 +517,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
   int _bumpGeneration() {
     _discardAllPendingResolutions();
+    _preloadRequests.clear();
     return ++_playGeneration;
   }
 
@@ -1019,12 +1070,23 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         try {
           debugPrint('[AudioHandler] preload idx=$idx title=${item.title}');
           final rawExtras = item.extras == null
-              ? null
+              ? <String, dynamic>{}
               : Map<String, dynamic>.from(item.extras!);
+          final requestToken = ++_nextPreloadRequestToken;
+          _preloadRequests[requestToken] = _PreloadRequest(gen, idx, itemId);
+          rawExtras['_preloadRequestToken'] = requestToken;
           final url = await resolver(item.id, rawExtras);
           if (url == null || url.isEmpty) continue;
-          if (_isStale(gen)) return;
-          if (idx >= _queue.length || _queue[idx].id != itemId) continue;
+          final request = _preloadRequests.remove(requestToken);
+          if (request == null ||
+              request.generation != _playGeneration ||
+              request.index >= _queue.length ||
+              request.mediaId != itemId ||
+              _queue[request.index].id != itemId ||
+              _currentIndex == request.index ||
+              mediaItem.value?.id == itemId) {
+            continue;
+          }
           final extras = Map<String, dynamic>.from(_queue[idx].extras ?? {});
           extras['url'] = url;
           _queue[idx] = _queue[idx].copyWith(extras: extras);

@@ -142,26 +142,22 @@ void main() async {
           debugPrint('[urlResolver] 源未返回可播地址(q=$requested)');
           return null;
         }
-        final qualityExtras = resolution.qualityExtras;
-        final current = lxHandler.mediaItem.value;
-        if (current != null && current.id == mediaId) {
-          final extras = Map<String, dynamic>.from(current.extras ?? {});
-          extras.addAll(qualityExtras);
-          lxHandler.mediaItem.add(current.copyWith(extras: extras));
-        }
-        lxHandler.patchQueueItemExtras(mediaId, qualityExtras);
-        // Only the authoritative current item retains a playback lease.
-        // Preload keeps the durable file:// URL but releases the lease.
         final resolutionGeneration = rawExtras['_playbackGeneration'];
-        if (current != null &&
-            current.id == mediaId &&
-            resolutionGeneration is int) {
-          lxHandler.noteResolvedPlayback(
-            mediaId,
-            resolution,
+        final preloadRequestToken = rawExtras['_preloadRequestToken'];
+        if (resolutionGeneration is int) {
+          lxHandler.acceptResolvedPlayback(
+            mediaId: mediaId,
             generation: resolutionGeneration,
+            resolution: resolution,
+          );
+        } else if (preloadRequestToken is int) {
+          lxHandler.acceptPreloadedPlayback(
+            mediaId: mediaId,
+            requestToken: preloadRequestToken,
+            resolution: resolution,
           );
         } else {
+          // Resolutions without handler authority retain no playback lease.
           await resolution.leaseOrNull?.release();
         }
         return resolution.playableUrl;

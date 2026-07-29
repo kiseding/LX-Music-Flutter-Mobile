@@ -149,3 +149,49 @@ including re-acquisition for cached URL reuse after preload or stop.
   to reacquire the same durable cache path. The final authoritative source owns
   the live replacement lease; intermediate leases are released by existing
   generation-gated source cleanup.
+
+## Resolver Metadata Ownership Fix
+
+- `LxAudioHandler.acceptResolvedPlayback` now owns the foreground resolver
+  publication transaction. It verifies the exact playback generation, active
+  media identity, and live media item before mutating either queue or media
+  extras, staging the resolution, or adopting its cache lease. A rejected
+  cached result releases its lease; a rejected streaming result writes no
+  metadata.
+- `main.dart` preserves the string URL resolver contract and returns the
+  resolved URL exactly as before, but delegates all resolver metadata and lease
+  handling to the handler before returning. It no longer writes quality extras
+  directly.
+- Preload uses a separate request authority: each attempt has a unique token
+  tied to the scheduling playback generation, original queue index, and media
+  identity. Preload metadata can update only that still-queued, non-current
+  item. If it becomes current, is moved/replaced, or the generation changes,
+  the result is ignored and any cache lease is released. Preloads never adopt a
+  foreground playback lease.
+
+## Resolver Metadata TDD
+
+- RED: `playback_resolution_test.dart` failed to compile because
+  `acceptResolvedPlayback` did not exist; after the foreground gate was added,
+  the preload regression failed to compile because `acceptPreloadedPlayback`
+  did not exist.
+- GREEN: deterministic late A resolution after switch to B proves no A URL or
+  quality extras are published and the A lease releases once. A late streaming
+  A result likewise publishes no metadata. A valid current resolution updates
+  both media and queue extras and holds its lease until stop. A late preload
+  after its queue item becomes current is rejected and releases its cache lease.
+
+## Resolver Metadata Verification
+
+- `flutter test test/core/audio/playback_resolution_test.dart`: 29 passed.
+- `flutter test test/core/audio test/core/network test/features/player/domain/player_service_queue_test.dart`: 368 passed.
+- `flutter analyze lib/core/audio/audio_handler.dart lib/main.dart test/core/audio/playback_resolution_test.dart`: no issues.
+- `flutter test`: 555 passed.
+- `flutter analyze`: 22 pre-existing unrelated diagnostics; none in the Task 5
+  handler, resolver, or regression-test files.
+
+## Resolver Metadata Concerns
+
+- Preload cache leases remain intentionally short-lived. A preloaded durable
+  file is reclassified and re-leased only when an authoritative source request
+  installs it, so eviction can require a normal re-resolution before playback.
