@@ -189,3 +189,43 @@ TDD, exact idempotent leases, and persisted true LRU access timestamps.
 - Targeted analysis: no issues.
 - Full analysis retains 22 unrelated existing findings.
 - `git diff --check`: clean.
+
+## Transaction And Integrity Architecture
+
+- The former commit-only tail is replaced by one asynchronous transaction tail
+  per cache key. Hit validation and metadata persistence, operation selection,
+  lease increment/release, commit and rollback, stable removal, TTL and size
+  rechecks, cancellation/disposal cleanup, orphan cleanup, and stable sibling
+  cleanup all execute under that key's transaction.
+- Boundary methods enter `_withKeyTransaction` once and call `Locked` helpers;
+  locked helpers never re-enter the same gate. Downloads and candidate snapshots
+  remain outside the gate. A staged download enters only for durable install,
+  and committed entries remain inflight-protected while global purge runs.
+- Lease acquisition validates the exact current generation and physical file,
+  then increments its lease before releasing the key transaction. If purge wins
+  before acquisition enters, acquisition retries once and returns only a lease
+  whose file still exists.
+- TTL and size purge snapshot candidates, then re-evaluate the current generation,
+  lease/inflight protection, live expiration, and live aggregate size under each
+  candidate's key transaction. Same-generation metadata rollback is rechecked;
+  stale candidates cannot delete replacement generations.
+- Global index writes remain serialized by `_pendingIndexWrite`. Key transactions
+  may await that tail, but its write callback only snapshots and writes `_index`
+  and never enters a key transaction, preserving one-way lock ordering.
+- Top-level index decode/type failure sets load integrity false, preserves the
+  unreadable persisted value, and skips startup purge and orphan deletion. A
+  valid top-level list parses records independently, persists valid repaired
+  entries, and protects plausible malformed stable key/path claims from orphan
+  cleanup. A later clean startup resumes normal orphan migration deletion.
+
+## Transaction And Integrity TDD
+
+- RED reproduced top-level corruption overwriting the index/deleting files,
+  whole-list record failure, and lease acquisition returning null after TTL
+  purge deleted the shared hit during paused validation.
+- Deterministic GREEN coverage includes acquisition versus TTL purge,
+  acquisition versus size pressure, failed hit persistence versus purge, commit
+  versus purge, malformed top-level preservation, mixed valid/malformed repair,
+  ambiguous stable ownership preservation, and later clean-load cleanup.
+- Focused playback-cache suite: 51 passed.
+- Targeted analysis: no issues.
