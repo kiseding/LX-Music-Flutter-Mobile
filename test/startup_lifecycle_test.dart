@@ -12,6 +12,74 @@ import 'package:lx_music_flutter/startup_lifecycle.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  test('registered resources dispose sequentially in reverse order', () async {
+    final releaseDependent = Completer<void>();
+    final failure = StateError('dependent disposal failed');
+    final events = <String>[];
+    final tracker = ResourceDisposalTracker();
+    tracker.register(() async {
+      events.add('dependency-start');
+    });
+    tracker.register(() async {
+      events.add('dependent-start');
+      await releaseDependent.future;
+      events.add('dependent-complete');
+    });
+
+    final disposal = tracker.disposeAndDrain();
+    await Future<void>.delayed(Duration.zero);
+
+    expect(events, ['dependent-start']);
+    tracker.register(() async {
+      events.add('dynamic-resource');
+    });
+    releaseDependent.completeError(failure);
+
+    await expectLater(disposal, throwsA(same(failure)));
+    expect(
+      events,
+      ['dependent-start', 'dynamic-resource', 'dependency-start'],
+    );
+  });
+
+  test('overlapping direct drains share completion failure and allow reuse',
+      () async {
+    final releaseCleanup = Completer<void>();
+    final failure = StateError('shared cleanup failed');
+    final events = <String>[];
+    final tracker = ResourceDisposalTracker();
+    tracker.register(() async {
+      events.add('cleanup-start');
+      await releaseCleanup.future;
+      events.add('cleanup-complete');
+      throw failure;
+    });
+
+    final first = tracker.disposeAndDrain();
+    final second = tracker.disposeAndDrain();
+    var firstCompleted = false;
+    var secondCompleted = false;
+    first.whenComplete(() => firstCompleted = true).ignore();
+    second.whenComplete(() => secondCompleted = true).ignore();
+
+    expect(identical(first, second), isTrue);
+    await Future<void>.delayed(Duration.zero);
+    expect(events, ['cleanup-start']);
+    expect(firstCompleted, isFalse);
+    expect(secondCompleted, isFalse);
+
+    releaseCleanup.complete();
+    await expectLater(first, throwsA(same(failure)));
+    await expectLater(second, throwsA(same(failure)));
+    expect(events, ['cleanup-start', 'cleanup-complete']);
+
+    tracker.register(() async {
+      events.add('later-resource');
+    });
+    await tracker.disposeAndDrain();
+    expect(events, ['cleanup-start', 'cleanup-complete', 'later-resource']);
+  });
+
   test('dispose drains resources registered synchronously by a disposer',
       () async {
     final calls = <String, int>{};
@@ -88,9 +156,11 @@ void main() {
 
     await expectLater(tracker.disposeAndDrain(), throwsA(same(failure)));
 
+    expect(events,
+        containsAll(['throwing-resource', 'later-resource', 'pending']));
     expect(
-      events,
-      ['throwing-resource', 'later-resource', 'pending'],
+      events.indexOf('throwing-resource'),
+      lessThan(events.indexOf('later-resource')),
     );
   });
 

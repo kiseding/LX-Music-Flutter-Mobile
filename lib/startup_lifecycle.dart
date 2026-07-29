@@ -10,6 +10,7 @@ final resourceDisposalTrackerProvider = Provider<ResourceDisposalTracker>(
 final class ResourceDisposalTracker {
   final List<_PendingDisposal> _pending = [];
   final List<_TrackedDisposal> _resources = [];
+  Future<void>? _drainFuture;
 
   void Function() register(Future<void> Function() dispose) {
     final resource = _TrackedDisposal(dispose);
@@ -21,11 +22,27 @@ final class ResourceDisposalTracker {
     _pending.add(_PendingDisposal(disposal));
   }
 
-  Future<void> disposeAndDrain() async {
+  Future<void> disposeAndDrain() {
+    final activeDrain = _drainFuture;
+    if (activeDrain != null) return activeDrain;
+
+    final drain = _drain();
+    _drainFuture = drain;
+    drain.whenComplete(() {
+      if (identical(_drainFuture, drain)) _drainFuture = null;
+    }).ignore();
+    return drain;
+  }
+
+  Future<void> _drain() async {
     _DisposalFailure? firstFailure;
     while (_resources.isNotEmpty || _pending.isNotEmpty) {
       while (_resources.isNotEmpty) {
-        track(_resources.removeLast().dispose());
+        try {
+          await _resources.removeLast().dispose();
+        } catch (error, stackTrace) {
+          firstFailure ??= _DisposalFailure(error, stackTrace);
+        }
       }
 
       final pending = List<_PendingDisposal>.of(_pending);

@@ -258,3 +258,51 @@ error and original stack, disposes the container, completes the post-container
 fixed point, then reports failure. Root widget teardown catches that future and
 reports it through `FlutterError`; awaited startup-failure cleanup continues to
 surface disposal failures to its caller.
+
+## Final Tracker Concurrency Remediation
+
+### RED Evidence
+
+```text
+flutter test test/startup_lifecycle_test.dart
+00:00 +0 -1: registered resources dispose sequentially in reverse order [E]
+Expected: ['dependent-start']
+Actual: ['dependent-start', 'dependency-start']
+00:00 +0 -2: overlapping direct drains share completion failure and allow reuse [E]
+Expected: true
+Actual: <false>
+00:00 +9 -2: Some tests failed.
+```
+
+The first failure proved that reverse invocation was still concurrent: the
+earlier dependency started before the later dependent's future completed. The
+second proved that overlapping direct tracker drains returned different futures
+and could split the queue and cleanup outcome.
+
+### GREEN Evidence
+
+```text
+flutter test test/startup_lifecycle_test.dart
+11 tests passed
+
+flutter test test/features/playlist test/features/sync test/features/settings test/widget_test.dart
+90 tests passed
+
+flutter analyze
+22 pre-existing findings; no new findings
+
+dart format --output=none --set-exit-if-changed lib/startup_lifecycle.dart test/startup_lifecycle_test.dart
+Formatted 2 files (0 changed)
+
+git diff --check
+passed
+```
+
+Registered resources now dispose strictly one at a time in reverse registration
+order. A failed disposer is retained as the first error while remaining and
+dynamically registered resources continue to the fixed point. Pending callback
+futures are still snapshot-drained and independently observed. Concurrent direct
+`disposeAndDrain` calls receive the same memoized future and therefore the same
+completion and failure after all cleanup. The memoized future is cleared only
+after completion, allowing the startup lifecycle's post-container drain and
+later registrations without permanently closing the tracker.
