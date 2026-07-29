@@ -1,8 +1,11 @@
 import 'package:dio/dio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../../../core/storage/secure_token_store.dart';
 import '../../../core/network/outbound_url.dart';
 
 /// 对接 workers/ 子项目（lx-music-api）的客户端。
+enum CloudVerification { valid, unauthorized, unavailable, noSession }
+
 class CloudApiClient {
   static const _kBase = 'cloud_api_base';
   static const _kToken = 'cloud_api_token';
@@ -10,6 +13,8 @@ class CloudApiClient {
   static const _kRole = 'cloud_api_role';
 
   final Dio _dio;
+  final SecureTokenStore _secureStore;
+  final Future<SharedPreferences> Function() _preferences;
 
   String? _baseUrl;
   String? _token;
@@ -17,13 +22,18 @@ class CloudApiClient {
   String? _role;
   String? _configurationError;
 
-  CloudApiClient({Dio? dio})
-      : _dio = dio ??
+  CloudApiClient({
+    Dio? dio,
+    SecureTokenStore? secureStore,
+    Future<SharedPreferences> Function()? preferences,
+  })  : _dio = dio ??
             Dio(BaseOptions(
               connectTimeout: const Duration(seconds: 12),
               receiveTimeout: const Duration(seconds: 30),
               headers: {'Content-Type': 'application/json'},
-            ));
+            )),
+        _secureStore = secureStore ?? FlutterSecureTokenStore(),
+        _preferences = preferences ?? SharedPreferences.getInstance;
 
   String? get baseUrl => _baseUrl;
   String? get token => _token;
@@ -35,45 +45,63 @@ class CloudApiClient {
   bool get isAdmin => _role == 'admin';
 
   Future<void> load() async {
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await _preferences();
     final savedBaseUrl = prefs.getString(_kBase);
-    _baseUrl = null;
-    _configurationError = null;
+    String? baseUrl;
+    String? configurationError;
     if (savedBaseUrl != null && savedBaseUrl.isNotEmpty) {
       try {
-        _baseUrl = validateHttpsServiceUrl(savedBaseUrl);
+        baseUrl = validateHttpsServiceUrl(savedBaseUrl);
       } on ArgumentError catch (error) {
-        _configurationError = error.message?.toString();
+        configurationError = error.message?.toString();
       }
     }
-    _token = prefs.getString(_kToken);
-    _username = prefs.getString(_kUsername);
-    _role = prefs.getString(_kRole);
+    final token = await LegacyTokenMigrator(
+      secureStore: _secureStore,
+      preferences: prefs,
+    ).readAndMigrate(_kToken);
+    final username = prefs.getString(_kUsername);
+    final role = prefs.getString(_kRole);
+
+    _baseUrl = baseUrl;
+    _configurationError = configurationError;
+    _token = token;
+    _username = username;
+    _role = role;
   }
 
   Future<void> setBaseUrl(String url) async {
     final validated = validateHttpsServiceUrl(url);
     _baseUrl = validated;
     _configurationError = null;
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await _preferences();
     await prefs.setString(_kBase, validated);
   }
 
   Future<void> _persistSession() async {
-    final prefs = await SharedPreferences.getInstance();
-    if (_token != null) await prefs.setString(_kToken, _token!);
+    final token = _token;
+    if (token == null || token.isEmpty) {
+      throw StateError('Cannot persist an empty cloud token');
+    }
+    await _secureStore.write(_kToken, token);
+    if (await _secureStore.read(_kToken) != token) {
+      throw StateError('Secure token verification failed');
+    }
+    final prefs = await _preferences();
+    await prefs.remove(_kToken);
     if (_username != null) await prefs.setString(_kUsername, _username!);
     if (_role != null) await prefs.setString(_kRole, _role!);
   }
 
   Future<void> clearSession() async {
-    _token = null;
-    _username = null;
-    _role = null;
-    final prefs = await SharedPreferences.getInstance();
+    await _secureStore.delete(_kToken);
+    final prefs = await _preferences();
     await prefs.remove(_kToken);
     await prefs.remove(_kUsername);
     await prefs.remove(_kRole);
+    _token = null;
+    _username = null;
+    _role = null;
   }
 
   Options _authOptions() {
@@ -120,10 +148,20 @@ class CloudApiClient {
     if (data['token'] == null) {
       throw Exception(data['error']?.toString() ?? '登录失败');
     }
+    final previousToken = _token;
+    final previousUsername = _username;
+    final previousRole = _role;
     _token = data['token'] as String;
     _username = data['username']?.toString() ?? username;
     _role = data['role']?.toString() ?? 'user';
-    await _persistSession();
+    try {
+      await _persistSession();
+    } catch (_) {
+      _token = previousToken;
+      _username = previousUsername;
+      _role = previousRole;
+      rethrow;
+    }
     return data;
   }
 
@@ -138,28 +176,50 @@ class CloudApiClient {
     if (data['token'] == null) {
       throw Exception(data['error']?.toString() ?? '注册失败');
     }
+    final previousToken = _token;
+    final previousUsername = _username;
+    final previousRole = _role;
     _token = data['token'] as String;
     _username = data['username']?.toString() ?? username;
     _role = data['role']?.toString() ?? 'user';
-    await _persistSession();
+    try {
+      await _persistSession();
+    } catch (_) {
+      _token = previousToken;
+      _username = previousUsername;
+      _role = previousRole;
+      rethrow;
+    }
     return data;
   }
 
-  Future<bool> verify() async {
-    if (!isLoggedIn) return false;
+  Future<CloudVerification> verify() async {
+    if (!isLoggedIn) return CloudVerification.noSession;
     try {
       final resp = await _dio.get(_url('/api/user/auth/verify'),
           options: _authOptions());
       final data = resp.data;
       if (data is Map && data['valid'] == true) {
-        if (data['role'] != null) _role = data['role'].toString();
-        if (data['username'] != null) _username = data['username'].toString();
-        await _persistSession();
-        return true;
+        final previousUsername = _username;
+        final previousRole = _role;
+        _role = data['role']?.toString() ?? _role;
+        _username = data['username']?.toString() ?? _username;
+        try {
+          await _persistSession();
+        } catch (_) {
+          _username = previousUsername;
+          _role = previousRole;
+          return CloudVerification.unavailable;
+        }
+        return CloudVerification.valid;
       }
-      return false;
+      return CloudVerification.unavailable;
+    } on DioException catch (error) {
+      return error.response?.statusCode == 401
+          ? CloudVerification.unauthorized
+          : CloudVerification.unavailable;
     } catch (_) {
-      return false;
+      return CloudVerification.unavailable;
     }
   }
 
