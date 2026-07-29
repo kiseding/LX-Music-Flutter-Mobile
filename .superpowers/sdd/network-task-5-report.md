@@ -219,3 +219,40 @@ including re-acquisition for cached URL reuse after preload or stop.
 - GREEN: the regression proves the second duplicate's resolved URL installs and
   plays, while the first duplicate remains unmodified. Existing replaced and
   moved duplicate cases remain rejected.
+
+## Queue Selection And Recovery Duplicate Fix
+
+- `skipToQueueItem(index)` now captures the exact `MediaItem` at the requested
+  queue slot before asynchronous pause work. It loads only that same index when
+  the slot still contains the identical object; a moved or replaced occurrence
+  is stale and is rejected rather than relocated by ID.
+- `_recoverAuthoritativeSource` now captures the live `mediaItem` and current
+  queue index as one authoritative occurrence. Recovery reloads only when the
+  queue still contains that identical object at the current index; it no longer
+  uses `indexWhere` to collapse duplicate IDs to the first occurrence.
+- Source-command tokens, generation gates, metadata transaction identity, and
+  cache lease staging/commit/release remain on the existing paths.
+
+## Queue Selection And Recovery TDD
+
+- RED: the focused resolver suite failed because direct selection of duplicate
+  index 1 loaded index 0, stale native-install recovery also reloaded index 0,
+  and moved/replaced duplicate selections installed an unintended source.
+- GREEN: regression coverage proves direct `skipToQueueItem(1)` installs the
+  second duplicate and leaves the first untouched; stale native-install recovery
+  reloads the second occurrence; and moved/replaced occurrences reject rather
+  than collapse by ID.
+
+## Queue Selection And Recovery Verification
+
+- `flutter test test/core/audio/playback_resolution_test.dart`: 37 passed.
+- `flutter test test/core/audio`: 256 passed.
+- `flutter analyze lib/core/audio/audio_handler.dart test/core/audio/playback_resolution_test.dart`:
+  no issues.
+- `git diff --check`: clean.
+
+## Queue Selection And Recovery Concerns
+
+- The fix intentionally covers the reported direct selection and authoritative
+  recovery paths. Other legacy ID-based queue operations remain unchanged where
+  their public APIs provide only an ID rather than an occurrence identity.

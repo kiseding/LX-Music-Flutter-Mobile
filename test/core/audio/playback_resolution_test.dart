@@ -920,6 +920,78 @@ void main() {
       expect(player.playing, isTrue);
     });
 
+    test('skip to the second duplicate installs its exact occurrence',
+        () async {
+      final player = _ReuseAudioPlayer();
+      final handler = LxAudioHandler(player: player);
+      addTearDown(player.dispose);
+      final first = _cachedItem('duplicate', '/tmp/first.mp3');
+      final second = _cachedItem('duplicate', '/tmp/second.mp3');
+
+      await handler.setPlaylist([first, second]);
+      await handler.skipToQueueItem(1);
+
+      expect(handler.currentQueueIndex, 1);
+      expect(handler.queueItems[0].extras?['url'],
+          PlaybackCacheService.toPlayableUri('/tmp/first.mp3'));
+      expect(player.lastInstalledUri,
+          PlaybackCacheService.toPlayableUri('/tmp/second.mp3'));
+      expect(player.lastInstalledTag, same(handler.queueItems[1]));
+    });
+
+    test('stale install recovery reloads the second duplicate occurrence',
+        () async {
+      final player = _ReuseAudioPlayer();
+      final handler = LxAudioHandler(player: player);
+      addTearDown(player.dispose);
+      final first = _cachedItem('duplicate', '/tmp/first.mp3');
+      final second = _cachedItem('duplicate', '/tmp/second.mp3');
+      await handler.setPlaylist([first, second]);
+      final installGate = player.gateNextSourceInstall();
+
+      final staleSelection = handler.skipToQueueItem(1);
+      await installGate.started.future;
+      final authoritativeSelection = handler.skipToQueueItem(1);
+      installGate.release.complete();
+      await Future.wait([staleSelection, authoritativeSelection]);
+
+      expect(handler.currentQueueIndex, 1);
+      expect(handler.queueItems[0].extras?['url'],
+          PlaybackCacheService.toPlayableUri('/tmp/first.mp3'));
+      expect(player.lastInstalledUri,
+          PlaybackCacheService.toPlayableUri('/tmp/second.mp3'));
+      expect(player.lastInstalledTag, same(handler.queueItems[1]));
+      expect(player.sourceInstallCount, greaterThanOrEqualTo(4));
+    });
+
+    for (final replacement in [false, true]) {
+      test(
+          'skip to a ${replacement ? 'replaced' : 'moved'} duplicate rejects the stale occurrence',
+          () async {
+        final player = _ReuseAudioPlayer();
+        final handler = LxAudioHandler(player: player);
+        addTearDown(player.dispose);
+        final first = _cachedItem('duplicate', '/tmp/first.mp3');
+        final second = _cachedItem('duplicate', '/tmp/second.mp3');
+        await handler.setPlaylist([first, second]);
+        final pauseGate = player.gateNextPause();
+
+        final selection = handler.skipToQueueItem(1, playAfterLoad: false);
+        await pauseGate.started.future;
+        await handler.updateQueue(replacement
+            ? [handler.queueItems[0], _cachedItem('duplicate', '/tmp/new.mp3')]
+            : [handler.queueItems[1], handler.queueItems[0]]);
+        pauseGate.release.complete();
+        await selection;
+
+        expect(player.sourceInstallCount, 1);
+        expect(
+            handler.queueItems[0].extras?['url'],
+            PlaybackCacheService.toPlayableUri(
+                replacement ? '/tmp/first.mp3' : '/tmp/second.mp3'));
+      });
+    }
+
     test('preload resolution patches the requested second duplicate occurrence',
         () async {
       final player = _ReuseAudioPlayer();
@@ -1102,6 +1174,20 @@ class _ReuseAudioPlayer extends AudioPlayer {
   var sourceInstallCount = 0;
   String? lastInstalledUri;
   MediaItem? lastInstalledTag;
+  _Gate? _sourceInstallGate;
+  _Gate? _pauseGate;
+
+  _Gate gateNextSourceInstall() {
+    final gate = _Gate();
+    _sourceInstallGate = gate;
+    return gate;
+  }
+
+  _Gate gateNextPause() {
+    final gate = _Gate();
+    _pauseGate = gate;
+    return gate;
+  }
 
   @override
   bool get playing => _playing;
@@ -1124,6 +1210,12 @@ class _ReuseAudioPlayer extends AudioPlayer {
       lastInstalledUri = null;
       lastInstalledTag = null;
     }
+    final gate = _sourceInstallGate;
+    if (gate != null) {
+      _sourceInstallGate = null;
+      gate.started.complete();
+      await gate.release.future;
+    }
     final error = sourceInstallError;
     if (error != null) throw error;
     return null;
@@ -1137,6 +1229,12 @@ class _ReuseAudioPlayer extends AudioPlayer {
   @override
   Future<void> pause() async {
     _playing = false;
+    final gate = _pauseGate;
+    if (gate != null) {
+      _pauseGate = null;
+      gate.started.complete();
+      await gate.release.future;
+    }
   }
 
   @override
@@ -1165,4 +1263,9 @@ class _GatedReuseAudioPlayer extends _ReuseAudioPlayer {
     if (error != null) throw error;
     return null;
   }
+}
+
+class _Gate {
+  final started = Completer<void>();
+  final release = Completer<void>();
 }

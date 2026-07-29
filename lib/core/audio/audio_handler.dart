@@ -1158,15 +1158,15 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   }) async {
     final provenance = _captureStartProvenance();
     final intentGeneration = _recordExplicitPlaybackIntent(playAfterLoad);
-    final selectedItemId =
-        index >= 0 && index < _queue.length ? _queue[index].id : null;
+    final selectedItem =
+        index >= 0 && index < _queue.length ? _queue[index] : null;
     final sourceGeneration = _playGeneration;
-    if (selectedItemId == null) return;
+    if (selectedItem == null) return;
     unawaited(playAfterLoad
         ? _commands.recordExplicitPlayIntent()
         : _commands.setDesiredPlayingPreservingIntent(false));
     final sourceCommandToken = _commands.requestSource(
-      mediaId: selectedItemId,
+      mediaId: selectedItem.id,
       queueIndex: index,
       position: initialPosition,
     );
@@ -1175,9 +1175,11 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         : null;
     try {
       if (_playGeneration != sourceGeneration) return;
-      final selectedIndex =
-          _queue.indexWhere((item) => item.id == selectedItemId);
-      if (selectedIndex < 0) return;
+      if (index < 0 ||
+          index >= _queue.length ||
+          !identical(_queue[index], selectedItem)) {
+        return;
+      }
       final latestIntentGeneration = _userIntentGeneration;
       final latestPlayAfterLoad = latestIntentGeneration == intentGeneration
           ? playAfterLoad
@@ -1185,7 +1187,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       final owner = selectionPauseOwner;
       selectionPauseOwner = null;
       await _loadQueueItem(
-        selectedIndex,
+        index,
         seamless: seamless,
         preserveUserIntent: true,
         initialPosition: initialPosition,
@@ -1519,11 +1521,15 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   Future<void> _recoverAuthoritativeSource({
     required PlaybackStartProvenance provenance,
   }) async {
-    final authoritativeId = mediaItem.value?.id;
-    if (authoritativeId == null || _activeItemId != authoritativeId) return;
-    final authoritativeIndex =
-        _queue.indexWhere((item) => item.id == authoritativeId);
-    if (authoritativeIndex < 0 || _currentIndex != authoritativeIndex) return;
+    final authoritativeItem = mediaItem.value;
+    final authoritativeIndex = _currentIndex;
+    if (authoritativeItem == null ||
+        _activeItemId != authoritativeItem.id ||
+        authoritativeIndex < 0 ||
+        authoritativeIndex >= _queue.length ||
+        !identical(_queue[authoritativeIndex], authoritativeItem)) {
+      return;
+    }
 
     await _loadQueueItem(
       authoritativeIndex,
