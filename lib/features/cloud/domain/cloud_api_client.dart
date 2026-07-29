@@ -93,6 +93,7 @@ class CloudApiClient {
   bool get isAdmin => _role == 'admin';
 
   Future<void> load() async {
+    final revision = _sessionRevision;
     final prefs = await _preferences();
     final savedBaseUrl = prefs.getString(_kBase);
     String? baseUrl;
@@ -111,6 +112,7 @@ class CloudApiClient {
     final username = prefs.getString(_kUsername);
     final role = prefs.getString(_kRole);
 
+    if (_sessionRevision != revision) return;
     _baseUrl = baseUrl;
     _configurationError = configurationError;
     _token = token;
@@ -202,11 +204,13 @@ class CloudApiClient {
     required String token,
     required String? username,
     required String? role,
+    int? expectedRevision,
   }) {
     return _runSessionMutation(() => _persistSessionLocked(
           token: token,
           username: username,
           role: role,
+          expectedRevision: expectedRevision,
         ));
   }
 
@@ -214,9 +218,13 @@ class CloudApiClient {
     required String token,
     required String? username,
     required String? role,
+    int? expectedRevision,
   }) async {
     if (token.isEmpty) {
       throw StateError('Cannot persist an empty cloud token');
+    }
+    if (expectedRevision != null && _sessionRevision != expectedRevision) {
+      return;
     }
     final previousToken = _token;
     final previousUsername = _username;
@@ -226,6 +234,9 @@ class CloudApiClient {
     try {
       preferences = await _sessionPreferences();
       snapshot = await _snapshotSession(preferences);
+      if (expectedRevision != null && _sessionRevision != expectedRevision) {
+        return;
+      }
       await _secureStore.write(_kToken, token);
       if (await _secureStore.read(_kToken) != token) {
         throw StateError('Secure token verification failed');
@@ -233,6 +244,17 @@ class CloudApiClient {
       await preferences.remove(_kToken);
       if (username != null) await preferences.setString(_kUsername, username);
       if (role != null) await preferences.setString(_kRole, role);
+      if (expectedRevision != null && _sessionRevision != expectedRevision) {
+        final restored = await _restoreSecureToken(snapshot.token);
+        await _restoreMetadata(preferences, snapshot);
+        await _syncSessionMemory(preferences);
+        if (!restored) {
+          throw StateError(
+            'Cloud session persistence became stale and could not be restored',
+          );
+        }
+        return;
+      }
       _token = token;
       _username = username;
       _role = role;
@@ -247,6 +269,20 @@ class CloudApiClient {
         _role = previousRole;
       }
       rethrow;
+    }
+  }
+
+  Future<void> _compensateStaleCleanup(
+    CloudSessionPreferences preferences,
+    _CloudSessionSnapshot snapshot,
+  ) async {
+    final restored = await _restoreSecureToken(snapshot.token);
+    await _restoreMetadata(preferences, snapshot);
+    await _syncSessionMemory(preferences);
+    if (!restored) {
+      throw StateError(
+        'Cloud session cleanup failed: secure token could not be restored',
+      );
     }
   }
 
@@ -276,30 +312,22 @@ class CloudApiClient {
     await _secureStore.delete(_kToken);
     try {
       if (!await _matchesClearExpectation(null, expectedRevision)) {
-        await _restoreSecureToken(snapshot.token);
-        await _restoreMetadata(preferences, snapshot);
-        await _syncSessionMemory(preferences);
+        await _compensateStaleCleanup(preferences, snapshot);
         return;
       }
       await preferences.remove(_kToken);
       if (!await _matchesClearExpectation(null, expectedRevision)) {
-        await _restoreSecureToken(snapshot.token);
-        await _restoreMetadata(preferences, snapshot);
-        await _syncSessionMemory(preferences);
+        await _compensateStaleCleanup(preferences, snapshot);
         return;
       }
       await preferences.remove(_kUsername);
       if (!await _matchesClearExpectation(null, expectedRevision)) {
-        await _restoreSecureToken(snapshot.token);
-        await _restoreMetadata(preferences, snapshot);
-        await _syncSessionMemory(preferences);
+        await _compensateStaleCleanup(preferences, snapshot);
         return;
       }
       await preferences.remove(_kRole);
       if (!await _matchesClearExpectation(null, expectedRevision)) {
-        await _restoreSecureToken(snapshot.token);
-        await _restoreMetadata(preferences, snapshot);
-        await _syncSessionMemory(preferences);
+        await _compensateStaleCleanup(preferences, snapshot);
         return;
       }
       _token = null;
@@ -312,9 +340,7 @@ class CloudApiClient {
         await _syncSessionMemory(preferences);
         rethrow;
       }
-      _token = null;
-      _username = null;
-      _role = null;
+      await _syncSessionMemory(preferences);
       throw StateError(
         'Cloud session cleanup failed: secure token could not be restored',
       );
@@ -365,7 +391,7 @@ class CloudApiClient {
   }
 
   Future<Map<String, dynamic>> login(String username, String password) async {
-    _sessionRevision++;
+    final revision = ++_sessionRevision;
     final resp = await _dio.post(
       _url('/api/user/login'),
       data: {'username': username, 'password': password},
@@ -379,13 +405,14 @@ class CloudApiClient {
       token: data['token'] as String,
       username: data['username']?.toString() ?? username,
       role: data['role']?.toString() ?? 'user',
+      expectedRevision: revision,
     );
     return data;
   }
 
   Future<Map<String, dynamic>> register(
       String username, String password) async {
-    _sessionRevision++;
+    final revision = ++_sessionRevision;
     final resp = await _dio.post(
       _url('/api/user/register'),
       data: {'username': username, 'password': password},
@@ -399,6 +426,7 @@ class CloudApiClient {
       token: data['token'] as String,
       username: data['username']?.toString() ?? username,
       role: data['role']?.toString() ?? 'user',
+      expectedRevision: revision,
     );
     return data;
   }

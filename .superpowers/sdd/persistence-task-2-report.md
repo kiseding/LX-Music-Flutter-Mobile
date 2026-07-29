@@ -33,5 +33,34 @@ Covered behaviors:
 - No token/base pair maps to `noSession`.
 - Secure-delete failure preserves the in-memory session.
 
+## Critical/Important Review Follow-up
+
+- Login and registration capture a session revision before their network request.
+  The serialized persistence operation accepts that revision and exits before any
+  secure-token or metadata write when it is stale. A post-write revision check
+  compensates the durable snapshot before returning if a mutation races during
+  persistence.
+- `load()` snapshots the session revision and drops its completed secure-read or
+  migration snapshot when a later login, registration, logout, or base-URL
+  mutation has taken ownership of the session.
+- Stale cleanup branches now require secure credential restoration to succeed.
+  When restoration fails after deletion, memory is reloaded from durable state
+  and cleanup throws an actionable error instead of returning success.
+- Added controlled real-`CloudApiClient`/Dio regressions for delayed login plus
+  logout, delayed login plus base-URL mutation, out-of-order login/register,
+  stale cleanup with failed restore, and delayed load followed by login.
+
+## Follow-up Verification
+
+- RED: all five new controlled domain regressions failed against the prior
+  implementation: three stale responses persisted credentials, stale cleanup
+  returned success after failed restoration, and delayed load overwrote login.
+- GREEN: `flutter test test/features/cloud/domain/cloud_api_client_test.dart`
+  passed 27 tests.
+- Combined cloud domain/provider verification passed 35 tests.
+- Targeted cloud analysis completed without diagnostics.
+
 Known integration concern:
-- `lib/features/cloud/presentation/cloud_provider.dart` still assigns `await _api.verify()` to a `bool`. It is intentionally unchanged because Task 3 is the planned consumer migration and this task explicitly excludes it. Whole-app static analysis will fail until Task 3 is implemented.
+- Device or iOS CI coverage is still required to exercise actual Keychain
+  deletion and restoration failures; the controlled secure-store tests verify
+  the client-side durable-state contract on Flutter/Linux.

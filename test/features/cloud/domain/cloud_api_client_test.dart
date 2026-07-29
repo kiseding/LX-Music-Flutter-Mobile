@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lx_music_flutter/core/storage/secure_token_store.dart';
@@ -19,17 +21,36 @@ final class FakeSecureTokenStore implements SecureTokenStore {
   final String? failWriteValue;
   bool _wrote = false;
   bool throwOnRead = false;
+  Completer<void>? pauseNextRead;
+  Completer<void>? readPaused;
+  Completer<void>? pauseDelete;
+  Completer<void>? deleteStarted;
 
   @override
   Future<void> delete(String key) async {
     if (failDelete) throw StateError('delete failed');
     values.remove(key);
+    if (deleteStarted != null && !deleteStarted!.isCompleted) {
+      deleteStarted!.complete();
+    }
+    final pause = pauseDelete;
+    if (pause != null) await pause.future;
   }
 
   @override
   Future<String?> read(String key) async {
     if (throwOnRead) throw StateError('read failed');
-    return _wrote && readAfterWrite != null ? readAfterWrite : values[key];
+    final value =
+        _wrote && readAfterWrite != null ? readAfterWrite : values[key];
+    final pause = pauseNextRead;
+    if (pause != null) {
+      pauseNextRead = null;
+      if (readPaused != null && !readPaused!.isCompleted) {
+        readPaused!.complete();
+      }
+      await pause.future;
+    }
+    return value;
   }
 
   @override
@@ -39,6 +60,40 @@ final class FakeSecureTokenStore implements SecureTokenStore {
     }
     values[key] = value;
     _wrote = true;
+  }
+}
+
+final class DelayedAuthResponses {
+  final Map<String, Completer<Map<String, dynamic>>> responses = {};
+  final Map<String, Completer<void>> started = {};
+
+  Future<void> startedFor(String username) =>
+      started.putIfAbsent(username, Completer<void>.new).future;
+
+  Dio createDio() {
+    final dio = Dio();
+    dio.interceptors
+        .add(InterceptorsWrapper(onRequest: (options, handler) async {
+      final username = (options.data as Map)['username'] as String;
+      final startedCompleter =
+          started.putIfAbsent(username, Completer<void>.new);
+      if (!startedCompleter.isCompleted) startedCompleter.complete();
+      final response = await responses
+          .putIfAbsent(username, Completer<Map<String, dynamic>>.new)
+          .future;
+      handler.resolve(Response(
+        requestOptions: options,
+        statusCode: 200,
+        data: response,
+      ));
+    }));
+    return dio;
+  }
+
+  void complete(String username, Map<String, dynamic> response) {
+    final completer =
+        responses.putIfAbsent(username, Completer<Map<String, dynamic>>.new);
+    completer.complete(response);
   }
 }
 
@@ -568,8 +623,8 @@ void main() {
     expect(await secure.read('cloud_api_token'), isNull);
     expect(client.isLoggedIn, isFalse);
     expect(client.token, isNull);
-    expect(client.username, isNull);
-    expect(client.role, isNull);
+    expect(client.username, 'old-user');
+    expect(client.role, 'user');
   });
 
   test('verify distinguishes 401 from outages and malformed responses',
@@ -640,5 +695,176 @@ void main() {
     expect(client.token, 'token');
     expect(client.username, 'user');
     expect(client.role, 'user');
+  });
+
+  test('a delayed login response cannot restore a session after logout',
+      () async {
+    SharedPreferences.setMockInitialValues({
+      'cloud_api_base': 'https://cloud.example',
+    });
+    final responses = DelayedAuthResponses();
+    final secure = FakeSecureTokenStore()
+      ..pauseDelete = Completer<void>()
+      ..deleteStarted = Completer<void>();
+    final client = CloudApiClient(
+      dio: responses.createDio(),
+      secureStore: secure,
+    );
+    await client.load();
+
+    final login = client.login('delayed', 'password');
+    await responses.startedFor('delayed');
+    final logout = client.clearSession();
+    await secure.deleteStarted!.future;
+    responses.complete('delayed', {
+      'token': 'delayed-token',
+      'username': 'delayed',
+      'role': 'user',
+    });
+    secure.pauseDelete!.complete();
+    await logout;
+    await login;
+
+    expect(await secure.read('cloud_api_token'), isNull);
+    expect(client.token, isNull);
+    expect(client.username, isNull);
+    expect(client.role, isNull);
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getString('cloud_api_username'), isNull);
+    expect(prefs.getString('cloud_api_role'), isNull);
+  });
+
+  test('a delayed login response cannot mutate a newer base URL session',
+      () async {
+    SharedPreferences.setMockInitialValues({
+      'cloud_api_base': 'https://cloud.example',
+    });
+    final responses = DelayedAuthResponses();
+    final secure = FakeSecureTokenStore();
+    final client = CloudApiClient(
+      dio: responses.createDio(),
+      secureStore: secure,
+    );
+    await client.load();
+
+    final login = client.login('delayed', 'password');
+    await responses.startedFor('delayed');
+    await client.setBaseUrl('https://new.example');
+    responses.complete('delayed', {
+      'token': 'delayed-token',
+      'username': 'delayed',
+      'role': 'user',
+    });
+    await login;
+
+    expect(client.baseUrl, 'https://new.example');
+    expect(await secure.read('cloud_api_token'), isNull);
+    expect(client.token, isNull);
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getString('cloud_api_username'), isNull);
+    expect(prefs.getString('cloud_api_role'), isNull);
+  });
+
+  test('an older login response cannot overwrite a newer registration',
+      () async {
+    SharedPreferences.setMockInitialValues({
+      'cloud_api_base': 'https://cloud.example',
+    });
+    final responses = DelayedAuthResponses();
+    final secure = FakeSecureTokenStore();
+    final client = CloudApiClient(
+      dio: responses.createDio(),
+      secureStore: secure,
+    );
+    await client.load();
+
+    final login = client.login('older-login', 'password');
+    await responses.startedFor('older-login');
+    final register = client.register('newer-register', 'password');
+    await responses.startedFor('newer-register');
+    responses.complete('newer-register', {
+      'token': 'newer-token',
+      'username': 'newer-register',
+      'role': 'admin',
+    });
+    await register;
+    responses.complete('older-login', {
+      'token': 'older-token',
+      'username': 'older-login',
+      'role': 'user',
+    });
+    await login;
+
+    expect(await secure.read('cloud_api_token'), 'newer-token');
+    expect(client.token, 'newer-token');
+    expect(client.username, 'newer-register');
+    expect(client.role, 'admin');
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getString('cloud_api_username'), 'newer-register');
+    expect(prefs.getString('cloud_api_role'), 'admin');
+  });
+
+  test('stale cleanup reports a failed secure restoration and syncs memory',
+      () async {
+    SharedPreferences.setMockInitialValues({
+      'cloud_api_base': 'https://cloud.example',
+      'cloud_api_username': 'old-user',
+      'cloud_api_role': 'user',
+    });
+    final secure = FakeSecureTokenStore(failWriteValue: 'old-token')
+      ..values['cloud_api_token'] = 'old-token'
+      ..pauseDelete = Completer<void>()
+      ..deleteStarted = Completer<void>();
+    final client = CloudApiClient(secureStore: secure);
+    await client.load();
+
+    final clear = client.clearSession();
+    await secure.deleteStarted!.future;
+    await client.setBaseUrl('https://new.example');
+    secure.pauseDelete!.complete();
+
+    await expectLater(
+      clear,
+      throwsA(
+          predicate((error) => error.toString().contains('cleanup failed'))),
+    );
+    expect(await secure.read('cloud_api_token'), isNull);
+    expect(client.token, isNull);
+    expect(client.username, 'old-user');
+    expect(client.role, 'user');
+  });
+
+  test('a delayed load cannot assign an old snapshot after a newer login',
+      () async {
+    SharedPreferences.setMockInitialValues({
+      'cloud_api_base': 'https://old.example',
+      'cloud_api_username': 'old-user',
+      'cloud_api_role': 'user',
+    });
+    final releaseRead = Completer<void>();
+    final secure = FakeSecureTokenStore()
+      ..values['cloud_api_token'] = 'old-token'
+      ..pauseNextRead = releaseRead
+      ..readPaused = Completer<void>();
+    final client = CloudApiClient(
+      dio: responseDio(data: {
+        'token': 'new-token',
+        'username': 'new-user',
+        'role': 'admin',
+      }),
+      secureStore: secure,
+    );
+    await client.setBaseUrl('https://new.example');
+
+    final load = client.load();
+    await secure.readPaused!.future;
+    await client.login('new-user', 'password');
+    releaseRead.complete();
+    await load;
+
+    expect(client.baseUrl, 'https://new.example');
+    expect(client.token, 'new-token');
+    expect(client.username, 'new-user');
+    expect(client.role, 'admin');
   });
 }

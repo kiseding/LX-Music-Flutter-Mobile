@@ -21,6 +21,14 @@ Implemented generation-guarded cloud session presentation state. Startup loading
 - Captured the token verified by refresh and pass it as `expectedToken` for unauthorized cleanup. `CloudApiClient` skips conditional cleanup unless the persisted secure token still matches it.
 - Serialized session persistence and cleanup in `CloudApiClient`, preventing a clear that has started from interleaving destructively with login or registration credential persistence.
 - Added a deterministic regression test that blocks 401 cleanup, completes a newer login, releases cleanup, and asserts that the new logged-in state and token remain intact.
+- Follow-up domain hardening now gives login/register responses a captured client
+  session revision, so a delayed response cannot persist over logout, base URL,
+  or a newer authentication command. `load()` also drops stale snapshots before
+  assigning client state, keeping the provider generation contract backed by
+  the durable client boundary.
+- Conditional cleanup compensation now throws and reloads in-memory state from
+  durable storage when a stale cleanup deleted a token but secure restoration
+  fails; provider refresh already reports this as `无法清除安全凭据`.
 
 ## TDD Evidence
 
@@ -45,6 +53,10 @@ GREEN:
   - PASS: no issues.
 - `git diff --check`
   - PASS before the implementation commit.
+- Review follow-up: `flutter test test/features/cloud/domain/cloud_api_client_test.dart test/features/cloud/presentation/cloud_provider_test.dart`
+  - PASS: 35 tests.
+- Review follow-up: targeted cloud `flutter analyze`
+  - PASS: no diagnostics.
 
 ## Concerns
 
