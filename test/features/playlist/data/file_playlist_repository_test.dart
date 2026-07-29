@@ -95,6 +95,25 @@ void main() {
         isFalse);
   });
 
+  test('validated current preserves malformed legacy during recovery cleanup',
+      () async {
+    final current = snapshotFixture(id: 'current');
+    final recovery = snapshotFixture(id: 'recovery');
+    final prefs = await preferences({'playlists': '{broken'});
+    final codec = const PlaylistSnapshotCodec();
+    await File('${tempDir.path}/playlists.v1.json')
+        .writeAsString(codec.encode(current));
+    await File('${tempDir.path}/playlists.v1.recovery.json')
+        .writeAsString(codec.encode(recovery));
+
+    final loaded = await repositoryFor(tempDir, prefs).load();
+
+    expect(loaded.playlists.single.id, 'current');
+    expect(prefs.getString('playlists'), '{broken');
+    expect(File('${tempDir.path}/playlists.v1.recovery.json').existsSync(),
+        isFalse);
+  });
+
   test('recovery restore retains fallbacks until a later current reload',
       () async {
     final recovery = snapshotFixture();

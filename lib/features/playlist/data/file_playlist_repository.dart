@@ -75,7 +75,9 @@ final class FilePlaylistRepository implements PlaylistRepository {
     final current = await _decodeFile(paths.current);
     if (current != null) {
       if (await _files.exists(paths.recovery)) {
-        await preferences.remove(_legacyKey);
+        if (_decodeLegacy(preferences.getString(_legacyKey)) != null) {
+          await preferences.remove(_legacyKey);
+        }
         await _files.delete(paths.recovery);
       }
       return current;
