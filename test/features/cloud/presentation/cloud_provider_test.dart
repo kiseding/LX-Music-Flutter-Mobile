@@ -29,6 +29,8 @@ final class ControlledCloudApiClient extends CloudApiClient {
   bool _loggedIn;
   String? _username;
   String? _role;
+  String? _token = 'old-token';
+  int _sessionRevision = 0;
   String? _baseUrl = 'https://old.example';
   String? _configurationError;
 
@@ -45,6 +47,12 @@ final class ControlledCloudApiClient extends CloudApiClient {
   String? get role => _role;
 
   @override
+  String? get token => _token;
+
+  @override
+  int get sessionRevision => _sessionRevision;
+
+  @override
   String? get username => _username;
 
   @override
@@ -55,6 +63,7 @@ final class ControlledCloudApiClient extends CloudApiClient {
   Future<Map<String, dynamic>> login(String username, String password) async {
     final result = await loginCompleter.future;
     _loggedIn = true;
+    _token = 'new-token';
     _username = result['username']?.toString() ?? username;
     _role = result['role']?.toString() ?? 'user';
     return result;
@@ -73,17 +82,24 @@ final class ControlledCloudApiClient extends CloudApiClient {
   }
 
   @override
-  Future<void> clearSession() async {
+  Future<void> clearSession(
+      {String? expectedToken, int? expectedRevision}) async {
     clearCount++;
     if (!clearStarted.isCompleted) clearStarted.complete();
     if (!clearImmediately) await clearCompleter.future;
+    if ((expectedToken != null && _token != expectedToken) ||
+        (expectedRevision != null && _sessionRevision != expectedRevision)) {
+      return;
+    }
     _loggedIn = false;
+    _token = null;
     _username = null;
     _role = null;
   }
 
   @override
   Future<void> setBaseUrl(String url) async {
+    _sessionRevision++;
     if (!baseUrlImmediately) await baseUrlCompleter.future;
     _baseUrl = url;
     _configurationError = null;
@@ -123,6 +139,44 @@ void main() {
     expect(notifier.state.loggedIn, isTrue);
     expect(notifier.state.username, 'new-user');
     expect(api.clearCount, 0);
+  });
+
+  test('blocked unauthorized cleanup cannot erase a newer login', () async {
+    final api = ControlledCloudApiClient(initiallyLoggedIn: true)
+      ..nextVerification = CloudVerification.unauthorized
+      ..clearImmediately = false;
+    final notifier = CloudSessionNotifier(api, autoRefresh: false);
+
+    final refresh = notifier.refresh();
+    await api.clearStarted.future;
+    final login = notifier.login('new-user', 'password');
+    api.completeLogin(username: 'new-user');
+    expect(await login, isTrue);
+
+    api.clearCompleter.complete();
+    await refresh;
+
+    expect(notifier.state.loggedIn, isTrue);
+    expect(notifier.state.username, 'new-user');
+    expect(api.token, 'new-token');
+  });
+
+  test('blocked unauthorized cleanup cannot erase a newer base URL', () async {
+    final api = ControlledCloudApiClient(initiallyLoggedIn: true)
+      ..nextVerification = CloudVerification.unauthorized
+      ..clearImmediately = false;
+    final notifier = CloudSessionNotifier(api, autoRefresh: false);
+
+    final refresh = notifier.refresh();
+    await api.clearStarted.future;
+    await notifier.setBaseUrl('https://new.example');
+
+    api.clearCompleter.complete();
+    await refresh;
+
+    expect(notifier.state.loggedIn, isTrue);
+    expect(notifier.state.baseUrl, 'https://new.example');
+    expect(api.token, 'old-token');
   });
 
   test('late refresh cannot overwrite a newer logout', () async {

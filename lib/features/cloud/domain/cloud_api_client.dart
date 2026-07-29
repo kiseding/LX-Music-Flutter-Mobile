@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:dio/dio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../../core/storage/secure_token_store.dart';
@@ -59,6 +61,8 @@ class CloudApiClient {
   String? _username;
   String? _role;
   String? _configurationError;
+  int _sessionRevision = 0;
+  Future<void> _sessionMutation = Future.value();
 
   CloudApiClient({
     Dio? dio,
@@ -82,6 +86,7 @@ class CloudApiClient {
   String? get token => _token;
   String? get username => _username;
   String? get role => _role;
+  int get sessionRevision => _sessionRevision;
   String? get configurationError => _configurationError;
   bool get isLoggedIn =>
       _token != null && _token!.isNotEmpty && _baseUrl != null;
@@ -115,6 +120,7 @@ class CloudApiClient {
 
   Future<void> setBaseUrl(String url) async {
     final validated = validateHttpsServiceUrl(url);
+    _sessionRevision++;
     _baseUrl = validated;
     _configurationError = null;
     final prefs = await _preferences();
@@ -185,7 +191,26 @@ class CloudApiClient {
     }
   }
 
+  Future<T> _runSessionMutation<T>(Future<T> Function() operation) {
+    final previous = _sessionMutation;
+    final completed = Completer<void>();
+    _sessionMutation = completed.future;
+    return previous.then((_) => operation()).whenComplete(completed.complete);
+  }
+
   Future<void> _persistSession({
+    required String token,
+    required String? username,
+    required String? role,
+  }) {
+    return _runSessionMutation(() => _persistSessionLocked(
+          token: token,
+          username: username,
+          role: role,
+        ));
+  }
+
+  Future<void> _persistSessionLocked({
     required String token,
     required String? username,
     required String? role,
@@ -225,14 +250,58 @@ class CloudApiClient {
     }
   }
 
-  Future<void> clearSession() async {
+  Future<void> clearSession({String? expectedToken, int? expectedRevision}) {
+    final revision = expectedRevision ?? ++_sessionRevision;
+    return _runSessionMutation(() => _clearSessionLocked(
+          expectedToken: expectedToken,
+          expectedRevision: revision,
+        ));
+  }
+
+  Future<void> _clearSessionLocked({
+    String? expectedToken,
+    required int expectedRevision,
+  }) async {
+    if (!await _matchesClearExpectation(expectedToken, expectedRevision)) {
+      return;
+    }
     final preferences = await _sessionPreferences();
+    if (!await _matchesClearExpectation(expectedToken, expectedRevision)) {
+      return;
+    }
     final snapshot = await _snapshotSession(preferences);
+    if (!await _matchesClearExpectation(expectedToken, expectedRevision)) {
+      return;
+    }
     await _secureStore.delete(_kToken);
     try {
+      if (!await _matchesClearExpectation(null, expectedRevision)) {
+        await _restoreSecureToken(snapshot.token);
+        await _restoreMetadata(preferences, snapshot);
+        await _syncSessionMemory(preferences);
+        return;
+      }
       await preferences.remove(_kToken);
+      if (!await _matchesClearExpectation(null, expectedRevision)) {
+        await _restoreSecureToken(snapshot.token);
+        await _restoreMetadata(preferences, snapshot);
+        await _syncSessionMemory(preferences);
+        return;
+      }
       await preferences.remove(_kUsername);
+      if (!await _matchesClearExpectation(null, expectedRevision)) {
+        await _restoreSecureToken(snapshot.token);
+        await _restoreMetadata(preferences, snapshot);
+        await _syncSessionMemory(preferences);
+        return;
+      }
       await preferences.remove(_kRole);
+      if (!await _matchesClearExpectation(null, expectedRevision)) {
+        await _restoreSecureToken(snapshot.token);
+        await _restoreMetadata(preferences, snapshot);
+        await _syncSessionMemory(preferences);
+        return;
+      }
       _token = null;
       _username = null;
       _role = null;
@@ -250,6 +319,15 @@ class CloudApiClient {
         'Cloud session cleanup failed: secure token could not be restored',
       );
     }
+  }
+
+  Future<bool> _matchesClearExpectation(
+    String? expectedToken,
+    int expectedRevision,
+  ) async {
+    if (_sessionRevision != expectedRevision) return false;
+    return expectedToken == null ||
+        await _secureStore.read(_kToken) == expectedToken;
   }
 
   Options _authOptions() {
@@ -287,6 +365,7 @@ class CloudApiClient {
   }
 
   Future<Map<String, dynamic>> login(String username, String password) async {
+    _sessionRevision++;
     final resp = await _dio.post(
       _url('/api/user/login'),
       data: {'username': username, 'password': password},
@@ -306,6 +385,7 @@ class CloudApiClient {
 
   Future<Map<String, dynamic>> register(
       String username, String password) async {
+    _sessionRevision++;
     final resp = await _dio.post(
       _url('/api/user/register'),
       data: {'username': username, 'password': password},

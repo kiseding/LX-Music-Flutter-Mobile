@@ -87,13 +87,19 @@ class CloudSessionNotifier extends StateNotifier<CloudSessionState> {
     }
     if (!_current(generation)) return;
 
+    final verifiedToken = _api.token;
+    final verifiedRevision = _api.sessionRevision;
     final verification =
         _api.isLoggedIn ? await _api.verify() : CloudVerification.noSession;
     if (!_current(generation)) return;
 
     if (verification == CloudVerification.unauthorized && _api.isLoggedIn) {
+      if (!_current(generation)) return;
       try {
-        await _api.clearSession();
+        await _api.clearSession(
+          expectedToken: verifiedToken,
+          expectedRevision: verifiedRevision,
+        );
       } catch (_) {
         if (!_current(generation)) return;
         state = _sessionState(error: '无法清除安全凭据');
