@@ -1,12 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../domain/cloud_api_client.dart';
 
-final cloudApiProvider = Provider<CloudApiClient>((ref) {
-  final client = CloudApiClient();
-  // fire-and-forget load; screens await ensureLoaded
-  client.load();
-  return client;
-});
+final cloudApiProvider = Provider<CloudApiClient>((ref) => CloudApiClient());
 
 final cloudSessionProvider =
     StateNotifierProvider<CloudSessionNotifier, CloudSessionState>((ref) {
@@ -16,6 +11,7 @@ final cloudSessionProvider =
 class CloudSessionState {
   final bool loaded;
   final bool loggedIn;
+  final bool checking;
   final String? baseUrl;
   final String? username;
   final String? role;
@@ -24,6 +20,7 @@ class CloudSessionState {
   const CloudSessionState({
     this.loaded = false,
     this.loggedIn = false,
+    this.checking = false,
     this.baseUrl,
     this.username,
     this.role,
@@ -33,6 +30,7 @@ class CloudSessionState {
   CloudSessionState copyWith({
     bool? loaded,
     bool? loggedIn,
+    bool? checking,
     String? baseUrl,
     String? username,
     String? role,
@@ -41,6 +39,7 @@ class CloudSessionState {
     return CloudSessionState(
       loaded: loaded ?? this.loaded,
       loggedIn: loggedIn ?? this.loggedIn,
+      checking: checking ?? this.checking,
       baseUrl: baseUrl ?? this.baseUrl,
       username: username ?? this.username,
       role: role ?? this.role,
@@ -50,79 +49,122 @@ class CloudSessionState {
 }
 
 class CloudSessionNotifier extends StateNotifier<CloudSessionState> {
-  final CloudApiClient _api;
-
-  CloudSessionNotifier(this._api) : super(const CloudSessionState()) {
-    refresh();
+  CloudSessionNotifier(this._api, {bool autoRefresh = true})
+      : super(const CloudSessionState()) {
+    if (autoRefresh) refresh();
   }
 
-  Future<void> refresh() async {
-    await _api.load();
-    var loggedIn = _api.isLoggedIn;
-    if (loggedIn) {
-      loggedIn = await _api.verify();
-      if (!loggedIn) await _api.clearSession();
-    }
-    state = CloudSessionState(
+  final CloudApiClient _api;
+  int _generation = 0;
+
+  bool _current(int generation) => generation == _generation;
+
+  CloudSessionState _sessionState({String? error}) {
+    return CloudSessionState(
       loaded: true,
-      loggedIn: loggedIn,
+      checking: false,
+      loggedIn: _api.isLoggedIn,
       baseUrl: _api.baseUrl,
       username: _api.username,
       role: _api.role,
-      error: _api.configurationError,
+      error: error,
+    );
+  }
+
+  Future<void> refresh() async {
+    final generation = ++_generation;
+    state = state.copyWith(checking: true, error: null);
+    try {
+      await _api.load();
+    } catch (error) {
+      if (!_current(generation)) return;
+      state = state.copyWith(
+        loaded: true,
+        checking: false,
+        error: '无法读取安全凭据: $error',
+      );
+      return;
+    }
+    if (!_current(generation)) return;
+
+    final verification =
+        _api.isLoggedIn ? await _api.verify() : CloudVerification.noSession;
+    if (!_current(generation)) return;
+
+    if (verification == CloudVerification.unauthorized && _api.isLoggedIn) {
+      try {
+        await _api.clearSession();
+      } catch (_) {
+        if (!_current(generation)) return;
+        state = _sessionState(error: '无法清除安全凭据');
+        return;
+      }
+      if (!_current(generation)) return;
+    }
+
+    state = _sessionState(
+      error: verification == CloudVerification.unavailable
+          ? '服务器暂时不可用，已保留登录状态'
+          : _api.configurationError,
     );
   }
 
   Future<void> setBaseUrl(String url) async {
+    final generation = ++_generation;
     try {
       await _api.setBaseUrl(url);
-      state = state.copyWith(baseUrl: _api.baseUrl, error: null);
     } on ArgumentError catch (error) {
-      state = state.copyWith(error: error.message?.toString());
+      if (_current(generation)) {
+        state =
+            state.copyWith(checking: false, error: error.message?.toString());
+      }
       rethrow;
     }
+    if (!_current(generation)) return;
+    state = _sessionState();
   }
 
   Future<bool> login(String username, String password) async {
+    final generation = ++_generation;
     try {
       await _api.login(username, password);
-      state = CloudSessionState(
-        loaded: true,
-        loggedIn: true,
-        baseUrl: _api.baseUrl,
-        username: _api.username,
-        role: _api.role,
-      );
-      return true;
-    } catch (e) {
-      state = state.copyWith(error: e.toString(), loggedIn: false);
+    } catch (error) {
+      if (_current(generation)) {
+        state = state.copyWith(checking: false, error: error.toString());
+      }
       return false;
     }
+    if (!_current(generation)) return false;
+    state = _sessionState();
+    return true;
   }
 
   Future<bool> register(String username, String password) async {
+    final generation = ++_generation;
     try {
       await _api.register(username, password);
-      state = CloudSessionState(
-        loaded: true,
-        loggedIn: true,
-        baseUrl: _api.baseUrl,
-        username: _api.username,
-        role: _api.role,
-      );
-      return true;
-    } catch (e) {
-      state = state.copyWith(error: e.toString(), loggedIn: false);
+    } catch (error) {
+      if (_current(generation)) {
+        state = state.copyWith(checking: false, error: error.toString());
+      }
       return false;
     }
+    if (!_current(generation)) return false;
+    state = _sessionState();
+    return true;
   }
 
   Future<void> logout() async {
-    await _api.clearSession();
-    state = CloudSessionState(
-      loaded: true,
-      loggedIn: false,
-      baseUrl: _api.baseUrl,
-    );
+    final generation = ++_generation;
+    try {
+      await _api.clearSession();
+    } catch (_) {
+      if (_current(generation)) {
+        state = _sessionState(error: '无法清除安全凭据');
+      }
+      return;
+    }
+    if (!_current(generation)) return;
+    state = _sessionState();
   }
 }
