@@ -293,3 +293,59 @@ checks are rerun on the final files before commit.
 
 - Task 8 consumer migration remains outside Task 7 scope, consistent with the
   original brief.
+
+## Final Review Follow-up
+
+### RED Evidence
+
+Added focused regressions for both final findings before changing the service,
+then ran:
+
+```bash
+flutter test test/features/playlist/domain/playlist_service_test.dart
+```
+
+Result: `+22 -2`. Both new behavior groups failed for the expected reasons:
+
+- Given recent history `[a, b, b]`, adding `a` returned `false` without removing
+  the unrelated duplicate, so the resulting list was not globally unique.
+- Name, artist, and duration sorts returned `false` when differently valued
+  songs sharing one ID exchanged positions, so no save or revision occurred.
+
+### GREEN Evidence
+
+After the production changes, the focused service suite passed:
+
+```bash
+flutter test test/features/playlist/domain/playlist_service_test.dart
+```
+
+Result: `+26: All tests passed!`.
+
+Final exact Task 7 verification and targeted checks are run on the formatted
+files immediately before commit:
+
+```bash
+flutter test test/features/playlist/domain/playlist_service_test.dart test/features/playlist/domain/playlist_test.dart test/features/playlist/domain/playlist_import_service_test.dart
+flutter analyze lib/features/playlist/domain/playlist_service.dart test/features/playlist/domain/playlist_service_test.dart
+dart format --output=none --set-exit-if-changed lib/features/playlist/domain/playlist_service.dart test/features/playlist/domain/playlist_service_test.dart
+git diff --check
+git diff --cached --check
+```
+
+Results: exact Task 7 verification passed `+31: All tests passed!`; analyzer
+reported `No issues found`; formatter reported `0 changed`; diff check exited
+cleanly. The cached diff check is run after staging immediately before commit.
+
+### Fixes
+
+- `addToRecent` now builds the complete candidate list from the newly added song
+  followed by existing newest-first history, retaining only the first item for
+  each ID and stopping at 100.
+- Recent no-op detection now compares the entire resulting list semantically
+  against current history, so cleanup and same-ID content refreshes persist.
+- The shared field-sort implementation now uses `_sameSongs`, which compares
+  full ordered `MusicItem` values through `_sameMusicItem`; name, artist, and
+  duration sorts all inherit the correction.
+- Existing lifecycle serialization, commit-before-publication, timestamp, and
+  revision behavior is unchanged.

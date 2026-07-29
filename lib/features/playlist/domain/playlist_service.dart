@@ -238,21 +238,15 @@ class PlaylistService {
     return _mutate((current) {
       final index = _indexOf(current, 'recent');
       final existing = current[index];
-      if (existing.songs.isNotEmpty &&
-          existing.songs.first.id == song.id &&
-          _sameMusicItem(existing.songs.first, song) &&
-          !existing.songs
-              .skip(1)
-              .any((existingSong) => existingSong.id == song.id) &&
-          existing.songs.length <= 100) {
+      final seenIds = <String>{};
+      final songs = <MusicItem>[];
+      for (final item in [song, ...existing.songs]) {
+        if (seenIds.add(item.id)) songs.add(item);
+        if (songs.length == 100) break;
+      }
+      if (_sameSongs(songs, existing.songs)) {
         return (next: current, result: false, changed: false);
       }
-
-      final songs = [
-        song,
-        ...existing.songs.where((item) => item.id != song.id),
-      ];
-      if (songs.length > 100) songs.removeRange(100, songs.length);
       final updated = existing.copyWith(
         songs: List.unmodifiable(songs),
         updatedAt: _clock(),
@@ -315,7 +309,7 @@ class PlaylistService {
       final existing = current[index];
       final songs = [...existing.songs]
         ..sort((a, b) => ascending ? compare(a, b) : -compare(a, b));
-      if (_sameSongOrder(songs, existing.songs)) {
+      if (_sameSongs(songs, existing.songs)) {
         return (next: current, result: false, changed: false);
       }
       final updated = existing.copyWith(
@@ -405,14 +399,6 @@ class PlaylistService {
     final index = playlists.indexWhere((playlist) => playlist.id == id);
     if (index < 0) throw StateError('Playlist $id does not exist');
     return index;
-  }
-
-  bool _sameSongOrder(List<MusicItem> left, List<MusicItem> right) {
-    if (left.length != right.length) return false;
-    for (var index = 0; index < left.length; index++) {
-      if (left[index].id != right[index].id) return false;
-    }
-    return true;
   }
 
   bool _sameSongs(List<MusicItem> left, List<MusicItem> right) {

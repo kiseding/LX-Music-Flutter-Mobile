@@ -628,6 +628,90 @@ void main() {
     await service.dispose();
   });
 
+  test('addToRecent globally dedupes existing ids for head and new songs',
+      () async {
+    for (final added in [song('a'), song('c')]) {
+      final repository = MemoryPlaylistRepository(PlaylistSnapshot(
+        schemaVersion: 1,
+        playlists: [
+          playlist('favorites'),
+          playlist('recent', songs: [song('a'), song('b'), song('b')]),
+        ],
+      ));
+      final service =
+          PlaylistService(repository: repository, clock: () => _now);
+      await service.init();
+
+      expect(await service.addToRecent(added), isTrue);
+      expect(
+        service.recent!.songs.map((item) => item.id),
+        added.id == 'a' ? ['a', 'b'] : ['c', 'a', 'b'],
+      );
+      expect(repository.saves, hasLength(1));
+      expect(service.revision, 1);
+      await service.dispose();
+    }
+  });
+
+  test('all field sorts persist reordered duplicate ids with distinct content',
+      () async {
+    final sortCases = <({
+      List<MusicItem> songs,
+      Future<bool> Function(PlaylistService) sort,
+      Object Function(MusicItem) sortedValue,
+    })>[
+      (
+        songs: [
+          detailedSong('duplicate', name: 'Zulu'),
+          detailedSong('duplicate', name: 'Alpha'),
+        ],
+        sort: (service) => service.sortSongsByName('custom'),
+        sortedValue: (song) => song.name,
+      ),
+      (
+        songs: [
+          detailedSong('duplicate').copyWith(singer: 'Zulu'),
+          detailedSong('duplicate').copyWith(singer: 'Alpha'),
+        ],
+        sort: (service) => service.sortSongsByArtist('custom'),
+        sortedValue: (song) => song.singer,
+      ),
+      (
+        songs: [
+          detailedSong('duplicate').copyWith(
+            duration: const Duration(seconds: 2),
+          ),
+          detailedSong('duplicate').copyWith(
+            duration: const Duration(seconds: 1),
+          ),
+        ],
+        sort: (service) => service.sortSongsByDuration('custom'),
+        sortedValue: (song) => song.duration,
+      ),
+    ];
+
+    for (final sortCase in sortCases) {
+      final repository = MemoryPlaylistRepository(systemSnapshot(additional: [
+        playlist('custom', songs: sortCase.songs),
+      ]));
+      final service =
+          PlaylistService(repository: repository, clock: () => _now);
+      await service.init();
+
+      expect(await sortCase.sort(service), isTrue);
+      expect(
+        service.getPlaylist('custom')!.songs.map(sortCase.sortedValue),
+        [
+          sortCase.sortedValue(sortCase.songs.last),
+          sortCase.sortedValue(sortCase.songs.first),
+        ],
+      );
+      expect(repository.saves, hasLength(1));
+      expect(service.revision, 1);
+      await service.dispose();
+    }
+  });
+
   test('reorder validates both indices before adjusted equal-index no-op',
       () async {
     final repository = MemoryPlaylistRepository(systemSnapshot(additional: [
