@@ -1,295 +1,368 @@
-import '../domain/playlist.dart';
+import 'dart:async';
+
 import '../../player/domain/music_item.dart';
-import '../../../core/storage/storage_service.dart';
+import '../data/playlist_repository.dart';
+import 'playlist.dart';
 
 class PlaylistService {
+  PlaylistService({
+    required PlaylistRepository repository,
+    DateTime Function()? clock,
+    String Function()? createId,
+  })  : _repository = repository,
+        _clock = clock ?? DateTime.now,
+        _createId = createId ??
+            (() => DateTime.now().microsecondsSinceEpoch.toString());
+
+  final PlaylistRepository _repository;
+  final DateTime Function() _clock;
+  final String Function() _createId;
   final List<Playlist> _playlists = [];
-  StorageService? _storage;
+  final StreamController<int> _revisionController =
+      StreamController<int>.broadcast();
+
+  Future<void> _tail = Future.value();
   bool _initialized = false;
+  int _revision = 0;
 
   List<Playlist> get playlists => List.unmodifiable(_playlists);
+  int get revision => _revision;
+  Stream<int> get revisions => _revisionController.stream;
 
-  PlaylistService() {
-    // 创建默认歌单
-    _playlists.add(Playlist(
-      id: 'favorites',
-      name: '我喜欢',
-      description: '收藏的歌曲',
-      createdAt: DateTime.now(),
-      updatedAt: DateTime.now(),
-    ));
-    _playlists.add(Playlist(
-      id: 'recent',
-      name: '最近播放',
-      description: '最近播放的歌曲',
-      createdAt: DateTime.now(),
-      updatedAt: DateTime.now(),
-    ));
-  }
-
-  /// 初始化：从本地存储恢复数据
   Future<void> init() async {
     if (_initialized) return;
-    _storage = await StorageService.instance;
-    _loadFromStorage();
+
+    final loaded = await _repository.load();
+    final repaired = _withSystemPlaylists(loaded.playlists);
+    final needsRepair = repaired.length != loaded.playlists.length;
+    if (needsRepair) {
+      await _mutate<void>((_) => (
+            next: repaired,
+            result: null,
+            changed: true,
+          ));
+    } else {
+      _playlists.addAll(loaded.playlists);
+    }
     _initialized = true;
   }
 
-  void _loadFromStorage() {
-    final saved = _storage!.getJsonList('playlists');
-    if (saved.isEmpty) return;
-
-    _playlists.clear();
-    for (final json in saved) {
-      final songs = (json['songs'] as List?)
-              ?.map((s) => MusicItem.fromJson(s as Map<String, dynamic>))
-              .toList() ??
-          [];
-      _playlists.add(Playlist(
-        id: json['id'] as String,
-        name: json['name'] as String,
-        description: json['description'] as String?,
-        coverUrl: json['coverUrl'] as String?,
-        songs: songs,
-        createdAt: DateTime.fromMillisecondsSinceEpoch(json['createdAt'] as int),
-        updatedAt: DateTime.fromMillisecondsSinceEpoch(json['updatedAt'] as int),
-      ));
-    }
-  }
-
-  Future<void> _saveToStorage() async {
-    if (_storage == null) return;
-    final data = _playlists.map((p) => {
-      'id': p.id,
-      'name': p.name,
-      'description': p.description,
-      'coverUrl': p.coverUrl,
-      'songs': p.songs.map((s) => s.toJson()).toList(),
-      'createdAt': p.createdAt.millisecondsSinceEpoch,
-      'updatedAt': p.updatedAt.millisecondsSinceEpoch,
-    }).toList();
-    await _storage!.setJsonList('playlists', data);
-  }
-
-  // 创建歌单
-  Playlist createPlaylist({
+  Future<Playlist> createPlaylist({
     required String name,
     String? description,
+    List<MusicItem> songs = const [],
+    String? id,
   }) {
-    final playlist = Playlist(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
-      name: name,
-      description: description,
-      createdAt: DateTime.now(),
-      updatedAt: DateTime.now(),
-    );
-    _playlists.add(playlist);
-    _saveToStorage();
-    return playlist;
+    return _mutate((current) {
+      final now = _clock();
+      final created = Playlist(
+        id: id ?? _createId(),
+        name: name,
+        description: description,
+        songs: List.unmodifiable(songs),
+        createdAt: now,
+        updatedAt: now,
+      );
+      return (
+        next: [...current, created],
+        result: created,
+        changed: true,
+      );
+    });
   }
 
-  // 删除歌单
-  void deletePlaylist(String id) {
-    _playlists.removeWhere((p) => p.id == id);
-    _saveToStorage();
-  }
-
-  // 更新歌单
-  Playlist updatePlaylist({
+  Future<Playlist> updatePlaylist({
     required String id,
     String? name,
     String? description,
+    String? coverUrl,
     List<MusicItem>? songs,
   }) {
-    final index = _playlists.indexWhere((p) => p.id == id);
-    if (index < 0) throw Exception('歌单不存在');
+    return _mutate((current) {
+      final index = _indexOf(current, id);
+      final existing = current[index];
+      final changed = (name != null && name != existing.name) ||
+          (description != null && description != existing.description) ||
+          (coverUrl != null && coverUrl != existing.coverUrl) ||
+          (songs != null && !_sameSongOrder(songs, existing.songs));
+      if (!changed) {
+        return (next: current, result: existing, changed: false);
+      }
 
-    final updated = _playlists[index].copyWith(
+      final updated = existing.copyWith(
+        name: name,
+        description: description,
+        coverUrl: coverUrl,
+        songs: songs == null ? null : List.unmodifiable(songs),
+        updatedAt: _clock(),
+      );
+      final next = [...current]..[index] = updated;
+      return (next: next, result: updated, changed: true);
+    });
+  }
+
+  Future<bool> deletePlaylist(String id) {
+    if (_isSystemPlaylist(id)) {
+      return Future.error(StateError('System playlists cannot be deleted'));
+    }
+    return _mutate((current) {
+      final index = current.indexWhere((playlist) => playlist.id == id);
+      if (index < 0) return (next: current, result: false, changed: false);
+      final next = [...current]..removeAt(index);
+      return (next: next, result: true, changed: true);
+    });
+  }
+
+  Playlist? getPlaylist(String id) {
+    final index = _playlists.indexWhere((playlist) => playlist.id == id);
+    return index < 0 ? null : _playlists[index];
+  }
+
+  Future<bool> addSongToPlaylist(String playlistId, MusicItem song) {
+    return _mutate((current) {
+      final index = _indexOf(current, playlistId);
+      final existing = current[index];
+      if (existing.songs.any((item) => item.id == song.id)) {
+        return (next: current, result: false, changed: false);
+      }
+      final updated = existing.copyWith(
+        songs: List.unmodifiable([...existing.songs, song]),
+        updatedAt: _clock(),
+      );
+      final next = [...current]..[index] = updated;
+      return (next: next, result: true, changed: true);
+    });
+  }
+
+  Future<bool> removeSongFromPlaylist(String playlistId, String songId) {
+    return _mutate((current) {
+      final index = _indexOf(current, playlistId);
+      final existing = current[index];
+      if (!existing.songs.any((song) => song.id == songId)) {
+        return (next: current, result: false, changed: false);
+      }
+      final updated = existing.copyWith(
+        songs: List.unmodifiable(
+          existing.songs.where((song) => song.id != songId),
+        ),
+        updatedAt: _clock(),
+      );
+      final next = [...current]..[index] = updated;
+      return (next: next, result: true, changed: true);
+    });
+  }
+
+  bool isSongInPlaylist(String playlistId, String songId) {
+    return getPlaylist(playlistId)?.songs.any((song) => song.id == songId) ??
+        false;
+  }
+
+  Future<bool> sortSongsInPlaylist(
+    String playlistId, {
+    required int oldIndex,
+    required int newIndex,
+  }) {
+    return _mutate((current) {
+      final index = _indexOf(current, playlistId);
+      final existing = current[index];
+      final songs = [...existing.songs];
+      var destination = newIndex;
+      if (oldIndex < destination) destination--;
+      if (oldIndex == destination) {
+        return (next: current, result: false, changed: false);
+      }
+      final item = songs.removeAt(oldIndex);
+      songs.insert(destination, item);
+      final updated = existing.copyWith(
+        songs: List.unmodifiable(songs),
+        updatedAt: _clock(),
+      );
+      final next = [...current]..[index] = updated;
+      return (next: next, result: true, changed: true);
+    });
+  }
+
+  Future<bool> sortSongsByName(String playlistId, {bool ascending = true}) {
+    return _sortSongs(
+      playlistId,
+      (a, b) => a.name.compareTo(b.name),
+      ascending,
+    );
+  }
+
+  Future<bool> sortSongsByArtist(String playlistId, {bool ascending = true}) {
+    return _sortSongs(
+      playlistId,
+      (a, b) => a.singer.compareTo(b.singer),
+      ascending,
+    );
+  }
+
+  Future<bool> sortSongsByDuration(String playlistId, {bool ascending = true}) {
+    return _sortSongs(
+      playlistId,
+      (a, b) => a.duration.compareTo(b.duration),
+      ascending,
+    );
+  }
+
+  Future<bool> addToRecent(MusicItem song) {
+    return _mutate((current) {
+      final index = _indexOf(current, 'recent');
+      final existing = current[index];
+      if (existing.songs.isNotEmpty &&
+          existing.songs.first.id == song.id &&
+          existing.songs.length <= 100) {
+        return (next: current, result: false, changed: false);
+      }
+
+      final songs = [
+        song,
+        ...existing.songs.where((item) => item.id != song.id),
+      ];
+      if (songs.length > 100) songs.removeRange(100, songs.length);
+      final updated = existing.copyWith(
+        songs: List.unmodifiable(songs),
+        updatedAt: _clock(),
+      );
+      final next = [...current]..[index] = updated;
+      return (next: next, result: true, changed: true);
+    });
+  }
+
+  Future<int> addAllSongsToFavorites(String playlistId) {
+    return _mutate((current) {
+      final source = current[_indexOf(current, playlistId)];
+      final favoritesIndex = _indexOf(current, 'favorites');
+      final favorites = current[favoritesIndex];
+      final ids = favorites.songs.map((song) => song.id).toSet();
+      final additions = source.songs.where((song) => ids.add(song.id)).toList();
+      if (additions.isEmpty) {
+        return (next: current, result: 0, changed: false);
+      }
+      final updated = favorites.copyWith(
+        songs: List.unmodifiable([...favorites.songs, ...additions]),
+        updatedAt: _clock(),
+      );
+      final next = [...current]..[favoritesIndex] = updated;
+      return (next: next, result: additions.length, changed: true);
+    });
+  }
+
+  Future<void> replaceAll(List<Playlist> playlists) {
+    return _mutate<void>((_) => (
+          next: List<Playlist>.unmodifiable(playlists),
+          result: null,
+          changed: true,
+        ));
+  }
+
+  Playlist? get favorites => getPlaylist('favorites');
+  Playlist? get recent => getPlaylist('recent');
+
+  Future<void> dispose() => _revisionController.close();
+
+  Future<bool> _sortSongs(
+    String playlistId,
+    int Function(MusicItem, MusicItem) compare,
+    bool ascending,
+  ) {
+    return _mutate((current) {
+      final index = _indexOf(current, playlistId);
+      final existing = current[index];
+      final songs = [...existing.songs]
+        ..sort((a, b) => ascending ? compare(a, b) : -compare(a, b));
+      if (_sameSongOrder(songs, existing.songs)) {
+        return (next: current, result: false, changed: false);
+      }
+      final updated = existing.copyWith(
+        songs: List.unmodifiable(songs),
+        updatedAt: _clock(),
+      );
+      final next = [...current]..[index] = updated;
+      return (next: next, result: true, changed: true);
+    });
+  }
+
+  Future<T> _mutate<T>(
+    FutureOr<({List<Playlist> next, T result, bool changed})> Function(
+      List<Playlist> current,
+    ) operation,
+  ) {
+    final completer = Completer<T>();
+    _tail = _tail.then((_) async {
+      try {
+        final mutation =
+            await operation(List<Playlist>.unmodifiable(_playlists));
+        if (!mutation.changed) {
+          completer.complete(mutation.result);
+          return;
+        }
+
+        final snapshot = PlaylistSnapshot(
+          schemaVersion: 1,
+          playlists: _withSystemPlaylists(mutation.next),
+        );
+        await _repository.save(snapshot);
+        _playlists
+          ..clear()
+          ..addAll(snapshot.playlists);
+        _revisionController.add(++_revision);
+        completer.complete(mutation.result);
+      } catch (error, stackTrace) {
+        completer.completeError(error, stackTrace);
+      }
+    });
+    return completer.future;
+  }
+
+  List<Playlist> _withSystemPlaylists(List<Playlist> source) {
+    final result = [...source];
+    if (!result.any((playlist) => playlist.id == 'favorites')) {
+      result.add(_systemPlaylist(
+        id: 'favorites',
+        name: '我喜欢',
+        description: '收藏的歌曲',
+      ));
+    }
+    if (!result.any((playlist) => playlist.id == 'recent')) {
+      result.add(_systemPlaylist(
+        id: 'recent',
+        name: '最近播放',
+        description: '最近播放的歌曲',
+      ));
+    }
+    return List.unmodifiable(result);
+  }
+
+  Playlist _systemPlaylist({
+    required String id,
+    required String name,
+    required String description,
+  }) {
+    final now = _clock();
+    return Playlist(
+      id: id,
       name: name,
       description: description,
-      songs: songs,
-      updatedAt: DateTime.now(),
+      createdAt: now,
+      updatedAt: now,
     );
-    _playlists[index] = updated;
-    _saveToStorage();
-    return updated;
   }
 
-  // 获取歌单
-  Playlist? getPlaylist(String id) {
-    try {
-      return _playlists.firstWhere((p) => p.id == id);
-    } catch (_) {
-      return null;
+  int _indexOf(List<Playlist> playlists, String id) {
+    final index = playlists.indexWhere((playlist) => playlist.id == id);
+    if (index < 0) throw StateError('Playlist $id does not exist');
+    return index;
+  }
+
+  bool _sameSongOrder(List<MusicItem> left, List<MusicItem> right) {
+    if (left.length != right.length) return false;
+    for (var index = 0; index < left.length; index++) {
+      if (left[index].id != right[index].id) return false;
     }
+    return true;
   }
 
-  // 添加歌曲到歌单
-  void addSongToPlaylist(String playlistId, MusicItem song) {
-    final index = _playlists.indexWhere((p) => p.id == playlistId);
-    if (index < 0) throw Exception('歌单不存在');
-
-    final playlist = _playlists[index];
-    if (playlist.songs.any((s) => s.id == song.id)) return;
-
-    final updated = playlist.copyWith(
-      songs: [...playlist.songs, song],
-      updatedAt: DateTime.now(),
-    );
-    _playlists[index] = updated;
-    _saveToStorage();
-  }
-
-  // 从歌单移除歌曲
-  void removeSongFromPlaylist(String playlistId, String songId) {
-    final index = _playlists.indexWhere((p) => p.id == playlistId);
-    if (index < 0) throw Exception('歌单不存在');
-
-    final playlist = _playlists[index];
-    final updated = playlist.copyWith(
-      songs: playlist.songs.where((s) => s.id != songId).toList(),
-      updatedAt: DateTime.now(),
-    );
-    _playlists[index] = updated;
-    _saveToStorage();
-  }
-
-  // 检查歌曲是否在歌单中
-  bool isSongInPlaylist(String playlistId, String songId) {
-    final playlist = getPlaylist(playlistId);
-    return playlist?.songs.any((s) => s.id == songId) ?? false;
-  }
-
-  // 歌单内歌曲排序
-  void sortSongsInPlaylist(String playlistId, {required int oldIndex, required int newIndex}) {
-    final index = _playlists.indexWhere((p) => p.id == playlistId);
-    if (index < 0) throw Exception('歌单不存在');
-
-    final playlist = _playlists[index];
-    final songs = List<MusicItem>.from(playlist.songs);
-
-    if (oldIndex < newIndex) {
-      newIndex -= 1;
-    }
-
-    final item = songs.removeAt(oldIndex);
-    songs.insert(newIndex, item);
-
-    _playlists[index] = playlist.copyWith(
-      songs: songs,
-      updatedAt: DateTime.now(),
-    );
-    _saveToStorage();
-  }
-
-  // 按名称排序歌曲
-  void sortSongsByName(String playlistId, {bool ascending = true}) {
-    final index = _playlists.indexWhere((p) => p.id == playlistId);
-    if (index < 0) throw Exception('歌单不存在');
-
-    final playlist = _playlists[index];
-    final songs = List<MusicItem>.from(playlist.songs);
-
-    songs.sort((a, b) {
-      final compare = a.name.compareTo(b.name);
-      return ascending ? compare : -compare;
-    });
-
-    _playlists[index] = playlist.copyWith(
-      songs: songs,
-      updatedAt: DateTime.now(),
-    );
-    _saveToStorage();
-  }
-
-  // 按歌手排序歌曲
-  void sortSongsByArtist(String playlistId, {bool ascending = true}) {
-    final index = _playlists.indexWhere((p) => p.id == playlistId);
-    if (index < 0) throw Exception('歌单不存在');
-
-    final playlist = _playlists[index];
-    final songs = List<MusicItem>.from(playlist.songs);
-
-    songs.sort((a, b) {
-      final compare = a.singer.compareTo(b.singer);
-      return ascending ? compare : -compare;
-    });
-
-    _playlists[index] = playlist.copyWith(
-      songs: songs,
-      updatedAt: DateTime.now(),
-    );
-    _saveToStorage();
-  }
-
-  // 按时长排序歌曲
-  void sortSongsByDuration(String playlistId, {bool ascending = true}) {
-    final index = _playlists.indexWhere((p) => p.id == playlistId);
-    if (index < 0) throw Exception('歌单不存在');
-
-    final playlist = _playlists[index];
-    final songs = List<MusicItem>.from(playlist.songs);
-
-    songs.sort((a, b) {
-      final compare = a.duration.compareTo(b.duration);
-      return ascending ? compare : -compare;
-    });
-
-    _playlists[index] = playlist.copyWith(
-      songs: songs,
-      updatedAt: DateTime.now(),
-    );
-    _saveToStorage();
-  }
-
-  // 添加到"最近播放"
-  void addToRecent(MusicItem song) {
-    final recentPlaylist = getPlaylist('recent');
-    if (recentPlaylist == null) return;
-
-    final songs = recentPlaylist.songs.where((s) => s.id != song.id).toList();
-    songs.insert(0, song);
-    if (songs.length > 100) {
-      songs.removeRange(100, songs.length);
-    }
-
-    final index = _playlists.indexWhere((p) => p.id == 'recent');
-    _playlists[index] = recentPlaylist.copyWith(
-      songs: songs,
-      updatedAt: DateTime.now(),
-    );
-    _saveToStorage();
-  }
-
-  /// 将指定歌单的全部歌曲一次性加入「我喜欢的音乐」，已存在的自动去重。
-  /// 返回本次实际新增的歌曲数量。
-  int addAllSongsToFavorites(String playlistId) {
-    final source = getPlaylist(playlistId);
-    if (source == null) throw Exception('歌单不存在');
-
-    final favorites = getPlaylist('favorites');
-    if (favorites == null) return 0;
-
-    final existingIds = favorites.songs.map((s) => s.id).toSet();
-    final toAdd = <MusicItem>[];
-    for (final song in source.songs) {
-      if (existingIds.add(song.id)) toAdd.add(song);
-    }
-
-    if (toAdd.isEmpty) return 0;
-
-    final index = _playlists.indexWhere((p) => p.id == 'favorites');
-    _playlists[index] = favorites.copyWith(
-      songs: [...favorites.songs, ...toAdd],
-      updatedAt: DateTime.now(),
-    );
-    _saveToStorage();
-    return toAdd.length;
-  }
-
-  // 获取"我喜欢"歌单
-  Playlist? get favorites => getPlaylist('favorites');
-
-  // 获取"最近播放"歌单
-  Playlist? get recent => getPlaylist('recent');
+  bool _isSystemPlaylist(String id) => id == 'favorites' || id == 'recent';
 }
