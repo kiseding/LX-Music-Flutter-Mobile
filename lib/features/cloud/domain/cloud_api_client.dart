@@ -6,6 +6,43 @@ import '../../../core/network/outbound_url.dart';
 /// 对接 workers/ 子项目（lx-music-api）的客户端。
 enum CloudVerification { valid, unauthorized, unavailable, noSession }
 
+abstract interface class CloudSessionPreferences {
+  String? getString(String key);
+  Future<void> setString(String key, String value);
+  Future<void> remove(String key);
+}
+
+final class _SharedPreferencesCloudSessionPreferences
+    implements CloudSessionPreferences {
+  _SharedPreferencesCloudSessionPreferences(this._preferences);
+
+  final SharedPreferences _preferences;
+
+  @override
+  String? getString(String key) => _preferences.getString(key);
+
+  @override
+  Future<void> remove(String key) => _preferences.remove(key);
+
+  @override
+  Future<void> setString(String key, String value) =>
+      _preferences.setString(key, value);
+}
+
+final class _CloudSessionSnapshot {
+  const _CloudSessionSnapshot({
+    required this.token,
+    required this.legacyToken,
+    required this.username,
+    required this.role,
+  });
+
+  final String? token;
+  final String? legacyToken;
+  final String? username;
+  final String? role;
+}
+
 class CloudApiClient {
   static const _kBase = 'cloud_api_base';
   static const _kToken = 'cloud_api_token';
@@ -15,6 +52,7 @@ class CloudApiClient {
   final Dio _dio;
   final SecureTokenStore _secureStore;
   final Future<SharedPreferences> Function() _preferences;
+  final Future<CloudSessionPreferences> Function() _sessionPreferences;
 
   String? _baseUrl;
   String? _token;
@@ -26,6 +64,7 @@ class CloudApiClient {
     Dio? dio,
     SecureTokenStore? secureStore,
     Future<SharedPreferences> Function()? preferences,
+    Future<CloudSessionPreferences> Function()? sessionPreferences,
   })  : _dio = dio ??
             Dio(BaseOptions(
               connectTimeout: const Duration(seconds: 12),
@@ -33,7 +72,11 @@ class CloudApiClient {
               headers: {'Content-Type': 'application/json'},
             )),
         _secureStore = secureStore ?? FlutterSecureTokenStore(),
-        _preferences = preferences ?? SharedPreferences.getInstance;
+        _preferences = preferences ?? SharedPreferences.getInstance,
+        _sessionPreferences = sessionPreferences ??
+            (() async => _SharedPreferencesCloudSessionPreferences(
+                  await (preferences ?? SharedPreferences.getInstance)(),
+                ));
 
   String? get baseUrl => _baseUrl;
   String? get token => _token;
@@ -78,30 +121,135 @@ class CloudApiClient {
     await prefs.setString(_kBase, validated);
   }
 
-  Future<void> _persistSession() async {
-    final token = _token;
-    if (token == null || token.isEmpty) {
+  Future<_CloudSessionSnapshot> _snapshotSession(
+      CloudSessionPreferences preferences) async {
+    return _CloudSessionSnapshot(
+      token: await _secureStore.read(_kToken),
+      legacyToken: preferences.getString(_kToken),
+      username: preferences.getString(_kUsername),
+      role: preferences.getString(_kRole),
+    );
+  }
+
+  Future<void> _restorePreference(
+    CloudSessionPreferences preferences,
+    String key,
+    String? value,
+  ) async {
+    if (value == null) {
+      await preferences.remove(key);
+    } else {
+      await preferences.setString(key, value);
+    }
+  }
+
+  Future<bool> _restoreSecureToken(String? token) async {
+    try {
+      if (token == null || token.isEmpty) {
+        await _secureStore.delete(_kToken);
+      } else {
+        await _secureStore.write(_kToken, token);
+      }
+      return await _secureStore.read(_kToken) == token;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _restoreMetadata(
+    CloudSessionPreferences preferences,
+    _CloudSessionSnapshot snapshot,
+  ) async {
+    for (final entry in [
+      (_kToken, snapshot.legacyToken),
+      (_kUsername, snapshot.username),
+      (_kRole, snapshot.role),
+    ]) {
+      try {
+        await _restorePreference(preferences, entry.$1, entry.$2);
+      } catch (_) {
+        // Best effort compensation cannot mask the operation that failed.
+      }
+    }
+  }
+
+  Future<void> _syncSessionMemory(CloudSessionPreferences preferences) async {
+    try {
+      _token = await _secureStore.read(_kToken);
+      _username = preferences.getString(_kUsername);
+      _role = preferences.getString(_kRole);
+    } catch (_) {
+      _token = null;
+      _username = null;
+      _role = null;
+    }
+  }
+
+  Future<void> _persistSession({
+    required String token,
+    required String? username,
+    required String? role,
+  }) async {
+    if (token.isEmpty) {
       throw StateError('Cannot persist an empty cloud token');
     }
-    await _secureStore.write(_kToken, token);
-    if (await _secureStore.read(_kToken) != token) {
-      throw StateError('Secure token verification failed');
+    final previousToken = _token;
+    final previousUsername = _username;
+    final previousRole = _role;
+    CloudSessionPreferences? preferences;
+    _CloudSessionSnapshot? snapshot;
+    try {
+      preferences = await _sessionPreferences();
+      snapshot = await _snapshotSession(preferences);
+      await _secureStore.write(_kToken, token);
+      if (await _secureStore.read(_kToken) != token) {
+        throw StateError('Secure token verification failed');
+      }
+      await preferences.remove(_kToken);
+      if (username != null) await preferences.setString(_kUsername, username);
+      if (role != null) await preferences.setString(_kRole, role);
+      _token = token;
+      _username = username;
+      _role = role;
+    } catch (_) {
+      if (preferences != null && snapshot != null) {
+        await _restoreSecureToken(snapshot.token);
+        await _restoreMetadata(preferences, snapshot);
+        await _syncSessionMemory(preferences);
+      } else {
+        _token = previousToken;
+        _username = previousUsername;
+        _role = previousRole;
+      }
+      rethrow;
     }
-    final prefs = await _preferences();
-    await prefs.remove(_kToken);
-    if (_username != null) await prefs.setString(_kUsername, _username!);
-    if (_role != null) await prefs.setString(_kRole, _role!);
   }
 
   Future<void> clearSession() async {
+    final preferences = await _sessionPreferences();
+    final snapshot = await _snapshotSession(preferences);
     await _secureStore.delete(_kToken);
-    final prefs = await _preferences();
-    await prefs.remove(_kToken);
-    await prefs.remove(_kUsername);
-    await prefs.remove(_kRole);
-    _token = null;
-    _username = null;
-    _role = null;
+    try {
+      await preferences.remove(_kToken);
+      await preferences.remove(_kUsername);
+      await preferences.remove(_kRole);
+      _token = null;
+      _username = null;
+      _role = null;
+    } catch (_) {
+      final restored = await _restoreSecureToken(snapshot.token);
+      await _restoreMetadata(preferences, snapshot);
+      if (restored) {
+        await _syncSessionMemory(preferences);
+        rethrow;
+      }
+      _token = null;
+      _username = null;
+      _role = null;
+      throw StateError(
+        'Cloud session cleanup failed: secure token could not be restored',
+      );
+    }
   }
 
   Options _authOptions() {
@@ -148,20 +296,11 @@ class CloudApiClient {
     if (data['token'] == null) {
       throw Exception(data['error']?.toString() ?? '登录失败');
     }
-    final previousToken = _token;
-    final previousUsername = _username;
-    final previousRole = _role;
-    _token = data['token'] as String;
-    _username = data['username']?.toString() ?? username;
-    _role = data['role']?.toString() ?? 'user';
-    try {
-      await _persistSession();
-    } catch (_) {
-      _token = previousToken;
-      _username = previousUsername;
-      _role = previousRole;
-      rethrow;
-    }
+    await _persistSession(
+      token: data['token'] as String,
+      username: data['username']?.toString() ?? username,
+      role: data['role']?.toString() ?? 'user',
+    );
     return data;
   }
 
@@ -176,20 +315,11 @@ class CloudApiClient {
     if (data['token'] == null) {
       throw Exception(data['error']?.toString() ?? '注册失败');
     }
-    final previousToken = _token;
-    final previousUsername = _username;
-    final previousRole = _role;
-    _token = data['token'] as String;
-    _username = data['username']?.toString() ?? username;
-    _role = data['role']?.toString() ?? 'user';
-    try {
-      await _persistSession();
-    } catch (_) {
-      _token = previousToken;
-      _username = previousUsername;
-      _role = previousRole;
-      rethrow;
-    }
+    await _persistSession(
+      token: data['token'] as String,
+      username: data['username']?.toString() ?? username,
+      role: data['role']?.toString() ?? 'user',
+    );
     return data;
   }
 
@@ -200,15 +330,13 @@ class CloudApiClient {
           options: _authOptions());
       final data = resp.data;
       if (data is Map && data['valid'] == true) {
-        final previousUsername = _username;
-        final previousRole = _role;
-        _role = data['role']?.toString() ?? _role;
-        _username = data['username']?.toString() ?? _username;
         try {
-          await _persistSession();
+          await _persistSession(
+            token: _token!,
+            username: data['username']?.toString() ?? _username,
+            role: data['role']?.toString() ?? _role,
+          );
         } catch (_) {
-          _username = previousUsername;
-          _role = previousRole;
           return CloudVerification.unavailable;
         }
         return CloudVerification.valid;
