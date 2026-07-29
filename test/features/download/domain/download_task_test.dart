@@ -15,6 +15,31 @@ void main() {
     expect(DownloadService.safeDownloadBaseName(''), 'track');
   });
 
+  test('completed output name belongs to a task attempt', () {
+    expect(
+      DownloadService.completedPathName('task/a', 3, '.mp3'),
+      'task_a-3.mp3',
+    );
+  });
+
+  test('completed outputs for re-added music use distinct task ownership', () {
+    expect(
+      DownloadService.completedPathName('old-task', 1, '.mp3'),
+      'old-task-1.mp3',
+    );
+    expect(
+      DownloadService.completedPathName('new-task', 1, '.mp3'),
+      'new-task-1.mp3',
+    );
+  });
+
+  test('retry output revision cannot collide with its stale attempt', () {
+    expect(
+      DownloadService.completedPathName('task', 1, '.flac'),
+      isNot(DownloadService.completedPathName('task', 3, '.flac')),
+    );
+  });
+
   test('promote part must not delete .part before rename (filesystem)',
       () async {
     final dir = await Directory.systemTemp.createTemp('dl_part_');

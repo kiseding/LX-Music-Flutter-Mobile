@@ -129,6 +129,7 @@ class DownloadService {
   late final StreamSubscription<DownloadNetwork>? _connectivitySubscription;
   Future<void> _persistenceTail = Future<void>.value();
   DateTime _lastProgressPersistence = DateTime.fromMillisecondsSinceEpoch(0);
+  int _connectivityEpoch = 0;
 
   String? _downloadDir;
   MusicSourceService? _musicSourceService;
@@ -302,8 +303,7 @@ class DownloadService {
     final cancelToken = attempt.cancelToken;
     _updateCurrent(attempt, status: DownloadStatus.downloading, errorMsg: '');
 
-    final baseName = safeDownloadBaseName(task.musicId);
-    final partPath = _partPathFor(task.id, task.musicId, attempt.revision);
+    final partPath = _partPathFor(task.id, attempt.revision);
 
     try {
       if (_downloader != null) {
@@ -406,21 +406,30 @@ class DownloadService {
             if (detectedExt == '.audio') {
               await _safeDeleteOwned(partPath, attempt);
             } else {
-              final savePath = '$_downloadDir/$baseName$detectedExt';
+              final savePath = _finalPathFor(
+                task.id,
+                attempt.revision,
+                detectedExt,
+              );
               final out = File(savePath);
               if (!_isCurrent(attempt)) {
                 await _safeDeleteOwned(partPath, attempt);
                 return;
               }
-              if (await out.exists()) await out.delete();
-              await _promotePartFile(part, savePath);
+              if (await out.exists()) {
+                if (!_isCurrent(attempt)) return;
+                await _safeDeleteOwned(savePath, attempt);
+              }
+              if (!_isCurrent(attempt) ||
+                  !await _promotePartFile(part, savePath, attempt)) {
+                await _safeDeleteOwned(savePath, attempt);
+                return;
+              }
+              final size = await File(savePath).length();
               if (!_isCurrent(attempt)) {
                 await _safeDeleteOwned(savePath, attempt);
                 return;
               }
-              await _cleanupSiblingFiles(baseName, keep: savePath);
-
-              final size = await File(savePath).length();
               _updateCurrent(
                 attempt,
                 status: DownloadStatus.completed,
@@ -573,8 +582,14 @@ class DownloadService {
     final slots = _maxConcurrent - _activeTaskIds.length;
     if (slots <= 0) return;
     if (_wifiOnly) {
+      final epoch = _connectivityEpoch;
       _currentNetwork().then((network) {
-        if (network == DownloadNetwork.wifi) _processQueueAllowed();
+        if (!_disposed &&
+            _wifiOnly &&
+            epoch == _connectivityEpoch &&
+            network == DownloadNetwork.wifi) {
+          _processQueueAllowed();
+        }
       });
       return;
     }
@@ -606,6 +621,7 @@ class DownloadService {
       _processQueue();
       return;
     }
+    _connectivityEpoch++;
     for (final attempt in _attempts.values.toList()) {
       _invalidate(attempt, status: DownloadStatus.pending, progress: 0.0);
       attempt.cancelToken.cancel('wifi policy');
@@ -637,9 +653,11 @@ class DownloadService {
     }
   }
 
-  String _partPathFor(String taskId, String musicId, int revision) =>
-      '$_downloadDir/${safeDownloadBaseName(musicId)}.'
-      '${safeDownloadBaseName(taskId)}.$revision.part';
+  String _partPathFor(String taskId, int revision) =>
+      '$_downloadDir/${completedPathName(taskId, revision, '')}.part';
+
+  String _finalPathFor(String taskId, int revision, String extension) =>
+      '$_downloadDir/${completedPathName(taskId, revision, extension)}';
 
   void cancelTask(String taskId) {
     final attempt = _attempts[taskId];
@@ -687,7 +705,6 @@ class DownloadService {
       _invalidate(attempt);
       attempt.cancelToken.cancel('deleted');
     }
-    await _cleanupSiblingFiles(safeDownloadBaseName(task.musicId), keep: '');
     _tasks.removeWhere((t) => t.id == taskId);
     _emitTasks();
     await _saveToStorage();
@@ -956,44 +973,42 @@ class DownloadService {
   }
 
   Future<void> _safeDeleteOwned(String path, _DownloadAttempt attempt) async {
+    final dir = _downloadDir;
+    if (dir == null || !_isAttemptOwnedPath(path, attempt)) return;
     await _safeDelete(path);
   }
 
-  /// 将 .part 提升为最终文件；rename 失败时 copy+delete 兜底。
-  Future<void> _promotePartFile(File part, String savePath) async {
+  bool _isAttemptOwnedPath(String path, _DownloadAttempt attempt) {
+    final prefix = '${safeDownloadBaseName(attempt.taskId)}-${attempt.revision}';
+    final name = File(path).uri.pathSegments.last;
+    return name == '$prefix.part' ||
+        (name.startsWith('$prefix.') && !name.endsWith('.part'));
+  }
+
+  /// Promotes only while the owning attempt remains current.
+  Future<bool> _promotePartFile(
+    File part,
+    String savePath,
+    _DownloadAttempt attempt,
+  ) async {
+    if (!_isCurrent(attempt)) return false;
     try {
       await part.rename(savePath);
-      return;
+      return _isCurrent(attempt);
     } on PathNotFoundException catch (e) {
       debugPrint('[DownloadService] rename missing: $e');
     } catch (e) {
       debugPrint('[DownloadService] rename failed, try copy: $e');
     }
-    if (!await part.exists()) {
+    if (!_isCurrent(attempt) || !await part.exists()) {
+      if (!_isCurrent(attempt)) return false;
       throw PathNotFoundException(part.path, const OSError(), '临时文件不存在');
     }
+    if (!_isCurrent(attempt)) return false;
     await part.copy(savePath);
-    await _safeDelete(part.path);
-  }
-
-  /// 清理同 baseName 的其它成品扩展名；**永不删除 .part**（进行中的临时文件）。
-  Future<void> _cleanupSiblingFiles(String baseName,
-      {required String keep}) async {
-    final dirPath = _downloadDir;
-    if (dirPath == null) return;
-    final dir = Directory(dirPath);
-    if (!await dir.exists()) return;
-    final keepCanon = File(keep).absolute.path;
-    await for (final entity in dir.list()) {
-      if (entity is! File) continue;
-      final name = entity.uri.pathSegments.isNotEmpty
-          ? entity.uri.pathSegments.last
-          : entity.path.split(Platform.pathSeparator).last;
-      if (name.endsWith('.part')) continue;
-      if (!name.startsWith('$baseName.')) continue;
-      if (entity.absolute.path == keepCanon) continue;
-      await _safeDelete(entity.path);
-    }
+    if (!_isCurrent(attempt)) return false;
+    await _safeDeleteOwned(part.path, attempt);
+    return _isCurrent(attempt);
   }
 
   /// 文件名安全化：去掉路径分隔与异常字符。
@@ -1005,6 +1020,12 @@ class DownloadService {
     if (cleaned.isEmpty) return 'track';
     return cleaned.length > 120 ? cleaned.substring(0, 120) : cleaned;
   }
+
+  static String completedPathName(
+    String taskId,
+    int attemptRevision,
+    String extension,
+  ) => '${safeDownloadBaseName(taskId)}-$attemptRevision$extension';
 
   Future<void> dispose() async {
     if (_disposed) return;

@@ -1,33 +1,41 @@
-# Network Task 6 Report: Download Attempt Lifecycle
+# Network Task 6 Report
 
-Date: 2026-07-29
-Status: completed
+## Status
 
-## Delivered
+Implemented connectivity-epoch scheduling and task-attempt-owned final output
+names.
 
-- Persisted monotonic `attemptRevision` values on download tasks while keeping
-  UUID task IDs unchanged.
-- Replaced task-level cancellation ownership with revision-owned attempt
-  records. Active capacity remains reserved until the executor future settles.
-- Invalidated attempts before retry, pause, cancel, delete, Wi-Fi policy loss,
-  cache clear, and disposal cancellation. Progress, completion, failure, and
-  finalization mutations require the current attempt identity.
-- Assigned each physical executor a revision-specific `.part` path and guarded
-  promotion/cleanup so stale work cannot affect a later attempt.
-- Made persistence tail recovery independent of previous write failure while
-  retaining per-write error delivery and terminal/disposal flushing.
-- Made disposal asynchronous: mark disposed, cancel and await attempts and
-  persistence, then close Dio and the task stream. No callback can emit after
-  disposal begins.
-- Retained centralized fresh URL resolution, bounded expired-link retry, UUID
-  generation, and settings-backed connectivity wiring.
+## Implementation
 
-## Test Evidence
+- Wi-Fi-only scheduling captures a connectivity epoch before awaiting the
+  network answer. A non-Wi-Fi event advances the epoch before invalidating and
+  cancelling attempts. A delayed answer must still be Wi-Fi, match the captured
+  epoch, retain Wi-Fi-only policy, and observe a live service before it can
+  reserve a slot.
+- Physical `.part` and final output names derive from task ID and persisted
+  attempt revision. Final output is exactly `<taskId>-<attemptRevision><extension>`;
+  `savePath` stores this immutable path.
+- Promotion validates attempt authority across file operations and operates only
+  on exact attempt-owned paths. Music-ID-wide sibling cleanup was removed, so
+  stale retry, cancellation, deletion, and same-music re-add cannot delete a
+  newer output by filename collision.
 
-- `flutter test test/features/download/domain/download_service_test.dart`
-- `flutter test test/features/download/domain/download_task_test.dart`
-- `flutter analyze`
+## TDD And Verification
 
-The service test suite uses cancellation-ignoring gated executors to verify
-Wi-Fi slot retention, no duplicate executor on Wi-Fi restoration, stale retry
-callback isolation, persistence-tail recovery, and disposal stream safety.
+- RED: a gated `currentNetwork` returned Wi-Fi after a mobile event and started
+  a task before the epoch guard. GREEN proves no executor starts and no slot is
+  reserved.
+- Regression tests cover exact task/revision names, distinct re-add ownership,
+  retry revisions, stale callback authority, and retained reservations.
+- Focused download suites: 32 passed.
+- Full `flutter test`: 559 passed.
+- Targeted analysis: no issues.
+- Full `flutter analyze`: 22 pre-existing unrelated findings; no findings in
+  changed files.
+- `git diff --check`: clean.
+
+## Concern
+
+- Injected executors intentionally bypass physical Dio promotion. The
+  deterministic token-ignoring tests validate lifecycle authority and immutable
+  path derivation; they do not pause a real filesystem rename.

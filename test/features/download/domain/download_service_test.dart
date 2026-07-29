@@ -188,6 +188,36 @@ void main() {
     expect(downloader.attempts, hasLength(2));
   });
 
+  test('delayed Wi-Fi answer after mobile event cannot reserve a slot',
+      () async {
+    final answer = Completer<DownloadNetwork>();
+    final network = StreamController<DownloadNetwork>.broadcast();
+    final downloader = _GatedDownloader();
+    final service = DownloadService(
+      wifiOnly: true,
+      currentNetwork: () => answer.future,
+      connectivity: network.stream,
+      downloader: downloader.call,
+      storage: _MemoryStorage(),
+      taskIdFactory: () => 'epoch-id',
+    );
+    addTearDown(() async {
+      if (!answer.isCompleted) answer.complete(DownloadNetwork.mobile);
+      downloader.completeAll();
+      await network.close();
+      await service.dispose();
+    });
+
+    await service.addTask(_song('a'));
+    network.add(DownloadNetwork.mobile);
+    await Future<void>.delayed(Duration.zero);
+    answer.complete(DownloadNetwork.wifi);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(downloader.started, isEmpty);
+    expect(service.activeTaskIds, isEmpty);
+  });
+
   test('stale callbacks cannot mutate a retry attempt', () async {
     final downloader = _AttemptGatedDownloader();
     final service = DownloadService(
@@ -216,6 +246,17 @@ void main() {
     expect(downloader.attempts.last.task.attemptRevision,
         service.tasks.single.attemptRevision);
     expect(service.tasks.single.status, DownloadStatus.downloading);
+    expect(
+      DownloadService.completedPathName('retry-id', original.task.attemptRevision,
+          '.mp3'),
+      isNot(
+        DownloadService.completedPathName(
+          'retry-id',
+          service.tasks.single.attemptRevision,
+          '.mp3',
+        ),
+      ),
+    );
   });
 
   test('a failed persistence write does not poison later snapshots', () async {
