@@ -117,6 +117,8 @@ final class ControlledCloudApiClient extends CloudApiClient {
     loginCompleter.complete({'username': username, 'role': role});
   }
 
+  void failLogin(Object error) => loginCompleter.completeError(error);
+
   void completeVerify(CloudVerification verification) {
     verifyCompleter.complete(verification);
   }
@@ -247,5 +249,20 @@ void main() {
     expect(notifier.state.loggedIn, isTrue);
     expect(notifier.state.username, 'saved-user');
     expect(notifier.state.error, contains('无法清除安全凭据'));
+  });
+
+  test('a stale login safety failure remains visible after a newer command',
+      () async {
+    final api = ControlledCloudApiClient();
+    final notifier = CloudSessionNotifier(api, autoRefresh: false);
+
+    final login = notifier.login('user', 'password');
+    await notifier.setBaseUrl('https://new.example');
+    api.failLogin(const CloudSessionSafetyError(
+      'Cloud session became stale and was invalidated. Please sign in again.',
+    ));
+
+    expect(await login, isFalse);
+    expect(notifier.state.error, contains('invalidated'));
   });
 }

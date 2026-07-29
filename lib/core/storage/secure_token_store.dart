@@ -24,8 +24,7 @@ final class FlutterSecureTokenStore implements SecureTokenStore {
       _storage.write(key: key, value: value, iOptions: _ios);
 
   @override
-  Future<void> delete(String key) =>
-      _storage.delete(key: key, iOptions: _ios);
+  Future<void> delete(String key) => _storage.delete(key: key, iOptions: _ios);
 }
 
 final class LegacyTokenMigrator {
@@ -34,22 +33,52 @@ final class LegacyTokenMigrator {
   final SecureTokenStore secureStore;
   final SharedPreferences preferences;
 
-  Future<String?> readAndMigrate(String key) async {
+  Future<String?> readAndMigrate(
+    String key, {
+    bool Function()? canMutate,
+    Future<void> Function(Future<void> Function())? mutate,
+    Future<void> Function(String token)? discardStaleToken,
+  }) async {
+    Future<void> runMutation(Future<void> Function() operation) async {
+      if (canMutate != null && !canMutate()) return;
+      if (mutate == null) {
+        await operation();
+      } else {
+        await mutate(() async {
+          if (canMutate != null && !canMutate()) return;
+          await operation();
+        });
+      }
+    }
+
     final legacy = preferences.getString(key);
     try {
       final secure = await secureStore.read(key);
       if (secure != null && secure.isNotEmpty) {
         if (legacy == secure) {
-          await preferences.setBool('secure_token_migrated_v1_$key', true);
-          await preferences.remove(key);
+          if (canMutate != null && !canMutate()) return secure;
+          await runMutation(
+              () => preferences.setBool('secure_token_migrated_v1_$key', true));
+          if (canMutate != null && !canMutate()) return secure;
+          await runMutation(() => preferences.remove(key));
         }
         return secure;
       }
       if (legacy == null || legacy.isEmpty) return null;
-      await secureStore.write(key, legacy);
+      if (canMutate != null && !canMutate()) return null;
+      await runMutation(() => secureStore.write(key, legacy));
       if (await secureStore.read(key) != legacy) return legacy;
-      await preferences.setBool('secure_token_migrated_v1_$key', true);
-      await preferences.remove(key);
+      if (canMutate != null && !canMutate()) {
+        await discardStaleToken?.call(legacy);
+        return null;
+      }
+      await runMutation(
+          () => preferences.setBool('secure_token_migrated_v1_$key', true));
+      if (canMutate != null && !canMutate()) {
+        await discardStaleToken?.call(legacy);
+        return null;
+      }
+      await runMutation(() => preferences.remove(key));
     } catch (_) {
       if (legacy != null && legacy.isNotEmpty) return legacy;
       rethrow;

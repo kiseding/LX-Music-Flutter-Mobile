@@ -61,3 +61,40 @@ GREEN:
 ## Concerns
 
 - Device or iOS CI coverage is still required to exercise actual Keychain deletion failures; the controlled client verifies the presentation-state contract on Flutter/Linux.
+
+## Important Review Follow-up
+
+- `LegacyTokenMigrator` now accepts a client-owned revision predicate and runs
+  every secure-storage and preferences write/removal through the cloud session
+  mutation tail. A stale `load()` cannot migrate or remove plaintext after a
+  newer login or base URL mutation; if its secure write completed just before
+  ownership changed, it removes only the matching stale migrated token.
+- `verify()` captures the token and session revision before its request. A valid
+  response persists metadata only while that exact revision still owns the
+  session, so delayed old responses cannot change a replacement token's user or
+  role.
+- Persistence rechecks revision ownership after every durable step. If a stale
+  response credential cannot be compensated, the client deletes that stale
+  credential where possible and throws `CloudSessionSafetyError`; the provider
+  surfaces this actionable safety error even when its originating command is no
+  longer the current presentation generation.
+- Existing 401 token-conditional cleanup, outage preservation, and secure
+  plaintext migration behavior remain covered by the focused cloud suite.
+
+## Important Review TDD
+
+- RED reproduced delayed legacy migration racing a newer login and a newer base
+  URL, delayed verification overwriting replacement metadata, stale persistence
+  after a competing base URL, and a stale safety failure hidden by provider
+  generation suppression.
+- GREEN coverage makes those races deterministic with paused secure-storage
+  writes and delayed Dio responses.
+
+## Important Review Verification
+
+- `flutter test test/features/cloud/domain/cloud_api_client_test.dart test/features/cloud/presentation/cloud_provider_test.dart`
+  - PASS: 40 tests.
+- Targeted `flutter analyze` on cloud storage, domain, provider, and tests
+  - PASS: no issues.
+- `git diff --check`
+  - PASS.

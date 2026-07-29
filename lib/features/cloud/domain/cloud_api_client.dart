@@ -8,6 +8,15 @@ import '../../../core/network/outbound_url.dart';
 /// 对接 workers/ 子项目（lx-music-api）的客户端。
 enum CloudVerification { valid, unauthorized, unavailable, noSession }
 
+final class CloudSessionSafetyError implements Exception {
+  const CloudSessionSafetyError(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
 abstract interface class CloudSessionPreferences {
   String? getString(String key);
   Future<void> setString(String key, String value);
@@ -50,6 +59,7 @@ class CloudApiClient {
   static const _kToken = 'cloud_api_token';
   static const _kUsername = 'cloud_api_username';
   static const _kRole = 'cloud_api_role';
+  static const _kTokenInvalidated = 'cloud_api_token_invalidated';
 
   final Dio _dio;
   final SecureTokenStore _secureStore;
@@ -105,10 +115,25 @@ class CloudApiClient {
         configurationError = error.message?.toString();
       }
     }
+    if (prefs.getString(_kTokenInvalidated) == 'true') {
+      if (_sessionRevision != revision) return;
+      _baseUrl = baseUrl;
+      _configurationError =
+          'Cloud credential was invalidated after interrupted persistence. Please sign in again.';
+      _token = null;
+      _username = prefs.getString(_kUsername);
+      _role = prefs.getString(_kRole);
+      return;
+    }
     final token = await LegacyTokenMigrator(
       secureStore: _secureStore,
       preferences: prefs,
-    ).readAndMigrate(_kToken);
+    ).readAndMigrate(
+      _kToken,
+      canMutate: () => _sessionRevision == revision,
+      mutate: _runSessionMutation,
+      discardStaleToken: _discardStaleMigrationToken,
+    );
     final username = prefs.getString(_kUsername);
     final role = prefs.getString(_kRole);
 
@@ -162,6 +187,44 @@ class CloudApiClient {
     } catch (_) {
       return false;
     }
+  }
+
+  Future<bool> _deleteStaleToken() async {
+    try {
+      await _secureStore.delete(_kToken);
+      return await _secureStore.read(_kToken) == null;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _discardStaleMigrationToken(String token) {
+    return _runSessionMutation(() async {
+      if (await _secureStore.read(_kToken) == token) {
+        await _secureStore.delete(_kToken);
+      }
+    });
+  }
+
+  Future<Never> _reportUnrecoverableStaleCredential(
+    CloudSessionPreferences preferences,
+  ) async {
+    final deleted = await _deleteStaleToken();
+    if (deleted) {
+      throw const CloudSessionSafetyError(
+        'Cloud session became stale; its credential was removed. Please sign in again.',
+      );
+    }
+    try {
+      await preferences.setString(_kTokenInvalidated, 'true');
+    } catch (_) {
+      throw const CloudSessionSafetyError(
+        'Cloud session became stale and could not be secured. Please clear secure storage and sign in again.',
+      );
+    }
+    throw const CloudSessionSafetyError(
+      'Cloud session became stale and was invalidated. Please sign in again.',
+    );
   }
 
   Future<void> _restoreMetadata(
@@ -223,7 +286,7 @@ class CloudApiClient {
     if (token.isEmpty) {
       throw StateError('Cannot persist an empty cloud token');
     }
-    if (expectedRevision != null && _sessionRevision != expectedRevision) {
+    if (!_ownsRevision(expectedRevision)) {
       return;
     }
     final previousToken = _token;
@@ -234,30 +297,37 @@ class CloudApiClient {
     try {
       preferences = await _sessionPreferences();
       snapshot = await _snapshotSession(preferences);
-      if (expectedRevision != null && _sessionRevision != expectedRevision) {
+      if (!_ownsRevision(expectedRevision)) {
         return;
       }
+      if (!_ownsRevision(expectedRevision)) return;
       await _secureStore.write(_kToken, token);
       if (await _secureStore.read(_kToken) != token) {
         throw StateError('Secure token verification failed');
       }
-      await preferences.remove(_kToken);
-      if (username != null) await preferences.setString(_kUsername, username);
-      if (role != null) await preferences.setString(_kRole, role);
-      if (expectedRevision != null && _sessionRevision != expectedRevision) {
-        final restored = await _restoreSecureToken(snapshot.token);
-        await _restoreMetadata(preferences, snapshot);
-        await _syncSessionMemory(preferences);
-        if (!restored) {
-          throw StateError(
-            'Cloud session persistence became stale and could not be restored',
-          );
-        }
-        return;
+      if (!_ownsRevision(expectedRevision)) {
+        await _reportUnrecoverableStaleCredential(preferences);
       }
+      await preferences.remove(_kToken);
+      if (!_ownsRevision(expectedRevision)) {
+        await _reportUnrecoverableStaleCredential(preferences);
+      }
+      if (username != null) await preferences.setString(_kUsername, username);
+      if (!_ownsRevision(expectedRevision)) {
+        await _reportUnrecoverableStaleCredential(preferences);
+      }
+      if (role != null) await preferences.setString(_kRole, role);
+      if (!_ownsRevision(expectedRevision)) {
+        await _reportUnrecoverableStaleCredential(preferences);
+      }
+      if (!_ownsRevision(expectedRevision)) return;
+      await preferences.remove(_kTokenInvalidated);
       _token = token;
       _username = username;
       _role = role;
+    } on CloudSessionSafetyError {
+      if (preferences != null) await _syncSessionMemory(preferences);
+      rethrow;
     } catch (_) {
       if (preferences != null && snapshot != null) {
         await _restoreSecureToken(snapshot.token);
@@ -271,6 +341,9 @@ class CloudApiClient {
       rethrow;
     }
   }
+
+  bool _ownsRevision(int? expectedRevision) =>
+      expectedRevision == null || _sessionRevision == expectedRevision;
 
   Future<void> _compensateStaleCleanup(
     CloudSessionPreferences preferences,
@@ -433,6 +506,8 @@ class CloudApiClient {
 
   Future<CloudVerification> verify() async {
     if (!isLoggedIn) return CloudVerification.noSession;
+    final token = _token!;
+    final revision = _sessionRevision;
     try {
       final resp = await _dio.get(_url('/api/user/auth/verify'),
           options: _authOptions());
@@ -440,9 +515,10 @@ class CloudApiClient {
       if (data is Map && data['valid'] == true) {
         try {
           await _persistSession(
-            token: _token!,
+            token: token,
             username: data['username']?.toString() ?? _username,
             role: data['role']?.toString() ?? _role,
+            expectedRevision: revision,
           );
         } catch (_) {
           return CloudVerification.unavailable;

@@ -135,7 +135,7 @@ class CloudSessionNotifier extends StateNotifier<CloudSessionState> {
     try {
       await _api.login(username, password);
     } catch (error) {
-      if (_current(generation)) {
+      if (_current(generation) || error is CloudSessionSafetyError) {
         state = state.copyWith(checking: false, error: error.toString());
       }
       return false;
@@ -150,7 +150,7 @@ class CloudSessionNotifier extends StateNotifier<CloudSessionState> {
     try {
       await _api.register(username, password);
     } catch (error) {
-      if (_current(generation)) {
+      if (_current(generation) || error is CloudSessionSafetyError) {
         state = state.copyWith(checking: false, error: error.toString());
       }
       return false;

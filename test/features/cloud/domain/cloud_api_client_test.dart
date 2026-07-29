@@ -25,6 +25,8 @@ final class FakeSecureTokenStore implements SecureTokenStore {
   Completer<void>? readPaused;
   Completer<void>? pauseDelete;
   Completer<void>? deleteStarted;
+  Completer<void>? pauseWrite;
+  Completer<void>? writeStarted;
 
   @override
   Future<void> delete(String key) async {
@@ -58,6 +60,11 @@ final class FakeSecureTokenStore implements SecureTokenStore {
     if (failWrite || value == failWriteValue) {
       throw StateError('write failed');
     }
+    if (writeStarted != null && !writeStarted!.isCompleted) {
+      writeStarted!.complete();
+    }
+    final pause = pauseWrite;
+    if (pause != null) await pause.future;
     values[key] = value;
     _wrote = true;
   }
@@ -97,6 +104,37 @@ final class DelayedAuthResponses {
   }
 }
 
+final class DelayedVerifyResponses {
+  final started = Completer<void>();
+  final response = Completer<Map<String, dynamic>>();
+
+  Dio createDio() {
+    final dio = Dio();
+    dio.interceptors
+        .add(InterceptorsWrapper(onRequest: (options, handler) async {
+      if (options.path.endsWith('/api/user/auth/verify')) {
+        if (!started.isCompleted) started.complete();
+        handler.resolve(Response(
+          requestOptions: options,
+          statusCode: 200,
+          data: await response.future,
+        ));
+        return;
+      }
+      handler.resolve(Response(
+        requestOptions: options,
+        statusCode: 200,
+        data: {
+          'token': 'new-token',
+          'username': 'new-user',
+          'role': 'user',
+        },
+      ));
+    }));
+    return dio;
+  }
+}
+
 final class FakeCloudSessionPreferences implements CloudSessionPreferences {
   FakeCloudSessionPreferences(
     Map<String, String> initialValues, {
@@ -107,6 +145,8 @@ final class FakeCloudSessionPreferences implements CloudSessionPreferences {
   final Map<String, String> values;
   final String? failRemoveKey;
   final String? failSetKey;
+  Completer<void>? pauseRemove;
+  Completer<void>? removeStarted;
 
   @override
   String? getString(String key) => values[key];
@@ -114,6 +154,11 @@ final class FakeCloudSessionPreferences implements CloudSessionPreferences {
   @override
   Future<void> remove(String key) async {
     if (key == failRemoveKey) throw StateError('remove $key failed');
+    if (removeStarted != null && !removeStarted!.isCompleted) {
+      removeStarted!.complete();
+    }
+    final pause = pauseRemove;
+    if (pause != null) await pause.future;
     values.remove(key);
   }
 
@@ -866,5 +911,127 @@ void main() {
     expect(client.token, 'new-token');
     expect(client.username, 'new-user');
     expect(client.role, 'admin');
+  });
+
+  test('a stale legacy migration cannot write its plaintext token after login',
+      () async {
+    SharedPreferences.setMockInitialValues({
+      'cloud_api_base': 'https://cloud.example',
+      'cloud_api_token': 'legacy-token',
+    });
+    final releaseMigration = Completer<void>();
+    final secure = FakeSecureTokenStore()
+      ..pauseWrite = releaseMigration
+      ..writeStarted = Completer<void>();
+    final client = CloudApiClient(
+      dio: responseDio(data: {
+        'token': 'new-token',
+        'username': 'new-user',
+        'role': 'admin',
+      }),
+      secureStore: secure,
+    );
+    await client.setBaseUrl('https://cloud.example');
+
+    final load = client.load();
+    await secure.writeStarted!.future;
+    secure.pauseWrite = null;
+    final login = client.login('new-user', 'password');
+    releaseMigration.complete();
+    await login;
+    await load;
+
+    expect(await secure.read('cloud_api_token'), 'new-token');
+    expect(client.token, 'new-token');
+  });
+
+  test(
+      'a stale legacy migration cannot write its plaintext token after base URL change',
+      () async {
+    SharedPreferences.setMockInitialValues({
+      'cloud_api_base': 'https://old.example',
+      'cloud_api_token': 'legacy-token',
+    });
+    final releaseMigration = Completer<void>();
+    final secure = FakeSecureTokenStore()
+      ..pauseWrite = releaseMigration
+      ..writeStarted = Completer<void>();
+    final client = CloudApiClient(secureStore: secure);
+
+    final load = client.load();
+    await secure.writeStarted!.future;
+    final setBaseUrl = client.setBaseUrl('https://new.example');
+    releaseMigration.complete();
+    await setBaseUrl;
+    await load;
+
+    expect(await secure.read('cloud_api_token'), isNull);
+    expect((await SharedPreferences.getInstance()).getString('cloud_api_token'),
+        'legacy-token');
+    expect(client.baseUrl, 'https://new.example');
+    expect(client.token, isNull);
+  });
+
+  test('a stale verify response cannot update newer token metadata', () async {
+    SharedPreferences.setMockInitialValues({
+      'cloud_api_base': 'https://cloud.example',
+      'cloud_api_username': 'old-user',
+      'cloud_api_role': 'user',
+    });
+    final responses = DelayedVerifyResponses();
+    final secure = FakeSecureTokenStore()
+      ..values['cloud_api_token'] = 'old-token';
+    final client = CloudApiClient(
+      dio: responses.createDio(),
+      secureStore: secure,
+    );
+    await client.load();
+
+    final verify = client.verify();
+    await responses.started.future;
+    await client.login('new-user', 'password');
+    responses.response.complete({
+      'valid': true,
+      'username': 'old-user',
+      'role': 'admin',
+    });
+
+    expect(await verify, CloudVerification.valid);
+    expect(await secure.read('cloud_api_token'), 'new-token');
+    expect(client.username, 'new-user');
+    expect(client.role, 'user');
+  });
+
+  test(
+      'stale login deletes its token when restoration cannot recover the prior token',
+      () async {
+    SharedPreferences.setMockInitialValues({
+      'cloud_api_base': 'https://cloud.example',
+      'cloud_api_username': 'old-user',
+      'cloud_api_role': 'user',
+    });
+    final releaseWrite = Completer<void>();
+    final secure = FakeSecureTokenStore(failWriteValue: 'old-token')
+      ..values['cloud_api_token'] = 'old-token'
+      ..pauseWrite = releaseWrite
+      ..writeStarted = Completer<void>();
+    final client = CloudApiClient(
+      dio: responseDio(data: {
+        'token': 'stale-token',
+        'username': 'stale-user',
+        'role': 'admin',
+      }),
+      secureStore: secure,
+    );
+    await client.load();
+
+    final login = client.login('stale-user', 'password');
+    await secure.writeStarted!.future;
+    await client.setBaseUrl('https://new.example');
+    releaseWrite.complete();
+
+    await expectLater(login, throwsA(isA<CloudSessionSafetyError>()));
+    expect(await secure.read('cloud_api_token'), isNull);
+    expect(client.token, isNull);
   });
 }
