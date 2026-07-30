@@ -33,12 +33,6 @@ class CustomSourceService {
   static const int maximumScriptBytes = 2 * 1024 * 1024;
   static const Duration importTimeout = Duration(seconds: 15);
 
-  /// 历史内置 Huibq 的 id；启动时若仍存在则移除，不再自动种源。
-  static const String defaultSourceId = 'default_huibq';
-  static const String _legacySeededKey = 'default_source_seeded';
-  static const String _legacyDeletedKey = 'default_source_deleted';
-  static const String _builtinPurgedKey = 'builtin_huibq_purged_v1';
-
   final List<CustomSource> _sources = [];
   final Map<String, CustomSourceEngine> _engines = {};
   final SourceRequestSandbox _importSandbox;
@@ -62,7 +56,6 @@ class CustomSourceService {
     try {
       _storage ??= await (_storageLoader ?? () => StorageService.instance)();
       await _loadSources();
-      await _purgeBuiltInHuibqOnce();
       _initialized = true;
     } catch (e) {
       _initFuture = null;
@@ -72,37 +65,6 @@ class CustomSourceService {
 
   bool _exceedsScriptByteLimit(String text) =>
       utf8.encode(text).length > maximumScriptBytes;
-
-  /// 去掉历史内置 default_huibq（用户自行导入的同名源保留，但 id 为 default_huibq 的一律清掉）。
-  Future<void> _purgeBuiltInHuibqOnce() async {
-    final loaded = List<CustomSource>.of(_sources);
-    final next = _dedupeSources(
-      loaded.where((source) => source.id != defaultSourceId).toList(),
-    );
-    if (!_sameSources(loaded, next)) {
-      await _saveSources(next);
-      _publish(next);
-      _engines[defaultSourceId]?.dispose();
-      _engines.remove(defaultSourceId);
-    }
-    // 清理旧 seed 标记，避免其它逻辑误判
-    await _storage!.remove(_legacySeededKey);
-    await _storage!.remove(_legacyDeletedKey);
-    await _storage!.setBool(_builtinPurgedKey, true);
-  }
-
-  static bool isHuibqFamily(CustomSource s) {
-    final nameL = s.name.toLowerCase();
-    final authorL = s.author.toLowerCase();
-    final homeL = (s.homepage ?? '').toLowerCase();
-    if (s.id == defaultSourceId) return true;
-    if (nameL.contains('huibq') || authorL.contains('huibq')) return true;
-    if (nameL.contains('lxmusic源') || nameL.contains('lxmusic')) return true;
-    if (homeL.contains('huibq') || homeL.contains('lx-music-source')) {
-      return true;
-    }
-    return false;
-  }
 
   Future<void> _loadSources() async {
     final jsonStr = _storage?.getString(_storageKey);
@@ -118,7 +80,6 @@ class CustomSourceService {
     if (sources.isEmpty) return const [];
     final seenIds = <String>{};
     final seenNameAuthor = <String>{};
-    var seenHuibq = false;
     final kept = <CustomSource>[];
 
     final ordered = [...sources]..sort((a, b) {
@@ -128,15 +89,11 @@ class CustomSourceService {
 
     for (final s in ordered) {
       final key = '${s.name}|${s.author}'.toLowerCase();
-      final huibq = isHuibqFamily(s);
-      if (seenIds.contains(s.id) ||
-          seenNameAuthor.contains(key) ||
-          (huibq && seenHuibq)) {
+      if (seenIds.contains(s.id) || seenNameAuthor.contains(key)) {
         continue;
       }
       seenIds.add(s.id);
       seenNameAuthor.add(key);
-      if (huibq) seenHuibq = true;
       kept.add(s);
     }
     return kept;
@@ -169,10 +126,6 @@ class CustomSourceService {
       ..clear()
       ..addAll(sources);
   }
-
-  bool _sameSources(List<CustomSource> left, List<CustomSource> right) =>
-      json.encode(left.map((source) => source.toJson()).toList()) ==
-      json.encode(right.map((source) => source.toJson()).toList());
 
   Future<void> addSource(CustomSource source) async {
     await _mutate<void>((current) => _SourceMutation(
@@ -326,19 +279,15 @@ class CustomSourceService {
     try {
       final json = jsonDecode(jsonStr);
       final source = CustomSource.fromJson(json as Map<String, dynamic>);
-      // 禁止再以内置 id 写入
       final now = _clock();
-      final normalized = source.id == defaultSourceId
-          ? source.copyWith(id: now.millisecondsSinceEpoch.toString())
-          : source;
       return await _mutate<bool>((current) {
-        final index = current.indexWhere((item) => item.id == normalized.id);
+        final index = current.indexWhere((item) => item.id == source.id);
         final invalidated = <String>{};
         if (index >= 0) {
-          current[index] = normalized.copyWith(updatedAt: now);
-          invalidated.add(normalized.id);
+          current[index] = source.copyWith(updatedAt: now);
+          invalidated.add(source.id);
         } else {
-          current.add(normalized);
+          current.add(source);
         }
         return _SourceMutation(
           _dedupeSources(current),
@@ -387,20 +336,6 @@ class CustomSourceService {
           current[existingIndex] = old.copyWith(
             description: description,
             version: version,
-            script: script,
-            updatedAt: now,
-            isEnabled: old.isEnabled || shouldEnable,
-          );
-          targetId = old.id;
-          invalidated.add(old.id);
-        } else if (isHuibqFamily(candidate) && current.any(isHuibqFamily)) {
-          final index = current.indexWhere(isHuibqFamily);
-          final old = current[index];
-          current[index] = old.copyWith(
-            name: name,
-            description: description.isNotEmpty ? description : old.description,
-            version: version,
-            author: author,
             script: script,
             updatedAt: now,
             isEnabled: old.isEnabled || shouldEnable,
