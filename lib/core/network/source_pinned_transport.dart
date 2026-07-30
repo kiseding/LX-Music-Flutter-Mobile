@@ -14,8 +14,10 @@ typedef SourceDioExecutor = Future<Response<dynamic>> Function(
 );
 typedef SourceSocketStarter = Future<ConnectionTask<Socket>> Function(
   InternetAddress address,
-  int port,
-);
+  int port, {
+  required String host,
+  required bool useTls,
+});
 typedef SourceDioCloser = void Function(Dio dio);
 
 class SourcePinnedTransport {
@@ -105,7 +107,7 @@ class SourcePinnedTransport {
     SourceSocketStarter? startSocket,
   ]) {
     var nextAddress = 0;
-    final starter = startSocket ?? Socket.startConnect;
+    final starter = startSocket ?? startPinnedSocket;
     return (uri, proxyHost, proxyPort) {
       if (proxyHost != null) {
         throw const SourceRequestPolicyException(
@@ -115,8 +117,31 @@ class SourcePinnedTransport {
       }
       final address = request.addresses[nextAddress % request.addresses.length];
       nextAddress++;
-      return starter(address, uri.port);
+      return starter(
+        address,
+        uri.port,
+        host: uri.host,
+        useTls: uri.scheme.toLowerCase() == 'https',
+      );
     };
+  }
+
+  /// TCP-connect to the DNS-validated address, then (for HTTPS) run TLS with
+  /// the original hostname so SNI and certificate verification still match.
+  /// Plain [Socket.startConnect] on HTTPS sends cleartext to port 443 and
+  /// yields nginx's 45-byte "plain HTTP request was sent to HTTPS port".
+  static Future<ConnectionTask<Socket>> startPinnedSocket(
+    InternetAddress address,
+    int port, {
+    required String host,
+    required bool useTls,
+  }) async {
+    final rawTask = await Socket.startConnect(address, port);
+    if (!useTls) return rawTask;
+    final secureFuture = rawTask.socket.then(
+      (socket) => SecureSocket.secure(socket, host: host),
+    );
+    return ConnectionTask.fromSocket(secureFuture, rawTask.cancel);
   }
 
   static Future<Response<dynamic>> _execute(

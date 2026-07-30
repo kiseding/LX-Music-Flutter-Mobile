@@ -306,6 +306,8 @@ class CustomSourceEngine {
               diagnostic['message'] = body['message']?.toString();
             } else if (body is String) {
               diagnostic['bodyLength'] = body.length;
+              diagnostic['bodyPrefix'] =
+                  body.length <= 80 ? body : body.substring(0, 80);
             }
             _emitDiagnostic('http_error_response', diagnostic);
           }

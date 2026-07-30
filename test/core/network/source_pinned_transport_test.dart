@@ -7,8 +7,9 @@ import 'package:lx_music_flutter/core/network/source_pinned_transport.dart';
 import 'package:lx_music_flutter/core/network/source_request_policy.dart';
 
 void main() {
-  ValidatedSourceRequest request() => ValidatedSourceRequest(
-        uri: Uri.parse('https://source.example/path'),
+  ValidatedSourceRequest request({String scheme = 'https'}) =>
+      ValidatedSourceRequest(
+        uri: Uri.parse('$scheme://source.example/path'),
         addresses: [InternetAddress('93.184.216.34')],
         method: 'GET',
         headers: const {},
@@ -65,11 +66,15 @@ void main() {
       () async {
     InternetAddress? dialedAddress;
     int? dialedPort;
+    String? dialedHost;
+    var secure = false;
     final factory = SourcePinnedTransport.connectionFactory(
       request(),
-      (address, port) {
+      (address, port, {required String host, required bool useTls}) {
         dialedAddress = address;
         dialedPort = port;
+        dialedHost = host;
+        secure = useTls;
         throw const SocketException('stop after selection');
       },
     );
@@ -88,6 +93,25 @@ void main() {
     );
     expect(dialedAddress?.address, '93.184.216.34');
     expect(dialedPort, 443);
+    expect(dialedHost, 'source.example');
+    expect(secure, isTrue);
     expect(originalUri.host, 'source.example');
+  });
+
+  test('HTTP pinned connect does not force TLS', () async {
+    var secure = true;
+    final factory = SourcePinnedTransport.connectionFactory(
+      request(scheme: 'http'),
+      (address, port, {required String host, required bool useTls}) {
+        secure = useTls;
+        throw const SocketException('stop after selection');
+      },
+    );
+
+    expect(
+      () => factory(Uri.parse('http://source.example/path'), null, null),
+      throwsA(isA<SocketException>()),
+    );
+    expect(secure, isFalse);
   });
 }
