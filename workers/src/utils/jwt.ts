@@ -14,8 +14,6 @@ export async function getJwtSecret(env: Env, initialize = true): Promise<string>
     return existing.value;
   }
 
-  await env.DB.exec("CREATE TABLE IF NOT EXISTS system_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT (datetime('now')))");
-
   const current = await env.DB.prepare(
     'SELECT value FROM system_settings WHERE key = ?'
   ).bind('jwt_secret').first<{ value: string }>();

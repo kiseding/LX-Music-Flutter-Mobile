@@ -9,7 +9,7 @@
  *
  * Not in scope: search, play URL resolve, lyrics (App + optional custom sources).
  */
-import { Env, jsonResponse } from './lib/response';
+import { Env, jsonResponse, internalServerError } from './lib/response';
 import { BUILD_SHA, BUILD_DATE } from './generated/version';
 import {
   handleUserLogin,
@@ -29,6 +29,7 @@ import {
 } from './routes/user/playlist';
 import { handlePlaylistImport } from './routes/playlist-import';
 import { requireAdmin } from './utils/auth';
+import { checkSchemaReady } from './db/schema';
 export { RateLimiterDO } from './middleware/rateLimitDO';
 
 const VERSION = `${BUILD_SHA} (${BUILD_DATE})`;
@@ -43,6 +44,13 @@ function corsResponse(resp: Response, request: Request): Response {
   headers.set('Access-Control-Max-Age', '86400');
   headers.set('X-Content-Type-Options', 'nosniff');
   return new Response(resp.body, { status: resp.status, headers });
+}
+
+function withRequestId(response: Response, requestId: string): Response {
+  if (response.headers.get('X-Request-ID')) return response;
+  const headers = new Headers(response.headers);
+  headers.set('X-Request-ID', requestId);
+  return new Response(response.body, { status: response.status, headers });
 }
 
 type RouteHandler = (request: Request, url: URL, env: Env, ctx: ExecutionContext) => Promise<Response>;
@@ -75,6 +83,7 @@ const seedPaths = new Set([
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    const requestId = request.headers.get('X-Request-ID') || crypto.randomUUID();
     const url = new URL(request.url);
     // 去掉末尾 /，避免 /api/user/login/ 匹配失败
     let pathname = url.pathname;
@@ -84,37 +93,48 @@ export default {
     const method = request.method.toUpperCase();
 
     if (method === 'OPTIONS') {
-      return corsResponse(new Response(null, { status: 204 }), request);
+      return corsResponse(withRequestId(new Response(null, { status: 204 }), requestId), request);
     }
 
     if (!pathname.startsWith('/api/')) {
-      return corsResponse(jsonResponse({
+      return corsResponse(withRequestId(jsonResponse({
         name: 'lx-music-api',
         version: VERSION,
         hint: 'Configure this URL in the app Sync settings',
         endpoints: ['/api/health', '/api/user/login', '/api/user/list'],
-      }), request);
+      }), requestId), request);
+    }
+
+    if (pathname.startsWith('/api/') && pathname !== '/api/ping' && pathname !== '/api/version') {
+      const readiness = await checkSchemaReady(env);
+      if (!readiness.ready) {
+        console.error({
+          event: 'schema_not_ready',
+          requestId,
+          method,
+          path: pathname,
+          reason: readiness.reason,
+        });
+        return corsResponse(
+          withRequestId(jsonResponse({ error: '服务尚未完成数据库迁移', requestId }, 503), requestId),
+          request,
+        );
+      }
     }
 
     let response: Response;
     try {
       if (seedPaths.has(pathname)) {
-        try {
-          const bootstrap = await seedAdminUser(env, ctx);
-          if (pathname === '/api/user/register' && !bootstrap.ready) {
-            response = jsonResponse({ error: '管理员尚未初始化，请先配置 ADMIN_USERNAME/PASSWORD' }, 503);
-            return corsResponse(response, request);
-          }
-        } catch (seedErr: unknown) {
-          const msg = seedErr instanceof Error ? seedErr.message : String(seedErr);
-          console.error('[seed]', msg);
-          // 登录仍继续尝试（可能 admin 已存在）；种子失败不直接 500 挡登录
+        const bootstrap = await seedAdminUser(env, ctx);
+        if (pathname === '/api/user/register' && !bootstrap.ready) {
+          response = jsonResponse({ error: '管理员尚未初始化，请先配置 ADMIN_USERNAME/PASSWORD' }, 503);
+          return corsResponse(withRequestId(response, requestId), request);
         }
       }
 
       if (pathname.startsWith('/api/admin/users')) {
         response = await handleAdminUsers(request, env);
-        return corsResponse(response, request);
+        return corsResponse(withRequestId(response, requestId), request);
       }
 
       const handler = routes.get(method + pathname);
@@ -132,12 +152,10 @@ export default {
           hint: 'Use POST /api/user/login with JSON body',
         }, 404);
       }
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Server Error';
-      console.error('[api]', method, pathname, message);
-      response = jsonResponse({ error: '服务器错误', detail: message }, 500);
+    } catch (error: unknown) {
+      response = internalServerError(error, { requestId, method, path: pathname });
     }
 
-    return corsResponse(response, request);
+    return corsResponse(withRequestId(response, requestId), request);
   },
 };

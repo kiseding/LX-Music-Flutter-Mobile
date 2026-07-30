@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show ZLibCodec;
+import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_js/flutter_js.dart';
 import 'package:dio/dio.dart';
@@ -49,6 +50,12 @@ List<String> ensureMusicInfoTypes(Map<String, dynamic> meta, String type) {
     }
   }
   return out;
+}
+
+List<int> secureRandomBytes(int size, {Random? random}) {
+  RangeError.checkValueInInterval(size, 0, 65536, 'size');
+  final source = random ?? Random.secure();
+  return List<int>.generate(size, (_) => source.nextInt(256), growable: false);
 }
 
 class CustomSourceEngine {
@@ -409,6 +416,10 @@ class CustomSourceEngine {
       try {
         if (method == 'md5') {
           return md5.convert(utf8.encode(input.toString())).toString();
+        }
+        if (method == 'randomBytes') {
+          final size = input is num ? input.toInt() : int.parse(input.toString());
+          return base64Encode(secureRandomBytes(size));
         }
         if (method == 'aesEncrypt') {
           final dynamic inputData = data['input'];
@@ -811,9 +822,8 @@ class CustomSourceEngine {
         deflate: function(data) { return Promise.resolve(sendMessage('lx_zlib', JSON.stringify({ method: 'deflate', data: data.toString('base64') }))).then(function(result) { return globalThis.lx.utils.buffer.from(result, 'base64'); }); }
       };
       globalThis.lx.utils.crypto.randomBytes = function(size) {
-        var bytes = [];
-        for (var i = 0; i < size; i++) bytes.push(Math.floor(Math.random() * 256));
-        return globalThis.lx.utils.buffer.from(bytes);
+        var data = sendMessage('lx_crypto', JSON.stringify({ method: 'randomBytes', input: size }));
+        return globalThis.lx.utils.buffer.from(data, 'base64');
       };
       globalThis.Buffer = globalThis.lx.utils.buffer;
       globalThis._callbacks = {};

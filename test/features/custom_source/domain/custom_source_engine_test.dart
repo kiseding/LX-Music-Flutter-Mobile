@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lx_music_flutter/features/custom_source/domain/custom_source_engine.dart';
 
 void main() {
   test('LX bridge exposes the Desktop event contract', () {
@@ -60,5 +61,30 @@ void main() {
       bridge,
       isNot(contains("_emitError('Source does not support")),
     );
+  });
+
+  test('secureRandomBytes returns independent bytes with the requested shape', () {
+    final first = secureRandomBytes(32);
+    final second = secureRandomBytes(32);
+
+    expect(first, hasLength(32));
+    expect(first.every((byte) => byte >= 0 && byte <= 255), isTrue);
+    expect(second, hasLength(32));
+    expect(second, isNot(equals(first)));
+    expect(() => secureRandomBytes(-1), throwsRangeError);
+    expect(() => secureRandomBytes(65537), throwsRangeError);
+  });
+
+  test('LX randomBytes delegates to the Dart crypto bridge', () {
+    final bridge = File(
+      'lib/features/custom_source/domain/custom_source_engine.dart',
+    ).readAsStringSync();
+    final randomBytesBlock = RegExp(
+      r'globalThis\.lx\.utils\.crypto\.randomBytes = function\(size\) \{([\s\S]*?)\n      \};',
+    ).firstMatch(bridge)!.group(1)!;
+
+    expect(bridge, contains("method == 'randomBytes'"));
+    expect(randomBytesBlock, contains("sendMessage('lx_crypto'"));
+    expect(randomBytesBlock, isNot(contains('Math.random')));
   });
 }

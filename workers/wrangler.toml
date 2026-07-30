@@ -1,15 +1,30 @@
 name = "lx-music-api"
 main = "src/index.ts"
-compatibility_date = "2024-12-01"
+compatibility_date = "2026-07-29"
 compatibility_flags = ["nodejs_compat"]
 
 # 确保免费套餐下 *.workers.dev 可访问
 workers_dev = true
 
+[observability]
+enabled = true
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 0.1
+invocation_logs = true
+persist = true
+
+[observability.traces]
+enabled = true
+head_sampling_rate = 0.01
+persist = true
+
 [[d1_databases]]
 binding = "DB"
 database_name = "lx-music-api"
 database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+migrations_dir = "migrations"
 
 [[kv_namespaces]]
 binding = "CACHE"

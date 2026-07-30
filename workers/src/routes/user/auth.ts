@@ -4,29 +4,39 @@
 import { Env, jsonResponse, requireJsonContentType } from '../../lib/response';
 import { signToken, verifyToken, hashPassword, verifyPassword, checkPasswordLength } from '../../utils/jwt';
 import { getUserId, isAdmin, requireAuth } from '../../utils/auth';
-import { RateLimiter, getClientIP } from '../../middleware/rateLimit';
-import { SCHEMA_SQL } from '../../db/schema';
+import { RateLimiter, RateLimiterUnavailableError, getClientIP } from '../../middleware/rateLimit';
 
-// Defensive user-lookup: if the SELECT fails with "no such column:
-// token_version" (v1 schema pre-migration), run the patch inline and
-// retry once. This is the last line of defense if the seed's
-// applySchemaPatches() didn't run or didn't take effect — better than
-// returning 500 on every login.
+const LOGIN_IP_MAX = 20;
+const LOGIN_ACCOUNT_MAX = 5;
+const LOGIN_WINDOW_SECONDS = 60;
+const REGISTER_IP_MAX = 10;
+const REGISTER_ACCOUNT_MAX = 3;
+const REGISTER_WINDOW_SECONDS = 3600;
+
+function normalizeUsername(username: string): string {
+  return username.trim().toLowerCase();
+}
+
+function rateLimitUnavailableResponse(): Response {
+  return jsonResponse(
+    { error: '认证服务暂时不可用' },
+    503,
+    { 'Retry-After': '60' },
+  );
+}
+
 async function selectUserByUsername(
-  env: Env, username: string
+  env: Env,
+  username: string,
 ): Promise<{ id: number; password_hash: string; role: string; token_version: number } | null> {
-  const sql = 'SELECT id, password_hash, role, token_version FROM users WHERE username = ?';
-  try {
-    return await env.DB.prepare(sql).bind(username).first<{ id: number; password_hash: string; role: string; token_version: number }>();
-  } catch (e: any) {
-    if (String(e?.message || '').includes('no such column')) {
-      console.log('[login] missing column detected, running patch inline');
-      _patchesApplied = false;
-      await applySchemaPatches(env);
-      return await env.DB.prepare(sql).bind(username).first<{ id: number; password_hash: string; role: string; token_version: number }>();
-    }
-    throw e;
-  }
+  return env.DB.prepare(
+    'SELECT id, password_hash, role, token_version FROM users WHERE username = ?',
+  ).bind(username).first<{
+    id: number;
+    password_hash: string;
+    role: string;
+    token_version: number;
+  }>();
 }
 
 export async function handleUserLogin(request: Request, env: Env): Promise<Response> {
@@ -46,11 +56,20 @@ export async function handleUserLogin(request: Request, env: Env): Promise<Respo
   if (!/^[\w\-一-鿿]+$/.test(username)) {
     return jsonResponse({ error: '用户名只能包含字母、数字、下划线、中文字符' }, 400);
   }
-  const limiter = new RateLimiter(env.RATE_LIMITER, 'rl:login');
-  const rateKey = loginRateLimitKey(getClientIP(request), username);
-  const rateCheck = await limiter.check(rateKey, 5, 60);
-  if (!rateCheck.allowed) {
-    return jsonResponse({ error: '请求过于频繁，请稍后再试', retryAfter: Math.ceil((rateCheck.resetAt - Date.now()) / 1000) }, 429);
+  const normalized = normalizeUsername(username);
+  const ip = getClientIP(request);
+  const limiter = new RateLimiter(env.RATE_LIMITER);
+  try {
+    const rateCheck = await limiter.check(ip, [
+      { key: 'ip', max: LOGIN_IP_MAX, windowSeconds: LOGIN_WINDOW_SECONDS },
+      { key: `account:${normalized}`, max: LOGIN_ACCOUNT_MAX, windowSeconds: LOGIN_WINDOW_SECONDS },
+    ]);
+    if (!rateCheck.allowed) {
+      return jsonResponse({ error: '请求过于频繁，请稍后再试', retryAfter: Math.ceil((rateCheck.resetAt - Date.now()) / 1000) }, 429);
+    }
+  } catch (error) {
+    if (error instanceof RateLimiterUnavailableError) return rateLimitUnavailableResponse();
+    throw error;
   }
   // Login: don't enforce new-password length cap. Existing users may have
   // passwords set before the cap was added. verifyPassword itself does
@@ -74,21 +93,13 @@ export async function handleUserLogin(request: Request, env: Env): Promise<Respo
 
   const token = await signToken({ sub: user.id, username, role: user.role, tv: user.token_version }, '7d', env);
 
-  // Reset rate limit on successful login
-  await limiter.reset(rateKey);
+  // Reset only the account bucket on successful login; keep shared IP bucket.
+  await limiter.reset(ip, [`account:${normalized}`]);
 
   return jsonResponse({ token, username, role: user.role });
 }
 
 export async function handleUserRegister(request: Request, env: Env): Promise<Response> {
-  // P1-1: limit runs in a Durable Object.
-  const regLimiter = new RateLimiter(env.RATE_LIMITER, 'rl:register');
-  const ip = getClientIP(request);
-  const rateCheck = await regLimiter.check(ip, 10, 3600);
-  if (!rateCheck.allowed) {
-    return jsonResponse({ error: '注册过于频繁，请稍后再试' }, 429);
-  }
-
   const ctErr = requireJsonContentType(request);
   if (ctErr) return ctErr;
 
@@ -107,6 +118,22 @@ export async function handleUserRegister(request: Request, env: Env): Promise<Re
   if (!pwCheck.ok) return jsonResponse({ error: pwCheck.reason }, 400);
   if (!/^[\w\-一-鿿]+$/.test(username)) {
     return jsonResponse({ error: '用户名只能包含字母、数字、下划线、中文字符' }, 400);
+  }
+
+  const normalized = normalizeUsername(username);
+  const ip = getClientIP(request);
+  const regLimiter = new RateLimiter(env.RATE_LIMITER);
+  try {
+    const rateCheck = await regLimiter.check(ip, [
+      { key: 'ip', max: REGISTER_IP_MAX, windowSeconds: REGISTER_WINDOW_SECONDS },
+      { key: `account:${normalized}`, max: REGISTER_ACCOUNT_MAX, windowSeconds: REGISTER_WINDOW_SECONDS },
+    ]);
+    if (!rateCheck.allowed) {
+      return jsonResponse({ error: '注册过于频繁，请稍后再试' }, 429);
+    }
+  } catch (error) {
+    if (error instanceof RateLimiterUnavailableError) return rateLimitUnavailableResponse();
+    throw error;
   }
 
   const existing = await env.DB.prepare('SELECT id FROM users WHERE username = ?').bind(username).first();
@@ -188,7 +215,7 @@ const SEED_LOCK_TTL = 90;
 // call put(), and both think they hold the lock. That's OK — the real
 // race protection is INSERT OR IGNORE in the admin user insert below
 // (UNIQUE(username) drops the duplicate). The lock just avoids duplicate
-// schema-exec work.
+// admin-creation work.
 async function tryAcquireSeedLock(env: Env): Promise<boolean> {
   const cur = await env.CACHE.get(SEED_LOCK_KEY);
   if (cur) return false;
@@ -199,119 +226,10 @@ async function releaseSeedLock(env: Env): Promise<void> {
   try { await env.CACHE.delete(SEED_LOCK_KEY); } catch {}
 }
 
-// Self-healing v1→v2 schema patches.
-//
-// Runs OUTSIDE the seed lock so every isolate applies the patches
-// before its first login/verify query — not just the one that happened
-// to win the seed lock. The patch logic itself is idempotent at the
-// SQL level (PRAGMA check + conditional ALTER), and D1 serializes
-// schema changes so two simultaneous ALTERs against the same column
-// resolve as one success + one "duplicate column" error which we swallow.
-//
-// Per-isolate memoization avoids the PRAGMA roundtrip on every request
-// after the first. The memo is intentionally NOT cross-isolate — every
-// new isolate re-checks, so a slow first request from one isolate
-// can't poison another.
-let _patchesApplied = false;
-let _lastPatchError: string | null = null;
-export async function applySchemaPatches(env: Env): Promise<void> {
-  if (_patchesApplied) return;
-  try {
-    const cols = await env.DB.prepare("PRAGMA table_info('users')").all<{ name: string }>();
-    const hasTV = (cols.results || []).some(c => c.name === 'token_version');
-    if (!hasTV) {
-      console.log('[seed] P1-9: adding users.token_version');
-      try {
-        await env.DB.exec("ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0");
-        console.log('[seed] P1-9: column added');
-      } catch (e: any) {
-        const msg = String(e?.message || '').toLowerCase();
-        if (msg.includes('duplicate') || msg.includes('already exists')) {
-          console.log('[seed] P1-9: column already exists (race, ignored)');
-        } else {
-          console.error('[seed] P1-9: ALTER failed:', e?.message);
-          throw e;
-        }
-      }
-    } else {
-      console.log('[seed] P1-9: column already exists');
-    }
-
-    // P0-1 fix: dedup existing playlist_songs rows and create the UNIQUE
-    // INDEX that prevents future duplicates. Two concurrent writes (full
-    // love-list save + incremental add) used to insert the same song twice
-    // because there was no UNIQUE constraint on (playlist_id, user_id,
-    // songmid, source). We keep the lowest rowid for each duplicate set so
-    // the auto-incremented id stays stable for any external references.
-    // Step 1: empty-songmid rows from v1 block a non-partial unique index.
-    // Make them unique by tagging rowid.
-    await env.DB.exec(
-      `UPDATE playlist_songs SET songmid = '_empty_' || rowid WHERE songmid = ''`
-    );
-    // Step 2: dedup across FULL key.
-    const dupes = await env.DB.prepare(
-      `SELECT COUNT(*) AS n FROM (
-         SELECT playlist_id, user_id, songmid, source, COUNT(*) AS c
-         FROM playlist_songs
-         GROUP BY playlist_id, user_id, songmid, source
-         HAVING c > 1
-       )`
-    ).first<{ n: number }>();
-    const dupeCount = Number(dupes?.n ?? 0);
-    if (dupeCount > 0) {
-      console.log(`[seed] P0-1: deduping ${dupeCount} duplicate playlist_songs sets`);
-      const del = await env.DB.prepare(
-        `DELETE FROM playlist_songs
-         WHERE rowid NOT IN (
-           SELECT MIN(rowid) FROM playlist_songs
-           GROUP BY playlist_id, user_id, songmid, source
-         )`
-      ).run();
-      console.log(`[seed] P0-1: removed ${del.meta?.changes ?? 0} duplicate rows`);
-    }
-    // Drop any existing incarnation of this index (the original partial
-    // form blocked handleLoveAdd / saveLoveList INSERT...ON CONFLICT
-    // because SQLite refuses to target a partial index from a non-WHERE
-    // INSERT). CREATE INDEX IF NOT EXISTS won't notice the schema
-    // mismatch — same name, different definition — so we drop first.
-    let reindexErr: string | null = null;
-    try {
-      await env.DB.exec(`DROP INDEX IF EXISTS uniq_ps_love_song`);
-      await env.DB.exec(`CREATE UNIQUE INDEX uniq_ps_love_song ON playlist_songs(playlist_id, user_id, songmid, source)`);
-    } catch (e: any) {
-      reindexErr = String(e?.message || e);
-      console.error('[seed] P0-1: UNIQUE INDEX creation failed:', reindexErr);
-      // don't re-throw — we want applySchemaPatches to mark itself applied so the next request
-      // doesn't keep retrying. The diagnostic endpoint can read _lastPatchError.
-      _lastPatchError = reindexErr;
-    }
-
-    _patchesApplied = true;
-  } catch (e) {
-    console.error('[seed] P1-9 patch failed:', e);
-  }
-}
-
-// Public entry point so diagnostic / repair endpoints can force-run the
-// patches without going through the full seed flow.
-
-
-export function getLastPatchError(): string | null {
-  return _lastPatchError;
-}
-
-export async function ensureSchemaPatches(env: Env): Promise<void> {
-  _patchesApplied = false;
-  await applySchemaPatches(env);
-}
-
 export interface BootstrapState { ready: boolean; reason?: string }
 
 export async function seedAdminUser(env: Env, ctx?: ExecutionContext): Promise<BootstrapState> {
   if (_seeded) return { ready: true };
-
-  try { await env.DB.exec(SCHEMA_SQL); } catch (e) { console.error('schema init error:', e); }
-  await applySchemaPatches(env);
 
   const existingAdmin = await env.DB.prepare("SELECT id FROM users WHERE role = 'admin' LIMIT 1").first();
   if (existingAdmin) {
@@ -324,11 +242,11 @@ export async function seedAdminUser(env: Env, ctx?: ExecutionContext): Promise<B
   const username = env.ADMIN_USERNAME;
   const password = env.ADMIN_PASSWORD;
   if (!username || !password) {
-    console.error('[lx-music-api] ADMIN_USERNAME and ADMIN_PASSWORD must be set before registration.');
+    console.error({ event: 'admin_bootstrap_missing_credentials' });
     return { ready: false, reason: 'admin credentials are not configured' };
   }
   if (password.length > 128) {
-    console.error('[lx-music-api] ADMIN_PASSWORD too long (>128 chars).');
+    console.error({ event: 'admin_bootstrap_invalid_credentials' });
     return { ready: false, reason: 'admin password is invalid' };
   }
 
@@ -430,8 +348,4 @@ export async function handleAdminUsers(request: Request, env: Env): Promise<Resp
   }
 
   return jsonResponse({ error: 'Method not allowed' }, 405);
-}
-
-export function loginRateLimitKey(ip: string, username: string): string {
-  return `${ip}:${username.trim().toLowerCase()}`;
 }

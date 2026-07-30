@@ -29,16 +29,35 @@ export interface Env {
   TINYAPI_KEY?: string;
 }
 
-export function jsonResponse(data: any, status = 200): Response {
+export function jsonResponse(data: unknown, status = 200, extraHeaders?: HeadersInit): Response {
   // charset=utf-8 is required so non-ASCII characters in error messages
   // (Chinese / emoji / accented Latin) survive the browser's strict-mode
   // JSON parsing without the SyntaxError fallback that fires when
   // Content-Type lacks a charset and the browser guesses Latin-1 / GBK
   // for non-ASCII bytes.
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: { 'Content-Type': 'application/json; charset=utf-8' },
+  const headers = new Headers(extraHeaders);
+  headers.set('Content-Type', 'application/json; charset=utf-8');
+  return new Response(JSON.stringify(data), { status, headers });
+}
+
+export interface ErrorContext {
+  requestId: string;
+  method: string;
+  path: string;
+}
+
+export function internalServerError(error: unknown, context: ErrorContext): Response {
+  console.error({
+    event: 'unhandled_request_error',
+    ...context,
+    error: error instanceof Error ? error.message : String(error),
+    stack: error instanceof Error ? error.stack : undefined,
   });
+  return jsonResponse(
+    { error: '服务器错误', requestId: context.requestId },
+    500,
+    { 'X-Request-ID': context.requestId },
+  );
 }
 
 export function requireJsonContentType(request: Request): Response | null {
