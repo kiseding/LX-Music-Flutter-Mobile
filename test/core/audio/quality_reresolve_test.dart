@@ -330,7 +330,10 @@ void main() {
       resolveGate.release.complete();
       await load;
 
-      expect(player.sourceLoadCalls, sourceLoads + 1);
+      expect(
+        player.sourceLoadCalls,
+        sourceLoads + (selection.name == 'queue item' ? 1 : 2),
+      );
       expect((player.loadedSource as ProgressiveAudioSource).tag.id, 'target');
       expect(player.playing, isFalse);
     });
@@ -908,7 +911,7 @@ class _QualityAudioPlayer extends AudioPlayer {
     loadedSource = source;
     _position = initialPosition ?? Duration.zero;
     initialPositions.add(_position);
-    final gate = _sourceInstallGate;
+    final gate = source is SilenceAudioSource ? null : _sourceInstallGate;
     if (gate != null) {
       _sourceInstallGate = null;
       gate.started.complete();

@@ -33,6 +33,123 @@ void main() {
     expect(player.maxConcurrentMutations, 1);
   });
 
+  test('temporary source plays without becoming authoritative', () async {
+    final player = _SerializedAudioPlayer();
+    final coordinator = PlaybackCommandCoordinator(player);
+    addTearDown(player.dispose);
+    final request = coordinator.requestSource(
+      mediaId: 'B',
+      occurrenceId: 2,
+      position: Duration.zero,
+    );
+    await coordinator.recordExplicitPlayIntent();
+
+    final installed = await coordinator.installTemporarySource(
+      request,
+      SilenceAudioSource(duration: const Duration(days: 1)),
+    );
+
+    expect(installed, isTrue);
+    expect(player.calls, ['source', 'play']);
+    expect(player.playing, isTrue);
+    expect(coordinator.installedSourceIsAuthoritative, isFalse);
+  });
+
+  test('temporary source superseded during install is not authoritative',
+      () async {
+    final player = _SerializedAudioPlayer();
+    final coordinator = PlaybackCommandCoordinator(player);
+    addTearDown(player.dispose);
+    final first = coordinator.requestSource(
+      mediaId: 'A',
+      occurrenceId: 1,
+      position: Duration.zero,
+    );
+    await coordinator.commitSource(
+      first,
+      AudioSource.uri(Uri.parse('file:///tmp/A.mp3')),
+    );
+    expect(coordinator.installedSourceIsAuthoritative, isTrue);
+
+    final request = coordinator.requestSource(
+      mediaId: 'B',
+      occurrenceId: 2,
+      position: Duration.zero,
+    );
+    await coordinator.recordExplicitPlayIntent();
+    final sourceGate = player.gateNextMutation();
+
+    final install = coordinator.installTemporarySource(
+      request,
+      SilenceAudioSource(duration: const Duration(days: 1)),
+    );
+    await sourceGate.started.future;
+    coordinator.requestSource(
+      mediaId: 'C',
+      occurrenceId: 3,
+      position: Duration.zero,
+    );
+    sourceGate.release.complete();
+
+    expect(await install, isFalse);
+    expect(coordinator.installedSourceIsAuthoritative, isFalse);
+    expect(coordinator.installedSourceToken, isNull);
+  });
+
+  test('temporary play failure does not retry the same intent', () async {
+    final player = _LifecycleAudioPlayer();
+    final errors = <String>[];
+    final coordinator = PlaybackCommandCoordinator(
+      player,
+      onError: (operation, _, __) => errors.add(operation),
+    );
+    addTearDown(player.dispose);
+    final request = coordinator.requestSource(
+      mediaId: 'B',
+      occurrenceId: 2,
+      position: Duration.zero,
+    );
+    await coordinator.recordExplicitPlayIntent();
+
+    final installed = await coordinator.installTemporarySource(
+      request,
+      SilenceAudioSource(duration: const Duration(days: 1)),
+    );
+    expect(installed, isTrue);
+    expect(player.playCalls, 1);
+
+    player.failCurrentPlay();
+    await pumpEventQueue();
+    await coordinator.reconcilePlayingIntent();
+    await pumpEventQueue();
+
+    expect(errors, ['play']);
+    expect(player.playCalls, 1);
+    expect(player.playing, isFalse);
+  });
+
+  test('discardTemporarySource pauses orphan silence for failed token',
+      () async {
+    final player = _SerializedAudioPlayer();
+    final coordinator = PlaybackCommandCoordinator(player);
+    addTearDown(player.dispose);
+    final request = coordinator.requestSource(
+      mediaId: 'B',
+      occurrenceId: 2,
+      position: Duration.zero,
+    );
+    await coordinator.recordExplicitPlayIntent();
+    await coordinator.installTemporarySource(
+      request,
+      SilenceAudioSource(duration: const Duration(days: 1)),
+    );
+    expect(player.playing, isTrue);
+
+    await coordinator.discardTemporarySource(request);
+    expect(player.playing, isFalse);
+    expect(coordinator.installedSourceIsAuthoritative, isFalse);
+  });
+
   test('stopAndWait drains a queued source install before native stop',
       () async {
     final player = _SerializedAudioPlayer();
@@ -748,6 +865,7 @@ class _LifecycleAudioPlayer extends AudioPlayer {
   void failCurrentPlay() {
     final lifecycle = _playLifecycle;
     _playLifecycle = null;
+    _playing = false;
     if (lifecycle != null && !lifecycle.isCompleted) {
       lifecycle.completeError(StateError('play'));
     }

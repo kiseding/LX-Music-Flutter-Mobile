@@ -937,7 +937,9 @@ class _InterruptionAudioPlayer extends AudioPlayer {
     int? initialIndex,
     Duration? initialPosition,
   }) async {
-    final gate = _sourceGates.isEmpty ? null : _sourceGates.removeAt(0);
+    final gate = source is SilenceAudioSource || _sourceGates.isEmpty
+        ? null
+        : _sourceGates.removeAt(0);
     if (gate != null) {
       gate.started.complete();
       await gate.release.future;

@@ -332,6 +332,8 @@ void main() {
     final navigation = handler.skipToNext();
     await resolverStarted.future;
 
+    expect(player.sourceLoadCalls, 2);
+    expect(player.loadedSource, isA<SilenceAudioSource>());
     expect(player.pauseCalls, pausesBeforeSkip);
     expect(player.playing, isTrue);
     expect(handler.mediaItem.value?.id, 'B');
@@ -341,7 +343,108 @@ void main() {
 
     releaseResolver.complete();
     await navigation;
+    expect(player.sourceLoadCalls, 3);
+    expect(player.loadedSource, isA<ProgressiveAudioSource>());
     expect(player.playing, isTrue);
+  });
+
+  test('pause during next resolution keeps the target paused', () async {
+    final player = _PlaybackStateAudioPlayer()
+      ..sourceInstallProcessingState = ProcessingState.ready;
+    final handler = LxAudioHandler(player: player);
+    addTearDown(player.dispose);
+    final resolverStarted = Completer<void>();
+    final releaseResolver = Completer<void>();
+    handler.urlResolver = (id, [extras]) async {
+      if (id == 'B') {
+        resolverStarted.complete();
+        await releaseResolver.future;
+      }
+      return 'file:///tmp/$id.mp3';
+    };
+    await handler.setPlaylist(const [
+      MediaItem(id: 'A', title: 'A'),
+      MediaItem(id: 'B', title: 'B'),
+    ]);
+
+    final navigation = handler.skipToNext();
+    await resolverStarted.future;
+    expect(player.loadedSource, isA<SilenceAudioSource>());
+    await handler.pause();
+    releaseResolver.complete();
+    await navigation;
+
+    expect(handler.mediaItem.value?.id, 'B');
+    expect(player.loadedSource, isA<ProgressiveAudioSource>());
+    expect(player.playing, isFalse);
+    expect(handler.playbackState.value.playing, isFalse);
+  });
+
+  test('previous installs silence keepalive before target source', () async {
+    final player = _PlaybackStateAudioPlayer()
+      ..sourceInstallProcessingState = ProcessingState.ready;
+    final handler = LxAudioHandler(player: player);
+    addTearDown(player.dispose);
+    final resolverStarted = Completer<void>();
+    final releaseResolver = Completer<void>();
+    handler.urlResolver = (id, [extras]) async {
+      if (id == 'A') {
+        resolverStarted.complete();
+        await releaseResolver.future;
+      }
+      return 'file:///tmp/$id.mp3';
+    };
+    await handler.setPlaylist(const [
+      MediaItem(id: 'A', title: 'A'),
+      MediaItem(id: 'B', title: 'B'),
+    ], initialIndex: 1);
+
+    final navigation = handler.skipToPrevious();
+    await resolverStarted.future;
+    expect(player.loadedSource, isA<SilenceAudioSource>());
+    expect(player.playing, isTrue);
+
+    releaseResolver.complete();
+    await navigation;
+    expect(player.loadedSource, isA<ProgressiveAudioSource>());
+    expect(handler.mediaItem.value?.id, 'A');
+    expect(player.playing, isTrue);
+  });
+
+  test('null resolver discards temporary silence keepalive', () async {
+    final player = _PlaybackStateAudioPlayer()
+      ..sourceInstallProcessingState = ProcessingState.ready;
+    final handler = LxAudioHandler(player: player);
+    addTearDown(player.dispose);
+    final resolverStarted = Completer<void>();
+    final releaseResolver = Completer<void>();
+    handler.urlResolver = (id, [extras]) async {
+      if (id == 'B') {
+        resolverStarted.complete();
+        await releaseResolver.future;
+        return null;
+      }
+      return 'file:///tmp/$id.mp3';
+    };
+    await handler.setPlaylist(const [
+      MediaItem(id: 'A', title: 'A'),
+      MediaItem(id: 'B', title: 'B'),
+    ]);
+
+    final navigation = handler.skipToNext();
+    await resolverStarted.future;
+    expect(player.loadedSource, isA<SilenceAudioSource>());
+    expect(player.playing, isTrue);
+
+    releaseResolver.complete();
+    await Future<void>.delayed(Duration.zero);
+    await pumpEventQueue();
+    expect(player.loadedSource, isA<SilenceAudioSource>());
+    expect(player.playing, isFalse);
+
+    // Drain the multi-item 5s fallback without blocking the assertion above.
+    await Future<void>.delayed(const Duration(seconds: 5));
+    await navigation;
   });
 
   test('selection does not publish metadata before native pause completes',
@@ -625,7 +728,7 @@ void main() {
     expect(handler.currentQueueIndex, 2);
     expect(handler.mediaItem.value?.id, 'C');
     expect(errors, isEmpty);
-    expect(player.sourceLoadCalls, 3);
+    expect(player.sourceLoadCalls, 4);
   });
 
   test('handler disposal cancels streams and disposes native player once',
@@ -1068,6 +1171,7 @@ class _PlaybackStateAudioPlayer extends AudioPlayer {
   int processingStateListenCancels = 0;
   int disposeCalls = 0;
   int stopCalls = 0;
+  AudioSource? loadedSource;
   Object? playbackCancelError;
   Object? processingCancelError;
   Object? stopError;
@@ -1174,20 +1278,24 @@ class _PlaybackStateAudioPlayer extends AudioPlayer {
     Duration? initialPosition,
   }) async {
     sourceLoadCalls++;
-    final sourceGate =
-        _sourceInstallGates.isEmpty ? null : _sourceInstallGates.removeAt(0);
+    loadedSource = source;
+    final isKeepalive = source is SilenceAudioSource;
+    final sourceGate = isKeepalive || _sourceInstallGates.isEmpty
+        ? null
+        : _sourceInstallGates.removeAt(0);
     if (sourceGate != null) {
       sourceGate.started.complete();
       await sourceGate.release.future;
     }
-    final failureGate =
-        _sourceFailureGates.isEmpty ? null : _sourceFailureGates.removeAt(0);
+    final failureGate = isKeepalive || _sourceFailureGates.isEmpty
+        ? null
+        : _sourceFailureGates.removeAt(0);
     if (failureGate != null) {
       failureGate.started.complete();
       await failureGate.release.future;
       throw StateError('source install');
     }
-    if (failNextSourceInstall) {
+    if (!isKeepalive && failNextSourceInstall) {
       failNextSourceInstall = false;
       throw StateError('source install');
     }

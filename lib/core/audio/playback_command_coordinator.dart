@@ -48,6 +48,7 @@ class PlaybackCommandCoordinator {
   int _sourceToken = 0;
   _DesiredSource? _desiredSource;
   int? _installedSourceToken;
+  int? _temporarySourceToken;
   bool _stopDesired = false;
   bool _stopApplied = false;
   bool _desiredPlaying = false;
@@ -150,6 +151,78 @@ class PlaybackCommandCoordinator {
         : const SourceCommitStale();
   }
 
+  Future<bool> installTemporarySource(int token, AudioSource source) async {
+    if (_shutdown || _desiredSource?.token != token) return false;
+    final previous = _tail;
+    final next = () async {
+      await previous;
+      if (_shutdown || _desiredSource?.token != token) return false;
+      try {
+        await _player.setAudioSource(source, initialPosition: Duration.zero);
+      } catch (error, stackTrace) {
+        _onError?.call('temporarySource', error, stackTrace);
+        return false;
+      }
+      // Native silence replaced the previous source even if this request is
+      // already stale. Clear the old authoritative token so bookkeeping cannot
+      // claim the previous track is still installed.
+      _installedSourceToken = null;
+      _activePlayCommandToken = null;
+      _lastPlayAttemptRevision = -1;
+      if (_shutdown || _desiredSource?.token != token) {
+        if (_temporarySourceToken == token) {
+          _temporarySourceToken = null;
+        }
+        _onStateChanged?.call();
+        return false;
+      }
+      _temporarySourceToken = token;
+      if (_effectivePlaying && !_player.playing) {
+        final playToken = ++_playCommandToken;
+        _activePlayCommandToken = playToken;
+        _playSourceTokens[playToken] = token;
+        try {
+          final lifecycle = _player.play();
+          unawaited(lifecycle.then(
+            (_) => _onPlayLifecycleComplete(playToken),
+            onError: (Object error, StackTrace stackTrace) {
+              _onPlayLifecycleError(playToken, error, stackTrace);
+            },
+          ));
+        } catch (error, stackTrace) {
+          _onPlayLifecycleError(playToken, error, stackTrace);
+          return false;
+        }
+      }
+      _onStateChanged?.call();
+      return true;
+    }();
+    _tail = next.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace __) {},
+    );
+    return next;
+  }
+
+  Future<void> discardTemporarySource(int token) async {
+    if (_shutdown || _temporarySourceToken != token) return;
+    final previous = _tail;
+    final next = () async {
+      await previous;
+      if (_shutdown || _temporarySourceToken != token) return;
+      final playToken = _activePlayCommandToken;
+      if (playToken != null) {
+        _playEndReasons[playToken] = _PlayEndReason.pause;
+      }
+      if (_player.playing || playToken != null) await _player.pause();
+      _temporarySourceToken = null;
+      _activePlayCommandToken = null;
+      _onStateChanged?.call();
+    }();
+    _tail = next.catchError((Object _, StackTrace __) {});
+    await next;
+  }
+
   Future<void> recordExplicitPlayIntent() {
     if (_shutdown) return Future<void>.value();
     _intentRevision++;
@@ -207,6 +280,7 @@ class PlaybackCommandCoordinator {
   Future<void> recoverIdleSource() {
     if (_shutdown) return Future<void>.value();
     _installedSourceToken = null;
+    _temporarySourceToken = null;
     _activePlayCommandToken = null;
     return _markDirty();
   }
@@ -372,6 +446,7 @@ class PlaybackCommandCoordinator {
         }
         _stopApplied = true;
         _installedSourceToken = null;
+        _temporarySourceToken = null;
         _activePlayCommandToken = null;
         _notifyIfCurrent(commandRevision);
         return;
@@ -397,6 +472,7 @@ class PlaybackCommandCoordinator {
           return;
         }
         _installedSourceToken = desiredSource.token;
+        _temporarySourceToken = null;
         _activePlayCommandToken = null;
         _lastPlayAttemptRevision = -1;
         sourceChanged = true;
@@ -419,8 +495,9 @@ class PlaybackCommandCoordinator {
         _notifyIfCurrent(commandRevision);
       }
 
-      final sourceReady = _desiredSource != null &&
-          _installedSourceToken == _desiredSource!.token;
+      final sourceReady = desiredSource != null &&
+          (_installedSourceToken == desiredSource.token ||
+              _temporarySourceToken == desiredSource.token);
       if (!_effectivePlaying) {
         if (_player.playing || _activePlayCommandToken != null) {
           final playToken = _activePlayCommandToken;
@@ -439,15 +516,18 @@ class PlaybackCommandCoordinator {
 
       if ((sourceChanged || !_player.playing) &&
           _activePlayCommandToken == null) {
+        final playableSourceToken =
+            _installedSourceToken ?? _temporarySourceToken;
+        if (playableSourceToken == null) return;
         if (_failedPlayIntentRevision == _intentRevision &&
-            _failedPlaySourceToken == _installedSourceToken) {
+            _failedPlaySourceToken == playableSourceToken) {
           return;
         }
         if (_lastPlayAttemptRevision == _revision) return;
         _lastPlayAttemptRevision = _revision;
         final playToken = ++_playCommandToken;
         _activePlayCommandToken = playToken;
-        _playSourceTokens[playToken] = _installedSourceToken!;
+        _playSourceTokens[playToken] = playableSourceToken;
         try {
           final lifecycle = _player.play();
           _notifyIfCurrent(commandRevision);
@@ -507,7 +587,7 @@ class PlaybackCommandCoordinator {
     _playSourceTokens.remove(token);
     _activePlayCommandToken = null;
     _failedPlayIntentRevision = _intentRevision;
-    _failedPlaySourceToken = _installedSourceToken;
+    _failedPlaySourceToken = _installedSourceToken ?? _temporarySourceToken;
     _onError?.call('play', error, stackTrace);
     _onStateChanged?.call();
     _markDirty();
@@ -517,7 +597,8 @@ class PlaybackCommandCoordinator {
     final sourceToken = _playSourceTokens[token];
     return _activePlayCommandToken == token &&
         sourceToken != null &&
-        sourceToken == _installedSourceToken &&
+        (sourceToken == _installedSourceToken ||
+            sourceToken == _temporarySourceToken) &&
         sourceToken == _desiredSource?.token;
   }
 

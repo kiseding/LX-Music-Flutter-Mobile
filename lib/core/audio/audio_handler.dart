@@ -1276,12 +1276,23 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       position: Duration.zero,
     );
 
-    // 系统媒体命令可能在锁屏后台执行。解析新源期间必须让真实播放器继续
-    // 输出，否则 iOS 会挂起 isolate，后续 commitSource 永远没有机会执行。
+    // 锁屏后台解析可能包含完整无损下载。先播放长静音，避免旧曲在下载
+    // 完成前自然结束后 iOS 挂起 isolate。
+    final keepaliveInstalled = await _commands.installTemporarySource(
+      sourceCommandToken,
+      SilenceAudioSource(duration: const Duration(days: 1)),
+    );
+    if (!keepaliveInstalled &&
+        !_commands.ownsSourceRequest(sourceCommandToken, nextOccurrence)) {
+      return;
+    }
     if (seamless) _userWantsPlay = true;
     final liveIndex = _indexOfOccurrence(nextOccurrence);
     if (liveIndex < 0 ||
         !_commands.ownsSourceRequest(sourceCommandToken, nextOccurrence)) {
+      if (keepaliveInstalled) {
+        await _commands.discardTemporarySource(sourceCommandToken);
+      }
       return;
     }
     await _loadQueueItem(
@@ -1331,10 +1342,20 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       occurrenceId: previousOccurrence,
       position: Duration.zero,
     );
-    // 与下一首相同，锁屏后台解析期间不能暂停真实播放器。
+    final keepaliveInstalled = await _commands.installTemporarySource(
+      sourceCommandToken,
+      SilenceAudioSource(duration: const Duration(days: 1)),
+    );
+    if (!keepaliveInstalled &&
+        !_commands.ownsSourceRequest(sourceCommandToken, previousOccurrence)) {
+      return;
+    }
     final liveIndex = _indexOfOccurrence(previousOccurrence);
     if (liveIndex < 0 ||
         !_commands.ownsSourceRequest(sourceCommandToken, previousOccurrence)) {
+      if (keepaliveInstalled) {
+        await _commands.discardTemporarySource(sourceCommandToken);
+      }
       return;
     }
     await _loadQueueItem(
@@ -1787,6 +1808,9 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
         if (url == null || url.isEmpty) {
           await _discardStagedLease(occurrenceId, stagedLease);
+          if (keepNativePlayingDuringTransition) {
+            await _commands.discardTemporarySource(commandToken);
+          }
           if (_player.playing) {
             preservingPauseOwner ??= await _commands.pausePreservingIntent();
           }
@@ -1943,6 +1967,10 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
           }
         }
       } finally {
+        if (keepNativePlayingDuringTransition &&
+            _installedSourceOwnerToken != commandToken) {
+          await _commands.discardTemporarySource(commandToken);
+        }
         if (!sourceInstallAttempted &&
             !sourceTransitionFollows &&
             manualBufferingPublication == _playbackPublicationToken) {
