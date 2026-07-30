@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
@@ -30,6 +31,127 @@ Map<String, String> artworkRequestHeaders(String url) {
 
 bool artworkNeedsBrowserClient(String url) {
   return artworkRequestHeaders(url).isNotEmpty;
+}
+
+class ArtworkLimitException implements Exception {
+  ArtworkLimitException(this.message);
+  final String message;
+
+  @override
+  String toString() => 'ArtworkLimitException: $message';
+}
+
+/// Minimal HTTP client surface used by [ArtworkBytesLoader].
+abstract interface class ArtworkHttpClient {
+  Future<HttpClientRequest> getUrl(Uri url);
+  void close({bool force = false});
+  set userAgent(String? value);
+}
+
+typedef ArtworkClientFactory = ArtworkHttpClient Function();
+
+class _IoArtworkHttpClient implements ArtworkHttpClient {
+  _IoArtworkHttpClient() : _client = HttpClient();
+
+  final HttpClient _client;
+
+  @override
+  set userAgent(String? value) {
+    _client.userAgent = value;
+  }
+
+  @override
+  Future<HttpClientRequest> getUrl(Uri url) => _client.getUrl(url);
+
+  @override
+  void close({bool force = false}) => _client.close(force: force);
+}
+
+/// Bounded download of artwork bytes with forced client close.
+class ArtworkBytesLoader {
+  ArtworkBytesLoader({
+    ArtworkClientFactory? createClient,
+    this.maximumBytes = 8 * 1024 * 1024,
+    this.timeout = const Duration(seconds: 12),
+  }) : createClient = createClient ?? _IoArtworkHttpClient.new;
+
+  final ArtworkClientFactory createClient;
+  final int maximumBytes;
+  final Duration timeout;
+
+  Future<Uint8List> load(
+    Uri uri,
+    Map<String, String> headers,
+    void Function(int, int?) onProgress,
+  ) async {
+    final client = createClient();
+    try {
+      return await _loadWithClient(client, uri, headers, onProgress)
+          .timeout(timeout);
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  Future<Uint8List> _loadWithClient(
+    ArtworkHttpClient client,
+    Uri uri,
+    Map<String, String> headers,
+    void Function(int, int?) onProgress,
+  ) async {
+    final userAgent = _headerValue(headers, 'user-agent');
+    if (userAgent != null) {
+      client.userAgent = userAgent;
+    }
+
+    final request = await client.getUrl(uri);
+    headers.forEach((name, value) {
+      if (name.toLowerCase() == 'user-agent') return;
+      request.headers.set(name, value);
+    });
+
+    final response = await request.close();
+    if (response.statusCode != HttpStatus.ok) {
+      await response.drain<void>();
+      throw NetworkImageLoadException(
+        statusCode: response.statusCode,
+        uri: uri,
+      );
+    }
+
+    final declared = response.contentLength;
+    if (declared > maximumBytes) {
+      await response.drain<void>();
+      throw ArtworkLimitException(
+        'Content-Length $declared exceeds maximumBytes $maximumBytes',
+      );
+    }
+
+    final builder = BytesBuilder(copy: false);
+    var cumulative = 0;
+    final expected = declared >= 0 ? declared : null;
+
+    await for (final chunk in response) {
+      cumulative += chunk.length;
+      if (cumulative > maximumBytes) {
+        throw ArtworkLimitException(
+          'Streamed body $cumulative exceeds maximumBytes $maximumBytes',
+        );
+      }
+      builder.add(chunk);
+      onProgress(cumulative, expected);
+    }
+
+    return builder.takeBytes();
+  }
+
+  static String? _headerValue(Map<String, String> headers, String name) {
+    final target = name.toLowerCase();
+    for (final entry in headers.entries) {
+      if (entry.key.toLowerCase() == target) return entry.value;
+    }
+    return null;
+  }
 }
 
 class ArtworkImage extends StatelessWidget {
@@ -65,11 +187,15 @@ class ArtworkImage extends StatelessWidget {
 
 @immutable
 class ArtworkNetworkImage extends ImageProvider<ArtworkNetworkImage> {
-  const ArtworkNetworkImage(this.url, {this.scale = 1.0});
+  const ArtworkNetworkImage(this.url, {this.scale = 1.0, this.loader});
 
   final String url;
   final double scale;
+  final ArtworkBytesLoader? loader;
+
   String get resolvedUrl => normalizeOutboundUrl(url);
+
+  ArtworkBytesLoader get _loader => loader ?? ArtworkBytesLoader();
 
   @override
   Future<ArtworkNetworkImage> obtainKey(ImageConfiguration configuration) {
@@ -102,35 +228,17 @@ class ArtworkNetworkImage extends ImageProvider<ArtworkNetworkImage> {
     try {
       assert(key == this);
       final uri = Uri.parse(key.resolvedUrl);
-      final client = HttpClient();
       final headers = artworkRequestHeaders(key.resolvedUrl);
-      if (headers.containsKey('User-Agent')) {
-        client.userAgent = headers['User-Agent'];
-      }
-      final request = await client.getUrl(uri);
-      headers.forEach((name, value) {
-        if (name.toLowerCase() == 'user-agent') return;
-        request.headers.set(name, value);
-      });
-      final response = await request.close();
-      if (response.statusCode != HttpStatus.ok) {
-        await response.drain<void>();
-        throw NetworkImageLoadException(
-          statusCode: response.statusCode,
-          uri: uri,
-        );
-      }
-
-      final bytes = await consolidateHttpClientResponseBytes(
-        response,
-        onBytesReceived: (cumulative, total) {
+      final bytes = await key._loader.load(
+        uri,
+        headers,
+        (cumulative, total) {
           chunkEvents.add(ImageChunkEvent(
             cumulativeBytesLoaded: cumulative,
             expectedTotalBytes: total,
           ));
         },
       );
-      client.close(force: true);
 
       if (bytes.lengthInBytes == 0) {
         throw Exception('ArtworkNetworkImage is an empty file: $uri');

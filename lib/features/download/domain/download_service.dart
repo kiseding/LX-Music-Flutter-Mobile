@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
@@ -19,20 +20,48 @@ import 'download_task.dart';
 enum DownloadNetwork { wifi, mobile, none }
 
 abstract interface class DownloadTaskStorage {
-  List<Map<String, dynamic>> load();
+  List<dynamic> load();
   Future<void> save(List<Map<String, dynamic>> tasks);
+  List<Map<String, dynamic>> loadQuarantine();
+  Future<void> saveQuarantine(List<Map<String, dynamic>> records);
 }
 
-final class _StorageAdapter implements DownloadTaskStorage {
-  _StorageAdapter(this.storage);
+final class StorageDownloadTaskStorage implements DownloadTaskStorage {
+  StorageDownloadTaskStorage(this.storage);
   final StorageService storage;
 
+  static const _tasksKey = 'download_tasks';
+  static const _quarantineKey = 'download_tasks_quarantine';
+
   @override
-  List<Map<String, dynamic>> load() => storage.getJsonList('download_tasks');
+  List<dynamic> load() {
+    final str = storage.getString(_tasksKey);
+    if (str == null || str.isEmpty) return const [];
+    final decoded = json.decode(str);
+    if (decoded is! List) return const [];
+    return decoded;
+  }
 
   @override
   Future<void> save(List<Map<String, dynamic>> tasks) async {
-    await storage.setJsonList('download_tasks', tasks);
+    await storage.setJsonList(_tasksKey, tasks);
+  }
+
+  @override
+  List<Map<String, dynamic>> loadQuarantine() {
+    final str = storage.getString(_quarantineKey);
+    if (str == null || str.isEmpty) return const [];
+    final decoded = json.decode(str);
+    if (decoded is! List) return const [];
+    return decoded
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+  }
+
+  @override
+  Future<void> saveQuarantine(List<Map<String, dynamic>> records) async {
+    await storage.setJsonList(_quarantineKey, records);
   }
 }
 
@@ -132,10 +161,17 @@ class DownloadService {
   int _connectivityEpoch = 0;
 
   String? _downloadDir;
+  String? _resolvedDownloadRoot;
+  final Future<Directory> Function()? _downloadDirectory;
   MusicSourceService? _musicSourceService;
   DownloadTaskStorage? _storage;
   bool _initialized = false;
   bool _disposed = false;
+  bool _tasksDirtyFromReconcile = false;
+
+  static final RegExp _strictDownloadName = RegExp(
+    r'^(.+)-(\d+)\.(part|mp3|m4a|aac|ogg|wav|ape|flac)$',
+  );
 
   List<DownloadTask> get tasks => List.unmodifiable(_tasks);
   Stream<List<DownloadTask>> get tasksStream => _tasksController.stream;
@@ -158,6 +194,7 @@ class DownloadService {
     String Function()? taskIdFactory,
     DownloadExecutor? downloader,
     DownloadTaskStorage? storage,
+    Future<Directory> Function()? downloadDirectory,
     Duration progressPersistenceInterval = const Duration(seconds: 2),
   })  : assert(maxConcurrent > 0),
         _dio = dio ?? _createDownloadDio(),
@@ -165,6 +202,7 @@ class DownloadService {
         _wifiOnly = wifiOnly,
         _downloader = downloader,
         _storage = storage,
+        _downloadDirectory = downloadDirectory,
         _taskIdFactory = taskIdFactory ?? const Uuid().v4,
         _currentNetwork = currentNetwork ?? _platformNetwork,
         _progressPersistenceInterval = progressPersistenceInterval {
@@ -202,11 +240,162 @@ class DownloadService {
 
   Future<void> init() async {
     if (_initialized) return;
-    _storage ??= _StorageAdapter(await StorageService.instance);
-    _loadFromStorage();
-    if (_downloader == null) await _initDownloadDir();
-    // 上次异常退出时可能卡在 downloading
-    var demoted = false;
+    _storage ??= StorageDownloadTaskStorage(await StorageService.instance);
+    await _initDownloadDir();
+    await _loadFromStorageIndependently();
+    await _reconcileDownloadDirectory();
+    await _persistReconciledSnapshotIfChanged();
+    _initialized = true;
+    _processQueue();
+  }
+
+  Future<void> _loadFromStorageIndependently() async {
+    final saved = _storage!.load();
+    final quarantine = List<Map<String, dynamic>>.from(
+      _storage!.loadQuarantine(),
+    );
+    final valid = <DownloadTask>[];
+    var tasksChanged = false;
+
+    for (final raw in saved) {
+      try {
+        final task = DownloadTask.decodePersisted(raw);
+        if (task.savePath != null &&
+            task.savePath!.isNotEmpty &&
+            !isOwnedDownloadPath(task.savePath!)) {
+          quarantine.add(_quarantineEntry(
+            raw is Map ? Map<String, dynamic>.from(raw) : raw,
+            FormatException('savePath outside download root: ${task.savePath}'),
+          ));
+          tasksChanged = true;
+          continue;
+        }
+        valid.add(task);
+      } catch (error) {
+        quarantine.add(_quarantineEntry(
+          raw is Map ? Map<String, dynamic>.from(raw) : raw,
+          error,
+        ));
+        tasksChanged = true;
+      }
+    }
+
+    _tasks
+      ..clear()
+      ..addAll(valid);
+    _emitTasks();
+
+    if (tasksChanged || quarantine.length != _storage!.loadQuarantine().length) {
+      await _storage!.saveQuarantine(quarantine);
+      await _saveToStorage();
+    }
+  }
+
+  Map<String, dynamic> _quarantineEntry(Object? raw, Object error) {
+    return {
+      'record': raw,
+      'reason': error.toString(),
+      'quarantinedAt': DateTime.now().toUtc().toIso8601String(),
+    };
+  }
+
+  Future<void> _reconcileDownloadDirectory() async {
+    final dirPath = _downloadDir;
+    if (dirPath == null) return;
+    final dir = Directory(dirPath);
+    if (!await dir.exists()) return;
+
+    final files = <File>[];
+    await for (final entity in dir.list(followLinks: false)) {
+      if (entity is File) files.add(entity);
+    }
+
+    final matchedFinals = <String, List<File>>{};
+    final parts = <File>[];
+    final orphans = <File>[];
+
+    for (final file in files) {
+      final name = file.uri.pathSegments.last;
+      final match = _strictDownloadName.firstMatch(name);
+      if (match == null) continue;
+      if (!isOwnedDownloadPath(file.path)) continue;
+
+      final base = match.group(1)!;
+      final revision = int.parse(match.group(2)!);
+      final kind = match.group(3)!;
+
+      if (kind == 'part') {
+        parts.add(file);
+        continue;
+      }
+
+      DownloadTask? owner;
+      for (final task in _tasks) {
+        if (safeDownloadBaseName(task.id) == base &&
+            task.attemptRevision == revision) {
+          owner = task;
+          break;
+        }
+      }
+      if (owner == null) {
+        orphans.add(file);
+      } else {
+        matchedFinals.putIfAbsent(owner.id, () => []).add(file);
+      }
+    }
+
+    final quarantine = List<Map<String, dynamic>>.from(
+      _storage!.loadQuarantine(),
+    );
+    var quarantineChanged = false;
+
+    for (final entry in matchedFinals.entries) {
+      final taskId = entry.key;
+      final candidates = entry.value;
+      final index = _tasks.indexWhere((t) => t.id == taskId);
+      if (index < 0) continue;
+      final task = _tasks[index];
+      final recoverable = task.status == DownloadStatus.downloading ||
+          task.status == DownloadStatus.pending;
+
+      if (!recoverable) continue;
+
+      if (candidates.length > 1) {
+        quarantine.add(_quarantineEntry(
+          task.toJson(),
+          FormatException(
+            'multiple final files for ${task.id}@${task.attemptRevision}',
+          ),
+        ));
+        quarantineChanged = true;
+        _tasks.removeAt(index);
+        _tasksDirtyFromReconcile = true;
+        for (final f in candidates) {
+          await _safeDelete(f.path);
+        }
+        continue;
+      }
+
+      final nonEmpty = <File>[];
+      for (final f in candidates) {
+        if (await f.length() > 0) nonEmpty.add(f);
+      }
+
+      if (nonEmpty.length == 1) {
+        final recovered = nonEmpty.single;
+        final length = await recovered.length();
+        _tasks[index] = task.copyWith(
+          status: DownloadStatus.completed,
+          progress: 1.0,
+          savePath: recovered.path,
+          fileSize: length,
+          completedAt: DateTime.now().toUtc(),
+          clearErrorMsg: true,
+        );
+        _tasksDirtyFromReconcile = true;
+      }
+    }
+
     for (var i = 0; i < _tasks.length; i++) {
       final t = _tasks[i];
       if (t.status == DownloadStatus.downloading) {
@@ -216,29 +405,33 @@ class DownloadService {
           clearSavePath: true,
           clearErrorMsg: true,
         );
-        demoted = true;
+        _tasksDirtyFromReconcile = true;
       }
     }
-    if (demoted) {
-      _emitTasks();
-      await _saveToStorage();
+
+    for (final part in parts) {
+      await _safeDelete(part.path);
     }
-    _initialized = true;
-    _processQueue();
+    for (final orphan in orphans) {
+      await _safeDelete(orphan.path);
+    }
+
+    if (quarantineChanged) {
+      await _storage!.saveQuarantine(quarantine);
+    }
+    if (_tasksDirtyFromReconcile) {
+      _emitTasks();
+    }
   }
 
-  void _loadFromStorage() {
-    final saved = _storage!.load();
-    if (saved.isEmpty) return;
-    _tasks.clear();
-    for (final json in saved) {
-      _tasks.add(DownloadTask.fromJson(Map<String, dynamic>.from(json as Map)));
-    }
-    _emitTasks();
+  Future<void> _persistReconciledSnapshotIfChanged() async {
+    if (!_tasksDirtyFromReconcile) return;
+    await _saveToStorage();
+    _tasksDirtyFromReconcile = false;
   }
 
   Future<void> _saveToStorage() async {
-    _storage ??= _StorageAdapter(await StorageService.instance);
+    _storage ??= StorageDownloadTaskStorage(await StorageService.instance);
     final data = _tasks.map((t) => t.toJson()).toList(growable: false);
     final write =
         _persistenceTail.catchError((_) {}).then((_) => _storage!.save(data));
@@ -247,9 +440,56 @@ class DownloadService {
   }
 
   Future<void> _initDownloadDir() async {
-    final appDir = await getApplicationDocumentsDirectory();
-    _downloadDir = '${appDir.path}/downloads';
-    await Directory(_downloadDir!).create(recursive: true);
+    if (_downloadDirectory != null) {
+      final dir = await _downloadDirectory!();
+      await dir.create(recursive: true);
+      _downloadDir = dir.path;
+    } else {
+      final appDir = await getApplicationDocumentsDirectory();
+      _downloadDir = '${appDir.path}/downloads';
+      await Directory(_downloadDir!).create(recursive: true);
+    }
+    _resolvedDownloadRoot =
+        await Directory(_downloadDir!).resolveSymbolicLinks();
+  }
+
+  bool isOwnedDownloadPath(String path) {
+    final root = _resolvedDownloadRoot;
+    if (root == null) return false;
+    final candidate = _resolveOwnershipCandidate(path);
+    if (candidate == null) return false;
+    return candidate == root ||
+        candidate.startsWith('$root${Platform.pathSeparator}');
+  }
+
+  String? _resolveOwnershipCandidate(String path) {
+    try {
+      final absolute = File(path).absolute.path;
+      final entity = FileSystemEntity.typeSync(absolute, followLinks: false);
+      if (entity != FileSystemEntityType.notFound) {
+        return File(absolute).resolveSymbolicLinksSync();
+      }
+
+      var current = Directory(absolute).parent;
+      final missing = <String>[File(absolute).uri.pathSegments.last];
+      while (true) {
+        if (current.existsSync()) {
+          final resolvedAncestor = current.resolveSymbolicLinksSync();
+          final suffix = missing.reversed.join(Platform.pathSeparator);
+          return '$resolvedAncestor${Platform.pathSeparator}$suffix';
+        }
+        final parent = current.parent;
+        if (parent.path == current.path) {
+          return absolute;
+        }
+        missing.add(current.uri.pathSegments.isEmpty
+            ? current.path
+            : current.uri.pathSegments.last);
+        current = parent;
+      }
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<void> addTask(MusicItem music, {String? quality}) async {
@@ -836,7 +1076,9 @@ class DownloadService {
       final task = _tasks.firstWhere(
         (t) => t.musicId == musicId && t.status == DownloadStatus.completed,
       );
-      return task.savePath;
+      final path = task.savePath;
+      if (path == null || !isOwnedDownloadPath(path)) return null;
+      return path;
     } catch (_) {
       return null;
     }
@@ -845,11 +1087,11 @@ class DownloadService {
   Future<int> getCacheSize() async {
     int totalSize = 0;
     for (final task in _tasks) {
-      if (task.savePath != null) {
-        final file = File(task.savePath!);
-        if (await file.exists()) {
-          totalSize += await file.length();
-        }
+      final path = task.savePath;
+      if (path == null || !isOwnedDownloadPath(path)) continue;
+      final file = File(path);
+      if (await file.exists()) {
+        totalSize += await file.length();
       }
     }
     return totalSize;
@@ -882,14 +1124,14 @@ class DownloadService {
 
     for (final task in completedTasks) {
       if (currentSize <= maxBytes) break;
-      if (task.savePath != null) {
-        final file = File(task.savePath!);
-        if (await file.exists()) {
-          final fileSize = await file.length();
-          await file.delete();
-          currentSize -= fileSize;
-          _tasks.remove(task);
-        }
+      final path = task.savePath;
+      if (path == null || !isOwnedDownloadPath(path)) continue;
+      final file = File(path);
+      if (await file.exists()) {
+        final fileSize = await file.length();
+        await _safeDelete(path);
+        currentSize -= fileSize;
+        _tasks.remove(task);
       }
     }
     _emitTasks();
@@ -967,19 +1209,22 @@ class DownloadService {
 
   Future<void> _safeDelete(String path) async {
     try {
+      if (!isOwnedDownloadPath(path)) return;
       final f = File(path);
       if (await f.exists()) await f.delete();
     } catch (_) {}
   }
 
   Future<void> _safeDeleteOwned(String path, _DownloadAttempt attempt) async {
-    final dir = _downloadDir;
-    if (dir == null || !_isAttemptOwnedPath(path, attempt)) return;
+    if (!isOwnedDownloadPath(path) || !_isAttemptOwnedPath(path, attempt)) {
+      return;
+    }
     await _safeDelete(path);
   }
 
   bool _isAttemptOwnedPath(String path, _DownloadAttempt attempt) {
-    final prefix = '${safeDownloadBaseName(attempt.taskId)}-${attempt.revision}';
+    final prefix =
+        '${safeDownloadBaseName(attempt.taskId)}-${attempt.revision}';
     final name = File(path).uri.pathSegments.last;
     return name == '$prefix.part' ||
         (name.startsWith('$prefix.') && !name.endsWith('.part'));
@@ -1025,7 +1270,8 @@ class DownloadService {
     String taskId,
     int attemptRevision,
     String extension,
-  ) => '${safeDownloadBaseName(taskId)}-$attemptRevision$extension';
+  ) =>
+      '${safeDownloadBaseName(taskId)}-$attemptRevision$extension';
 
   Future<void> dispose() async {
     if (_disposed) return;

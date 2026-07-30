@@ -46,12 +46,14 @@ final class _CloudSessionSnapshot {
     required this.legacyToken,
     required this.username,
     required this.role,
+    required this.tokenKey,
   });
 
   final String? token;
   final String? legacyToken;
   final String? username;
   final String? role;
+  final String? tokenKey;
 }
 
 class CloudApiClient {
@@ -110,6 +112,17 @@ class CloudApiClient {
       _token != null && _token!.isNotEmpty && _baseUrl != null;
   bool get isAdmin => _role == 'admin';
 
+  String? _tokenKeyFor(String? serviceUrl) {
+    if (serviceUrl == null || serviceUrl.isEmpty) return null;
+    try {
+      return originTokenKey(_kToken, serviceUrl);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String? get _activeTokenKey => _tokenKeyFor(_baseUrl);
+
   Future<void> load() async {
     final revision = _sessionRevision;
     final baseUrlRevision = _baseUrlRevision;
@@ -139,15 +152,37 @@ class CloudApiClient {
       _role = prefs.getString(_kRole);
       return;
     }
-    final token = await LegacyTokenMigrator(
-      secureStore: _secureStore,
-      preferences: prefs,
-    ).readAndMigrate(
-      _kToken,
-      canMutate: () => _sessionRevision == revision,
-      mutate: _runSessionMutation,
-      discardStaleToken: _discardStaleMigrationToken,
-    );
+
+    String? token;
+    if (baseUrl != null) {
+      try {
+        token = await LegacyTokenMigrator(
+          secureStore: _secureStore,
+          preferences: prefs,
+        ).readAndMigrateToOrigin(
+          legacyKey: _kToken,
+          serviceUrl: baseUrl,
+          canMutate: () => _sessionRevision == revision,
+          mutate: _runSessionMutation,
+          discardStaleToken: (value) =>
+              _discardStaleMigrationToken(value, baseUrl),
+        );
+      } on SecureTokenMigrationException {
+        // Keep any already-published in-memory session; require reauth only
+        // when this load would have been the first assignment.
+        if (_sessionRevision == revision &&
+            _baseUrlRevision == baseUrlRevision &&
+            !isLoggedIn) {
+          _token = null;
+          if (canAssignBaseUrl) {
+            _baseUrl = baseUrl;
+            _configurationError = configurationError;
+          }
+        }
+        rethrow;
+      }
+    }
+
     final username = prefs.getString(_kUsername);
     final role = prefs.getString(_kRole);
 
@@ -165,10 +200,79 @@ class CloudApiClient {
 
   Future<void> setBaseUrl(String url) async {
     final validated = validateHttpsServiceUrl(url);
-    ++_sessionRevision;
-    final revision = ++_baseUrlRevision;
     final previousBaseUrl = _baseUrl;
     final previousConfigurationError = _configurationError;
+    final previousOrigin =
+        previousBaseUrl == null ? null : normalizedOrigin(previousBaseUrl);
+    final nextOrigin = normalizedOrigin(validated);
+    final originChanged =
+        previousOrigin != null && previousOrigin != nextOrigin;
+
+    if (originChanged) {
+      final sessionRevision = ++_sessionRevision;
+      final baseUrlRevision = ++_baseUrlRevision;
+      final previousToken = _token;
+      final previousUsername = _username;
+      final previousRole = _role;
+      // Invalidate concurrent session work immediately; old-origin secure
+      // tokens stay partitioned under their origin key.
+      _token = null;
+      _username = null;
+      _role = null;
+
+      try {
+        await _runBaseUrlMutation(() async {
+          if (!_ownsBaseUrlRevision(baseUrlRevision)) return;
+          final preferences = await _baseUrlPreferences();
+          if (!_ownsBaseUrlRevision(baseUrlRevision)) return;
+          final previousMetaUsername = preferences.getString(_kUsername);
+          final previousMetaRole = preferences.getString(_kRole);
+          try {
+            await preferences.remove(_kUsername);
+            if (!_ownsBaseUrlRevision(baseUrlRevision)) {
+              await _restorePreference(
+                  preferences, _kUsername, previousMetaUsername);
+              await _restorePreference(preferences, _kRole, previousMetaRole);
+              return;
+            }
+            await preferences.remove(_kRole);
+            if (!_ownsBaseUrlRevision(baseUrlRevision)) {
+              await _restorePreference(
+                  preferences, _kUsername, previousMetaUsername);
+              await _restorePreference(preferences, _kRole, previousMetaRole);
+              return;
+            }
+            await preferences.setString(_kBase, validated);
+            if (!_ownsBaseUrlRevision(baseUrlRevision)) return;
+            _baseUrl = validated;
+            _configurationError = null;
+          } catch (_) {
+            try {
+              await _restorePreference(
+                  preferences, _kUsername, previousMetaUsername);
+              await _restorePreference(preferences, _kRole, previousMetaRole);
+            } catch (_) {}
+            if (_ownsBaseUrlRevision(baseUrlRevision)) {
+              _baseUrl = previousBaseUrl;
+              _configurationError = previousConfigurationError ??
+                  'Cloud server address could not be saved. Please try again.';
+            }
+            rethrow;
+          }
+        });
+      } catch (error) {
+        if (_sessionRevision == sessionRevision) {
+          _token = previousToken;
+          _username = previousUsername;
+          _role = previousRole;
+        }
+        rethrow;
+      }
+      return;
+    }
+
+    ++_sessionRevision;
+    final revision = ++_baseUrlRevision;
     _baseUrl = validated;
     _configurationError = null;
     await _runBaseUrlMutation(() => _persistBaseUrlLocked(
@@ -195,6 +299,7 @@ class CloudApiClient {
     required int expectedRevision,
     required String? previousBaseUrl,
     required String? previousConfigurationError,
+    bool publishEagerly = true,
   }) async {
     if (!_ownsBaseUrlRevision(expectedRevision)) return;
     try {
@@ -203,8 +308,10 @@ class CloudApiClient {
       await preferences.setString(_kBase, validated);
       // A later revision is queued behind this write and owns the final value.
       if (!_ownsBaseUrlRevision(expectedRevision)) return;
-      _baseUrl = validated;
-      _configurationError = null;
+      if (publishEagerly) {
+        _baseUrl = validated;
+        _configurationError = null;
+      }
     } catch (_) {
       if (!_ownsBaseUrlRevision(expectedRevision)) return;
       _baseUrl = previousBaseUrl;
@@ -215,12 +322,16 @@ class CloudApiClient {
   }
 
   Future<_CloudSessionSnapshot> _snapshotSession(
-      CloudSessionPreferences preferences) async {
+    CloudSessionPreferences preferences, {
+    String? tokenKey,
+  }) async {
+    final key = tokenKey ?? _activeTokenKey;
     return _CloudSessionSnapshot(
-      token: await _secureStore.read(_kToken),
+      token: key == null ? null : await _secureStore.read(key),
       legacyToken: preferences.getString(_kToken),
       username: preferences.getString(_kUsername),
       role: preferences.getString(_kRole),
+      tokenKey: key,
     );
   }
 
@@ -236,40 +347,47 @@ class CloudApiClient {
     }
   }
 
-  Future<bool> _restoreSecureToken(String? token) async {
+  Future<bool> _restoreSecureToken(String? token, {String? tokenKey}) async {
+    final key = tokenKey ?? _activeTokenKey;
+    if (key == null) return token == null || token.isEmpty;
     try {
       if (token == null || token.isEmpty) {
-        await _secureStore.delete(_kToken);
+        await _secureStore.delete(key);
       } else {
-        await _secureStore.write(_kToken, token);
+        await _secureStore.write(key, token);
       }
-      return await _secureStore.read(_kToken) == token;
+      return await _secureStore.read(key) == token;
     } catch (_) {
       return false;
     }
   }
 
-  Future<bool> _deleteStaleToken() async {
+  Future<bool> _deleteStaleToken({String? tokenKey}) async {
+    final key = tokenKey ?? _activeTokenKey;
+    if (key == null) return true;
     try {
-      await _secureStore.delete(_kToken);
-      return await _secureStore.read(_kToken) == null;
+      await _secureStore.delete(key);
+      return await _secureStore.read(key) == null;
     } catch (_) {
       return false;
     }
   }
 
-  Future<void> _discardStaleMigrationToken(String token) {
+  Future<void> _discardStaleMigrationToken(String token, String? serviceUrl) {
+    final key = _tokenKeyFor(serviceUrl);
     return _runSessionMutation(() async {
-      if (await _secureStore.read(_kToken) == token) {
-        await _secureStore.delete(_kToken);
+      if (key == null) return;
+      if (await _secureStore.read(key) == token) {
+        await _secureStore.delete(key);
       }
     });
   }
 
   Future<Never> _reportUnrecoverableStaleCredential(
-    CloudSessionPreferences preferences,
-  ) async {
-    final deleted = await _deleteStaleToken();
+    CloudSessionPreferences preferences, {
+    String? tokenKey,
+  }) async {
+    final deleted = await _deleteStaleToken(tokenKey: tokenKey);
     if (deleted) {
       throw const CloudSessionSafetyError(
         'Cloud session became stale; its credential was removed. Please sign in again.',
@@ -304,9 +422,13 @@ class CloudApiClient {
     }
   }
 
-  Future<void> _syncSessionMemory(CloudSessionPreferences preferences) async {
+  Future<void> _syncSessionMemory(
+    CloudSessionPreferences preferences, {
+    String? tokenKey,
+  }) async {
+    final key = tokenKey ?? _activeTokenKey;
     try {
-      _token = await _secureStore.read(_kToken);
+      _token = key == null ? null : await _secureStore.read(key);
       _username = preferences.getString(_kUsername);
       _role = preferences.getString(_kRole);
     } catch (_) {
@@ -356,48 +478,83 @@ class CloudApiClient {
     final previousToken = _token;
     final previousUsername = _username;
     final previousRole = _role;
+    final tokenKey = _activeTokenKey;
+    if (tokenKey == null) {
+      throw StateError('Cannot persist cloud token without a base URL');
+    }
     CloudSessionPreferences? preferences;
     _CloudSessionSnapshot? snapshot;
     try {
       preferences = await _sessionPreferences();
-      snapshot = await _snapshotSession(preferences);
+      snapshot = await _snapshotSession(preferences, tokenKey: tokenKey);
       if (!_ownsRevision(expectedRevision)) {
         return;
       }
       if (!_ownsRevision(expectedRevision)) return;
-      await _secureStore.write(_kToken, token);
-      if (await _secureStore.read(_kToken) != token) {
+      await _secureStore.write(tokenKey, token);
+      if (await _secureStore.read(tokenKey) != token) {
         throw StateError('Secure token verification failed');
       }
       if (!_ownsRevision(expectedRevision)) {
-        await _reportUnrecoverableStaleCredential(preferences);
+        await _reportUnrecoverableStaleCredential(
+          preferences,
+          tokenKey: tokenKey,
+        );
+      }
+      // If authority moved to a different origin, do not write old-origin
+      // metadata into the new base URL's active session prefs.
+      if (_tokenKeyFor(_baseUrl) != tokenKey) {
+        await _reportUnrecoverableStaleCredential(
+          preferences,
+          tokenKey: tokenKey,
+        );
       }
       await preferences.remove(_kToken);
-      if (!_ownsRevision(expectedRevision)) {
-        await _reportUnrecoverableStaleCredential(preferences);
+      if (!_ownsRevision(expectedRevision) ||
+          _tokenKeyFor(_baseUrl) != tokenKey) {
+        await _reportUnrecoverableStaleCredential(
+          preferences,
+          tokenKey: tokenKey,
+        );
       }
       if (username != null) await preferences.setString(_kUsername, username);
-      if (!_ownsRevision(expectedRevision)) {
-        await _reportUnrecoverableStaleCredential(preferences);
+      if (!_ownsRevision(expectedRevision) ||
+          _tokenKeyFor(_baseUrl) != tokenKey) {
+        await _reportUnrecoverableStaleCredential(
+          preferences,
+          tokenKey: tokenKey,
+        );
       }
       if (role != null) await preferences.setString(_kRole, role);
-      if (!_ownsRevision(expectedRevision)) {
-        await _reportUnrecoverableStaleCredential(preferences);
+      if (!_ownsRevision(expectedRevision) ||
+          _tokenKeyFor(_baseUrl) != tokenKey) {
+        await _reportUnrecoverableStaleCredential(
+          preferences,
+          tokenKey: tokenKey,
+        );
       }
-      if (!_ownsRevision(expectedRevision)) return;
+      if (!_ownsRevision(expectedRevision) ||
+          _tokenKeyFor(_baseUrl) != tokenKey) {
+        return;
+      }
       await preferences.remove(_kTokenInvalidated);
       _token = token;
       _username = username;
       _role = role;
     } on CloudSessionSafetyError {
-      if (preferences != null) await _syncSessionMemory(preferences);
+      // Do not re-publish a superseded origin session into memory.
+      if (preferences != null && _tokenKeyFor(_baseUrl) == tokenKey) {
+        await _syncSessionMemory(preferences, tokenKey: tokenKey);
+      }
       rethrow;
     } catch (_) {
       if (preferences != null && snapshot != null) {
-        await _restoreSecureToken(snapshot.token);
-        await _restoreMetadata(preferences, snapshot);
-        await _syncSessionMemory(preferences);
-      } else {
+        await _restoreSecureToken(snapshot.token, tokenKey: snapshot.tokenKey);
+        if (_tokenKeyFor(_baseUrl) == snapshot.tokenKey) {
+          await _restoreMetadata(preferences, snapshot);
+          await _syncSessionMemory(preferences, tokenKey: snapshot.tokenKey);
+        }
+      } else if (_tokenKeyFor(_baseUrl) == tokenKey) {
         _token = previousToken;
         _username = previousUsername;
         _role = previousRole;
@@ -416,9 +573,12 @@ class CloudApiClient {
     CloudSessionPreferences preferences,
     _CloudSessionSnapshot snapshot,
   ) async {
-    final restored = await _restoreSecureToken(snapshot.token);
+    final restored = await _restoreSecureToken(
+      snapshot.token,
+      tokenKey: snapshot.tokenKey,
+    );
     await _restoreMetadata(preferences, snapshot);
-    await _syncSessionMemory(preferences);
+    await _syncSessionMemory(preferences, tokenKey: snapshot.tokenKey);
     if (!restored) {
       throw StateError(
         'Cloud session cleanup failed: secure token could not be restored',
@@ -438,35 +598,121 @@ class CloudApiClient {
     String? expectedToken,
     required int expectedRevision,
   }) async {
-    if (!await _matchesClearExpectation(expectedToken, expectedRevision)) {
+    // Capture the origin key before any concurrent authority change.
+    final tokenKey = _tokenKeyFor(_baseUrl);
+    if (!await _matchesClearExpectation(
+      expectedToken,
+      expectedRevision,
+      tokenKey: tokenKey,
+    )) {
       return;
     }
     final preferences = await _sessionPreferences();
-    if (!await _matchesClearExpectation(expectedToken, expectedRevision)) {
+    if (!await _matchesClearExpectation(
+      expectedToken,
+      expectedRevision,
+      tokenKey: tokenKey,
+    )) {
       return;
     }
-    final snapshot = await _snapshotSession(preferences);
-    if (!await _matchesClearExpectation(expectedToken, expectedRevision)) {
+    final snapshot = await _snapshotSession(preferences, tokenKey: tokenKey);
+    if (!await _matchesClearExpectation(
+      expectedToken,
+      expectedRevision,
+      tokenKey: tokenKey,
+    )) {
       return;
     }
-    await _secureStore.delete(_kToken);
+    if (tokenKey != null) {
+      await _secureStore.delete(tokenKey);
+    }
     try {
-      if (!await _matchesClearExpectation(null, expectedRevision)) {
+      if (!await _matchesClearExpectation(
+        null,
+        expectedRevision,
+        tokenKey: tokenKey,
+      )) {
+        // Origin/session superseded mid-cleanup: leave durable origin partition
+        // as-is and do not resurrect old-origin metadata into the new authority.
+        if (snapshot.tokenKey != null &&
+            snapshot.tokenKey != _activeTokenKey) {
+          final restored = await _restoreSecureToken(
+            snapshot.token,
+            tokenKey: snapshot.tokenKey,
+          );
+          if (!restored) {
+            throw StateError(
+              'Cloud session cleanup failed: secure token could not be restored',
+            );
+          }
+          return;
+        }
         await _compensateStaleCleanup(preferences, snapshot);
         return;
       }
       await preferences.remove(_kToken);
-      if (!await _matchesClearExpectation(null, expectedRevision)) {
+      if (!await _matchesClearExpectation(
+        null,
+        expectedRevision,
+        tokenKey: tokenKey,
+      )) {
+        if (snapshot.tokenKey != null &&
+            snapshot.tokenKey != _activeTokenKey) {
+          final restored = await _restoreSecureToken(
+            snapshot.token,
+            tokenKey: snapshot.tokenKey,
+          );
+          if (!restored) {
+            throw StateError(
+              'Cloud session cleanup failed: secure token could not be restored',
+            );
+          }
+          return;
+        }
         await _compensateStaleCleanup(preferences, snapshot);
         return;
       }
       await preferences.remove(_kUsername);
-      if (!await _matchesClearExpectation(null, expectedRevision)) {
+      if (!await _matchesClearExpectation(
+        null,
+        expectedRevision,
+        tokenKey: tokenKey,
+      )) {
+        if (snapshot.tokenKey != null &&
+            snapshot.tokenKey != _activeTokenKey) {
+          final restored = await _restoreSecureToken(
+            snapshot.token,
+            tokenKey: snapshot.tokenKey,
+          );
+          if (!restored) {
+            throw StateError(
+              'Cloud session cleanup failed: secure token could not be restored',
+            );
+          }
+          return;
+        }
         await _compensateStaleCleanup(preferences, snapshot);
         return;
       }
       await preferences.remove(_kRole);
-      if (!await _matchesClearExpectation(null, expectedRevision)) {
+      if (!await _matchesClearExpectation(
+        null,
+        expectedRevision,
+        tokenKey: tokenKey,
+      )) {
+        if (snapshot.tokenKey != null &&
+            snapshot.tokenKey != _activeTokenKey) {
+          final restored = await _restoreSecureToken(
+            snapshot.token,
+            tokenKey: snapshot.tokenKey,
+          );
+          if (!restored) {
+            throw StateError(
+              'Cloud session cleanup failed: secure token could not be restored',
+            );
+          }
+          return;
+        }
         await _compensateStaleCleanup(preferences, snapshot);
         return;
       }
@@ -474,13 +720,22 @@ class CloudApiClient {
       _username = null;
       _role = null;
     } catch (_) {
-      final restored = await _restoreSecureToken(snapshot.token);
-      await _restoreMetadata(preferences, snapshot);
+      final restored = await _restoreSecureToken(
+        snapshot.token,
+        tokenKey: snapshot.tokenKey,
+      );
+      if (snapshot.tokenKey == null || snapshot.tokenKey == _activeTokenKey) {
+        await _restoreMetadata(preferences, snapshot);
+      }
       if (restored) {
-        await _syncSessionMemory(preferences);
+        if (snapshot.tokenKey == null || snapshot.tokenKey == _activeTokenKey) {
+          await _syncSessionMemory(preferences, tokenKey: snapshot.tokenKey);
+        }
         rethrow;
       }
-      await _syncSessionMemory(preferences);
+      if (snapshot.tokenKey == null || snapshot.tokenKey == _activeTokenKey) {
+        await _syncSessionMemory(preferences, tokenKey: snapshot.tokenKey);
+      }
       throw StateError(
         'Cloud session cleanup failed: secure token could not be restored',
       );
@@ -489,17 +744,20 @@ class CloudApiClient {
 
   Future<bool> _matchesClearExpectation(
     String? expectedToken,
-    int expectedRevision,
-  ) async {
+    int expectedRevision, {
+    String? tokenKey,
+  }) async {
     if (_sessionRevision != expectedRevision) return false;
-    return expectedToken == null ||
-        await _secureStore.read(_kToken) == expectedToken;
+    if (expectedToken == null) return true;
+    final key = tokenKey ?? _activeTokenKey;
+    if (key == null) return false;
+    return await _secureStore.read(key) == expectedToken;
   }
 
   Options _authOptions() {
     return Options(headers: {
       'Content-Type': 'application/json',
-      if (_token != null) 'Authorization': 'Bearer $_token',
+      if (_token != null && _baseUrl != null) 'Authorization': 'Bearer $_token',
     });
   }
 

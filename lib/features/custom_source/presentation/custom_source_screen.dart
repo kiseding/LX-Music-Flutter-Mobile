@@ -3,8 +3,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:file_picker/file_picker.dart';
 import 'dart:io';
+import '../../../core/io/bounded_input.dart';
 import '../../../core/theme/app_colors.dart';
 import '../domain/custom_source.dart';
+import '../domain/custom_source_service.dart';
 import 'custom_source_provider.dart';
 
 class CustomSourceScreen extends ConsumerWidget {
@@ -166,9 +168,15 @@ class CustomSourceScreen extends ConsumerWidget {
 
       if (result != null && result.files.single.path != null) {
         final file = File(result.files.single.path!);
-        final content = await file.readAsString();
-        
-        final success = await ref.read(customSourcesProvider.notifier).importLxMusicScript(content);
+        final bytes = await readFileBytesBounded(
+          file,
+          maximumBytes: CustomSourceService.maximumScriptBytes,
+        );
+        final content = utf8.decode(bytes);
+
+        final success = await ref
+            .read(customSourcesProvider.notifier)
+            .importLxMusicScript(content);
         
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -344,9 +352,9 @@ class CustomSourceScreen extends ConsumerWidget {
                   ? null
                   : () async {
                       final url = controller.text.trim();
-                      if (url.isEmpty || !url.startsWith('http')) {
+                      if (url.isEmpty || !url.startsWith('https://')) {
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('请输入有效的 HTTP 链接')),
+                          const SnackBar(content: Text('请输入有效的 HTTPS 链接')),
                         );
                         return;
                       }

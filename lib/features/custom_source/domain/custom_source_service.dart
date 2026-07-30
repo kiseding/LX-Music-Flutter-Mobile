@@ -1,13 +1,37 @@
 import 'dart:async';
 import 'dart:convert';
-import 'package:dio/dio.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+
+import '../../../core/network/source_pinned_transport.dart';
+import '../../../core/network/source_request_policy.dart';
+import '../../../core/storage/storage_service.dart';
 import '../domain/custom_source.dart';
 import '../domain/custom_source_engine.dart';
 import '../../player/domain/music_item.dart';
 
 class CustomSourceService {
+  CustomSourceService({
+    SourceRequestSandbox? importSandbox,
+    StorageService? storage,
+    StorageLoader? storageLoader,
+    DateTime Function()? clock,
+  })  : _storage = storage,
+        _storageLoader = storageLoader,
+        _clock = clock ?? DateTime.now,
+        _importSandbox = importSandbox ??
+            SourceRequestSandbox(
+              policy: SourceRequestPolicy(
+                maximumResponseBytes: maximumScriptBytes,
+              ),
+              transport: SourcePinnedTransport().call,
+              maximumRedirects: 5,
+              maximumInFlightBytes: maximumScriptBytes,
+              maximumConcurrentResponseBodies: 1,
+              maximumConcurrentRequests: 1,
+            );
+
   static const String _storageKey = 'custom_sources';
+  static const int maximumScriptBytes = 2 * 1024 * 1024;
+  static const Duration importTimeout = Duration(seconds: 15);
 
   /// 历史内置 Huibq 的 id；启动时若仍存在则移除，不再自动种源。
   static const String defaultSourceId = 'default_huibq';
@@ -17,10 +41,13 @@ class CustomSourceService {
 
   final List<CustomSource> _sources = [];
   final Map<String, CustomSourceEngine> _engines = {};
-  final Dio _dio = Dio();
-  SharedPreferences? _prefs;
+  final SourceRequestSandbox _importSandbox;
+  final StorageLoader? _storageLoader;
+  final DateTime Function() _clock;
+  StorageService? _storage;
   bool _initialized = false;
   Future<void>? _initFuture;
+  Future<void> _mutationTail = Future<void>.value();
 
   List<CustomSource> get sources => List.unmodifiable(_sources);
   List<CustomSource> get enabledSources =>
@@ -33,10 +60,9 @@ class CustomSourceService {
 
   Future<void> _doInit() async {
     try {
-      _prefs = await SharedPreferences.getInstance();
+      _storage ??= await (_storageLoader ?? () => StorageService.instance)();
       await _loadSources();
       await _purgeBuiltInHuibqOnce();
-      await _dedupeSources();
       _initialized = true;
     } catch (e) {
       _initFuture = null;
@@ -44,19 +70,25 @@ class CustomSourceService {
     }
   }
 
+  bool _exceedsScriptByteLimit(String text) =>
+      utf8.encode(text).length > maximumScriptBytes;
+
   /// 去掉历史内置 default_huibq（用户自行导入的同名源保留，但 id 为 default_huibq 的一律清掉）。
   Future<void> _purgeBuiltInHuibqOnce() async {
-    final hadDefault = _sources.any((s) => s.id == defaultSourceId);
-    if (hadDefault) {
-      _sources.removeWhere((s) => s.id == defaultSourceId);
+    final loaded = List<CustomSource>.of(_sources);
+    final next = _dedupeSources(
+      loaded.where((source) => source.id != defaultSourceId).toList(),
+    );
+    if (!_sameSources(loaded, next)) {
+      await _saveSources(next);
+      _publish(next);
       _engines[defaultSourceId]?.dispose();
       _engines.remove(defaultSourceId);
-      await _saveSources();
     }
     // 清理旧 seed 标记，避免其它逻辑误判
-    await _prefs?.remove(_legacySeededKey);
-    await _prefs?.remove(_legacyDeletedKey);
-    await _prefs?.setBool(_builtinPurgedKey, true);
+    await _storage!.remove(_legacySeededKey);
+    await _storage!.remove(_legacyDeletedKey);
+    await _storage!.setBool(_builtinPurgedKey, true);
   }
 
   static bool isHuibqFamily(CustomSource s) {
@@ -73,36 +105,33 @@ class CustomSourceService {
   }
 
   Future<void> _loadSources() async {
-    final jsonStr = _prefs?.getString(_storageKey);
+    final jsonStr = _storage?.getString(_storageKey);
     if (jsonStr != null) {
       final List<dynamic> jsonList = json.decode(jsonStr);
       _sources.clear();
       _sources.addAll(jsonList
           .map((j) => CustomSource.fromJson(j as Map<String, dynamic>)));
-      await _dedupeSources();
     }
   }
 
-  Future<void> _dedupeSources() async {
-    if (_sources.isEmpty) return;
+  List<CustomSource> _dedupeSources(List<CustomSource> sources) {
+    if (sources.isEmpty) return const [];
     final seenIds = <String>{};
     final seenNameAuthor = <String>{};
     var seenHuibq = false;
     final kept = <CustomSource>[];
 
-    final ordered = [..._sources]..sort((a, b) {
+    final ordered = [...sources]..sort((a, b) {
         if (a.isEnabled != b.isEnabled) return a.isEnabled ? -1 : 1;
         return b.updatedAt.compareTo(a.updatedAt);
       });
 
-    var changed = false;
     for (final s in ordered) {
       final key = '${s.name}|${s.author}'.toLowerCase();
       final huibq = isHuibqFamily(s);
       if (seenIds.contains(s.id) ||
           seenNameAuthor.contains(key) ||
           (huibq && seenHuibq)) {
-        changed = true;
         continue;
       }
       seenIds.add(s.id);
@@ -110,60 +139,87 @@ class CustomSourceService {
       if (huibq) seenHuibq = true;
       kept.add(s);
     }
-
-    if (changed || kept.length != _sources.length) {
-      _sources
-        ..clear()
-        ..addAll(kept);
-      await _saveSources();
-    }
+    return kept;
   }
 
-  Future<void> _saveSources() async {
-    final jsonList = _sources.map((s) => s.toJson()).toList();
-    await _prefs?.setString(_storageKey, json.encode(jsonList));
+  Future<void> _saveSources(List<CustomSource> sources) async {
+    final jsonList = sources.map((s) => s.toJson()).toList();
+    await _storage!.setString(_storageKey, json.encode(jsonList));
   }
+
+  Future<T> _mutate<T>(
+    _SourceMutation<T> Function(List<CustomSource> current) calculate,
+  ) {
+    final operation = _mutationTail.then((_) async {
+      final mutation = calculate(List<CustomSource>.of(_sources));
+      await _saveSources(mutation.sources);
+      _publish(mutation.sources);
+      for (final id in mutation.invalidateEngines) {
+        _engines[id]?.dispose();
+        _engines.remove(id);
+      }
+      return mutation.result;
+    });
+    _mutationTail = operation.then<void>((_) {}, onError: (_, __) {});
+    return operation;
+  }
+
+  void _publish(List<CustomSource> sources) {
+    _sources
+      ..clear()
+      ..addAll(sources);
+  }
+
+  bool _sameSources(List<CustomSource> left, List<CustomSource> right) =>
+      json.encode(left.map((source) => source.toJson()).toList()) ==
+      json.encode(right.map((source) => source.toJson()).toList());
 
   Future<void> addSource(CustomSource source) async {
-    _sources.add(source);
-    await _dedupeSources();
-    await _saveSources();
+    await _mutate<void>((current) => _SourceMutation(
+          _dedupeSources([...current, source]),
+          null,
+        ));
   }
 
   Future<void> updateSource(CustomSource source) async {
-    final index = _sources.indexWhere((s) => s.id == source.id);
-    if (index >= 0) {
-      _sources[index] = source.copyWith(updatedAt: DateTime.now());
-      await _dedupeSources();
-      await _saveSources();
-      _engines[source.id]?.dispose();
-      _engines.remove(source.id);
-    }
+    await _mutate<void>((current) {
+      final index = current.indexWhere((item) => item.id == source.id);
+      if (index < 0) return _SourceMutation(current, null);
+      current[index] = source.copyWith(updatedAt: DateTime.now());
+      return _SourceMutation(
+        _dedupeSources(current),
+        null,
+        invalidateEngines: {source.id},
+      );
+    });
   }
 
   Future<void> deleteSource(String id) async {
-    _sources.removeWhere((s) => s.id == id);
-    await _saveSources();
-    _engines[id]?.dispose();
-    _engines.remove(id);
+    await _mutate<void>((current) => _SourceMutation(
+          current.where((source) => source.id != id).toList(),
+          null,
+          invalidateEngines: {id},
+        ));
   }
 
   Future<void> toggleSource(String id) async {
-    final index = _sources.indexWhere((s) => s.id == id);
-    if (index >= 0) {
-      final bool willEnable = !_sources[index].isEnabled;
-      for (int i = 0; i < _sources.length; i++) {
-        if (i == index) {
-          _sources[i] = _sources[i].copyWith(
-            isEnabled: willEnable,
-            updatedAt: DateTime.now(),
-          );
-        } else if (willEnable) {
-          _sources[i] = _sources[i].copyWith(isEnabled: false);
+    await _mutate<void>((current) {
+      final index = current.indexWhere((source) => source.id == id);
+      if (index >= 0) {
+        final bool willEnable = !current[index].isEnabled;
+        for (int i = 0; i < current.length; i++) {
+          if (i == index) {
+            current[i] = current[i].copyWith(
+              isEnabled: willEnable,
+              updatedAt: DateTime.now(),
+            );
+          } else if (willEnable) {
+            current[i] = current[i].copyWith(isEnabled: false);
+          }
         }
       }
-      await _saveSources();
-    }
+      return _SourceMutation(current, null);
+    });
   }
 
   CustomSourceEngine _getEngine(String sourceId) {
@@ -266,26 +322,37 @@ class CustomSourceService {
   }
 
   Future<bool> importSource(String jsonStr) async {
+    if (_exceedsScriptByteLimit(jsonStr)) return false;
     try {
       final json = jsonDecode(jsonStr);
       final source = CustomSource.fromJson(json as Map<String, dynamic>);
       // 禁止再以内置 id 写入
+      final now = _clock();
       final normalized = source.id == defaultSourceId
-          ? source.copyWith(
-              id: DateTime.now().millisecondsSinceEpoch.toString())
+          ? source.copyWith(id: now.millisecondsSinceEpoch.toString())
           : source;
-      if (_sources.any((s) => s.id == normalized.id)) {
-        await updateSource(normalized);
-      } else {
-        await addSource(normalized);
-      }
-      return true;
+      return await _mutate<bool>((current) {
+        final index = current.indexWhere((item) => item.id == normalized.id);
+        final invalidated = <String>{};
+        if (index >= 0) {
+          current[index] = normalized.copyWith(updatedAt: now);
+          invalidated.add(normalized.id);
+        } else {
+          current.add(normalized);
+        }
+        return _SourceMutation(
+          _dedupeSources(current),
+          true,
+          invalidateEngines: invalidated,
+        );
+      });
     } catch (e) {
       return false;
     }
   }
 
   Future<bool> importLxMusicScript(String script) async {
+    if (_exceedsScriptByteLimit(script)) return false;
     try {
       final nameMatch = RegExp(r'@name\s+(.+)').firstMatch(script);
       final descMatch = RegExp(r'@description\s+(.+)').firstMatch(script);
@@ -297,88 +364,97 @@ class CustomSourceService {
       final version = versionMatch?.group(1)?.trim() ?? '1.0.0';
       final author = authorMatch?.group(1)?.trim() ?? '未知';
 
-      // 没有其它已启用源时，导入后自动启用，否则 musicUrl 永远不会走脚本
-      final shouldEnable = !_sources.any((s) => s.isEnabled);
-      final candidate = CustomSource(
-        id: DateTime.now().millisecondsSinceEpoch.toString(),
-        name: name,
-        description: description,
-        version: version,
-        author: author,
-        script: script,
-        createdAt: DateTime.now(),
-        updatedAt: DateTime.now(),
-        isEnabled: shouldEnable,
-      );
-
-      late final String targetId;
-      final existingIndex =
-          _sources.indexWhere((s) => s.name == name && s.author == author);
-      if (existingIndex >= 0) {
-        final old = _sources[existingIndex];
-        _sources[existingIndex] = old.copyWith(
-          description: description,
-          version: version,
-          script: script,
-          updatedAt: DateTime.now(),
-          // 更新脚本时若当前无任何启用源，则启用本条
-          isEnabled: old.isEnabled || shouldEnable,
-        );
-        targetId = old.id;
-        _engines[old.id]?.dispose();
-        _engines.remove(old.id);
-      } else if (isHuibqFamily(candidate) && _sources.any(isHuibqFamily)) {
-        final idx = _sources.indexWhere(isHuibqFamily);
-        final old = _sources[idx];
-        _sources[idx] = old.copyWith(
+      return await _mutate<bool>((current) {
+        final now = _clock();
+        final shouldEnable = !current.any((source) => source.isEnabled);
+        final candidate = CustomSource(
+          id: now.microsecondsSinceEpoch.toString(),
           name: name,
-          description: description.isNotEmpty ? description : old.description,
+          description: description,
           version: version,
           author: author,
           script: script,
-          updatedAt: DateTime.now(),
-          isEnabled: old.isEnabled || shouldEnable,
+          createdAt: now,
+          updatedAt: now,
+          isEnabled: shouldEnable,
         );
-        targetId = old.id;
-        _engines[old.id]?.dispose();
-        _engines.remove(old.id);
-      } else {
-        if (shouldEnable) {
-          for (var i = 0; i < _sources.length; i++) {
-            if (_sources[i].isEnabled) {
-              _sources[i] = _sources[i].copyWith(isEnabled: false);
+        final invalidated = <String>{};
+        late final String targetId;
+        final existingIndex = current.indexWhere(
+            (source) => source.name == name && source.author == author);
+        if (existingIndex >= 0) {
+          final old = current[existingIndex];
+          current[existingIndex] = old.copyWith(
+            description: description,
+            version: version,
+            script: script,
+            updatedAt: now,
+            isEnabled: old.isEnabled || shouldEnable,
+          );
+          targetId = old.id;
+          invalidated.add(old.id);
+        } else if (isHuibqFamily(candidate) && current.any(isHuibqFamily)) {
+          final index = current.indexWhere(isHuibqFamily);
+          final old = current[index];
+          current[index] = old.copyWith(
+            name: name,
+            description: description.isNotEmpty ? description : old.description,
+            version: version,
+            author: author,
+            script: script,
+            updatedAt: now,
+            isEnabled: old.isEnabled || shouldEnable,
+          );
+          targetId = old.id;
+          invalidated.add(old.id);
+        } else {
+          current.add(candidate);
+          targetId = candidate.id;
+        }
+        if (current
+            .any((source) => source.id == targetId && source.isEnabled)) {
+          for (var i = 0; i < current.length; i++) {
+            if (current[i].id != targetId && current[i].isEnabled) {
+              current[i] = current[i].copyWith(isEnabled: false);
             }
           }
         }
-        _sources.add(candidate);
-        targetId = candidate.id;
-      }
-      // 确保至多一个启用
-      if (_sources.any((s) => s.id == targetId && s.isEnabled)) {
-        for (var i = 0; i < _sources.length; i++) {
-          if (_sources[i].id != targetId && _sources[i].isEnabled) {
-            _sources[i] = _sources[i].copyWith(isEnabled: false);
-          }
-        }
-      }
-      await _dedupeSources();
-      await _saveSources();
-      return true;
+        return _SourceMutation(
+          _dedupeSources(current),
+          true,
+          invalidateEngines: invalidated,
+        );
+      });
     } catch (e) {
       return false;
     }
   }
 
-  Future<bool> importSourceFromUrl(String url) async {
+  Future<bool> importSourceFromUrl(
+    String url, {
+    SourceRequestCancellation? cancellation,
+  }) async {
+    final cancel = cancellation ?? SourceRequestCancellation();
     try {
-      final response = await _dio.get(url,
-          options: Options(responseType: ResponseType.plain));
-      final script = response.data.toString();
-      if (validateScript(script)) {
+      return await () async {
+        final response = await _importSandbox.request(
+          Uri.parse(url),
+          const {'method': 'GET', 'timeout': 15000},
+          cancellation: cancel,
+        );
+        final script = await withSourceResponseLease(response, (owned) async {
+          if (owned.statusCode != 200) return null;
+          return utf8.decode(owned.bytes, allowMalformed: false);
+        });
+        if (script == null || !validateScript(script)) return false;
         return await importLxMusicScript(script);
-      }
-      return false;
-    } catch (e) {
+      }()
+          .timeout(importTimeout, onTimeout: () {
+        cancel.cancel('import timeout');
+        return false;
+      });
+    } catch (_) {
+      if (!cancel.isCancelled) cancel.cancel('import failed');
       return false;
     }
   }
@@ -414,4 +490,16 @@ class CustomSourceService {
     }
     _engines.clear();
   }
+}
+
+final class _SourceMutation<T> {
+  const _SourceMutation(
+    this.sources,
+    this.result, {
+    this.invalidateEngines = const {},
+  });
+
+  final List<CustomSource> sources;
+  final T result;
+  final Set<String> invalidateEngines;
 }

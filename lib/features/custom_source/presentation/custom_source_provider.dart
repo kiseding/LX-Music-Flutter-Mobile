@@ -18,51 +18,65 @@ final customSourcesProvider =
 
 class CustomSourcesNotifier extends StateNotifier<List<CustomSource>> {
   final CustomSourceService _service;
+  int _generation = 0;
 
   CustomSourcesNotifier(this._service) : super([]) {
     _loadSources();
   }
 
   Future<void> _loadSources() async {
+    final generation = ++_generation;
     await _service.init();
+    if (generation != _generation) return;
     state = _service.sources;
   }
 
   Future<void> addSource(CustomSource source) async {
+    final generation = ++_generation;
     await _service.addSource(source);
+    if (generation != _generation) return;
     state = _service.sources;
   }
 
   Future<void> updateSource(CustomSource source) async {
+    final generation = ++_generation;
     await _service.updateSource(source);
+    if (generation != _generation) return;
     state = _service.sources;
   }
 
   Future<void> deleteSource(String id) async {
+    final generation = ++_generation;
     await _service.deleteSource(id);
+    if (generation != _generation) return;
     state = _service.sources;
   }
 
   Future<void> toggleSource(String id) async {
+    final generation = ++_generation;
     await _service.toggleSource(id);
+    if (generation != _generation) return;
     state = _service.sources;
   }
 
   Future<bool> importSource(String jsonStr) async {
+    final generation = ++_generation;
     final result = await _service.importSource(jsonStr);
-    state = _service.sources;
+    if (generation == _generation) state = _service.sources;
     return result;
   }
 
   Future<bool> importLxMusicScript(String script) async {
+    final generation = ++_generation;
     final result = await _service.importLxMusicScript(script);
-    state = _service.sources;
+    if (generation == _generation) state = _service.sources;
     return result;
   }
 
   Future<bool> importSourceFromUrl(String url) async {
+    final generation = ++_generation;
     final result = await _service.importSourceFromUrl(url);
-    state = _service.sources;
+    if (generation == _generation) state = _service.sources;
     return result;
   }
 

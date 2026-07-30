@@ -406,4 +406,27 @@ void main() {
       DownloadStatus.failed,
     );
   });
+
+  test('persisted task decoder rejects invalid status and required types', () {
+    final valid = DownloadTask(
+      id: 't1',
+      musicId: 'm1',
+      name: 'Song',
+      singer: 'Singer',
+      createdAt: DateTime.utc(2026),
+    ).toJson();
+
+    expect(
+      () => DownloadTask.decodePersisted({...valid, 'status': 99}),
+      throwsFormatException,
+    );
+    expect(
+      () => DownloadTask.decodePersisted({...valid, 'musicId': 7}),
+      throwsFormatException,
+    );
+    expect(
+      () => DownloadTask.decodePersisted({...valid, 'progress': double.nan}),
+      throwsFormatException,
+    );
+  });
 }

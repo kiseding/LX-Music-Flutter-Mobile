@@ -20,34 +20,42 @@ final isSyncEnabledProvider = Provider<bool>((ref) {
 });
 
 /// 同步连接管理器 - 自动连接/断开
-final syncConnectionProvider = StateNotifierProvider<SyncConnectionNotifier, bool>((ref) {
+final syncConnectionProvider =
+    StateNotifierProvider<SyncConnectionNotifier, bool>((ref) {
   return SyncConnectionNotifier(ref);
 });
 
 class SyncConnectionNotifier extends StateNotifier<bool> {
   final Ref _ref;
+  int _generation = 0;
+
   SyncConnectionNotifier(this._ref) : super(false);
 
   /// 连接到同步服务器
   Future<bool> connect() async {
+    final generation = ++_generation;
     final serverUrl = _ref.read(syncServerUrlProvider);
     if (serverUrl == null || serverUrl.isEmpty) return false;
 
     final syncService = _ref.read(syncServiceProvider);
     final token = await syncService.loadSavedToken();
+    if (generation != _generation) return false;
     final ok = await syncService.connect(serverUrl, token: token);
+    if (generation != _generation) return false;
     state = ok;
     return ok;
   }
 
   /// 断开连接
   void disconnect() {
+    ++_generation;
     _ref.read(syncServiceProvider).disconnect();
     state = false;
   }
 
   /// 手动同步 - 推送本地数据
   Future<bool> pushSync() async {
+    final generation = ++_generation;
     final syncService = _ref.read(syncServiceProvider);
     if (!syncService.isConnected) return false;
 
@@ -55,23 +63,37 @@ class SyncConnectionNotifier extends StateNotifier<bool> {
     final playlists = playlistService.playlists;
     final history = playlistService.recent?.songs ?? [];
 
-    return syncService.push(playlists: playlists, history: history);
+    final ok =
+        await syncService.push(playlists: playlists, history: history);
+    if (generation != _generation) return false;
+    return ok;
   }
 
   /// 手动同步 - 拉取远程数据
   Future<Map<String, dynamic>?> pullSync() async {
+    final generation = ++_generation;
     final syncService = _ref.read(syncServiceProvider);
     if (!syncService.isConnected) return null;
-    return syncService.pull();
+    final data = await syncService.pull();
+    if (generation != _generation) return null;
+    return data;
   }
 
   /// 登录
   Future<bool> login(String username, String password) async {
-    return _ref.read(syncServiceProvider).login(username, password);
+    final generation = ++_generation;
+    final ok =
+        await _ref.read(syncServiceProvider).login(username, password);
+    if (generation != _generation) return false;
+    return ok;
   }
 
   /// 注册
   Future<bool> register(String username, String password) async {
-    return _ref.read(syncServiceProvider).register(username, password);
+    final generation = ++_generation;
+    final ok =
+        await _ref.read(syncServiceProvider).register(username, password);
+    if (generation != _generation) return false;
+    return ok;
   }
 }

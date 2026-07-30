@@ -6,11 +6,11 @@ import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import '../network/app_http_client.dart';
 import '../network/outbound_url.dart';
 import '../network/play_url_result.dart';
+import '../storage/storage_service.dart';
 
 typedef PlaybackDownloader = Future<void> Function(
   String url,
@@ -25,18 +25,22 @@ abstract class PlaybackCacheIndexStore {
 }
 
 class PrefsPlaybackCacheIndexStore implements PlaybackCacheIndexStore {
+  PrefsPlaybackCacheIndexStore({StorageService? storage}) : _storage = storage;
+
   static const key = 'playback_cache_index_v1';
+  StorageService? _storage;
+
+  Future<StorageService> get _store async =>
+      _storage ??= await StorageService.instance;
 
   @override
   Future<String?> read() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString(key);
+    return (await _store).getString(key);
   }
 
   @override
   Future<void> write(String raw) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(key, raw);
+    await (await _store).setString(key, raw);
   }
 }
 

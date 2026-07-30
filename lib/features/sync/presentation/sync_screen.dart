@@ -4,7 +4,6 @@ import '../../../core/theme/app_colors.dart';
 import '../../cloud/presentation/cloud_provider.dart';
 import '../../cloud/domain/cloud_api_client.dart';
 import '../../playlist/presentation/playlist_provider.dart';
-import '../../player/domain/music_item.dart';
 import 'cloud_playlist_merge.dart';
 
 /// 同步页：对接 workers 云端（账号 + 歌单），不再强制首次启动登录。
@@ -330,7 +329,7 @@ class _SyncScreenState extends ConsumerState<SyncScreen> {
         service: ref.read(playlistServiceProvider),
         love: love,
         userList: userList,
-        decodeSong: _songFromCloud,
+        decodeSong: decodeCloudSong,
       );
       if (!mounted) return;
       setState(
@@ -343,26 +342,6 @@ class _SyncScreenState extends ConsumerState<SyncScreen> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
-  }
-
-  MusicItem? _songFromCloud(dynamic raw) {
-    if (raw is! Map) return null;
-    final m = Map<String, dynamic>.from(raw);
-    final source = m['source']?.toString() ?? 'tx';
-    final mid = m['songmid']?.toString() ?? m['hash']?.toString() ?? '';
-    if (mid.isEmpty && (m['name']?.toString().isEmpty ?? true)) return null;
-    return MusicItem(
-      id: mid.isNotEmpty ? mid : '${m['name']}_${m['singer']}',
-      name: m['name']?.toString() ?? '',
-      singer: m['singer']?.toString() ?? '',
-      album: m['albumName']?.toString() ?? '',
-      source: source,
-      platform: source,
-      artwork: m['img']?.toString(),
-      songmid: mid,
-      hash: m['hash']?.toString() ?? mid,
-      meta: m,
-    );
   }
 
   Future<void> _openAdminUsers() async {

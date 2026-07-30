@@ -138,32 +138,132 @@ class DownloadTask {
   }
 
   factory DownloadTask.fromJson(Map<String, dynamic> json) {
+    return DownloadTask.decodePersisted(json);
+  }
+
+  static DownloadTask decodePersisted(Object? raw) {
+    if (raw is! Map) {
+      throw FormatException(
+        'DownloadTask expected Map, got ${raw.runtimeType}',
+      );
+    }
+    final json = Map<String, dynamic>.from(raw);
+
+    final id = _requireString(json, 'id');
+    final musicId = _requireString(json, 'musicId');
+    final name = _requireString(json, 'name');
+    final singer = _requireString(json, 'singer');
+    final statusIndex = _requireInt(json, 'status');
+    if (statusIndex < 0 || statusIndex >= DownloadStatus.values.length) {
+      throw FormatException('invalid status index: $statusIndex');
+    }
+    final progress = _optionalDouble(json, 'progress') ?? 0.0;
+    if (!progress.isFinite || progress < 0.0 || progress > 1.0) {
+      throw FormatException('invalid progress: $progress');
+    }
+    final speed = _optionalInt(json, 'speed') ?? 0;
+    if (speed < 0) {
+      throw FormatException('invalid speed: $speed');
+    }
+    final fileSize = _optionalInt(json, 'fileSize') ?? 0;
+    if (fileSize < 0) {
+      throw FormatException('invalid fileSize: $fileSize');
+    }
+    final attemptRevision = _optionalInt(json, 'attemptRevision') ?? 0;
+    if (attemptRevision < 0) {
+      throw FormatException('invalid attemptRevision: $attemptRevision');
+    }
+    final duration = _optionalNullableInt(json, 'duration');
+    if (duration != null && duration < 0) {
+      throw FormatException('invalid duration: $duration');
+    }
+
+    final createdAt = _requireDate(json, 'createdAt');
+    final completedAt = _optionalDate(json, 'completedAt');
+
     return DownloadTask(
-      id: json['id'],
-      musicId: json['musicId'],
-      name: json['name'],
-      singer: json['singer'],
-      url: json['url'],
-      savePath: json['savePath'],
-      status: DownloadStatus.values[json['status']],
-      progress: json['progress'] ?? 0.0,
-      speed: json['speed'] ?? 0,
-      errorMsg: json['errorMsg'],
-      createdAt: DateTime.parse(json['createdAt']),
-      completedAt: json['completedAt'] != null
-          ? DateTime.parse(json['completedAt'])
-          : null,
-      quality: json['quality'],
-      fileSize: json['fileSize'] ?? 0,
-      platform: json['platform'],
-      source: json['source'],
-      songmid: json['songmid'],
-      hash: json['hash'],
-      album: json['album'],
-      artwork: json['artwork'],
-      duration: json['duration'],
-      attemptRevision: json['attemptRevision'] ?? 0,
+      id: id,
+      musicId: musicId,
+      name: name,
+      singer: singer,
+      url: _optionalString(json, 'url'),
+      savePath: _optionalString(json, 'savePath'),
+      status: DownloadStatus.values[statusIndex],
+      progress: progress,
+      speed: speed,
+      errorMsg: _optionalString(json, 'errorMsg'),
+      createdAt: createdAt,
+      completedAt: completedAt,
+      quality: _optionalString(json, 'quality'),
+      fileSize: fileSize,
+      platform: _optionalString(json, 'platform'),
+      source: _optionalString(json, 'source'),
+      songmid: _optionalString(json, 'songmid'),
+      hash: _optionalString(json, 'hash'),
+      album: _optionalString(json, 'album'),
+      artwork: _optionalString(json, 'artwork'),
+      duration: duration,
+      attemptRevision: attemptRevision,
     );
+  }
+
+  static String _requireString(Map<String, dynamic> json, String key) {
+    final value = json[key];
+    if (value is! String) {
+      throw FormatException('expected String for $key, got ${value.runtimeType}');
+    }
+    return value;
+  }
+
+  static String? _optionalString(Map<String, dynamic> json, String key) {
+    if (!json.containsKey(key) || json[key] == null) return null;
+    final value = json[key];
+    if (value is! String) {
+      throw FormatException('expected String? for $key, got ${value.runtimeType}');
+    }
+    return value;
+  }
+
+  static int _requireInt(Map<String, dynamic> json, String key) {
+    final value = json[key];
+    if (value is int) return value;
+    throw FormatException('expected int for $key, got ${value.runtimeType}');
+  }
+
+  static int? _optionalInt(Map<String, dynamic> json, String key) {
+    if (!json.containsKey(key) || json[key] == null) return null;
+    final value = json[key];
+    if (value is int) return value;
+    throw FormatException('expected int for $key, got ${value.runtimeType}');
+  }
+
+  static int? _optionalNullableInt(Map<String, dynamic> json, String key) {
+    return _optionalInt(json, key);
+  }
+
+  static double? _optionalDouble(Map<String, dynamic> json, String key) {
+    if (!json.containsKey(key) || json[key] == null) return null;
+    final value = json[key];
+    if (value is double) return value;
+    if (value is int) return value.toDouble();
+    throw FormatException('expected double for $key, got ${value.runtimeType}');
+  }
+
+  static DateTime _requireDate(Map<String, dynamic> json, String key) {
+    final value = json[key];
+    if (value is! String) {
+      throw FormatException('expected date String for $key, got ${value.runtimeType}');
+    }
+    try {
+      return DateTime.parse(value);
+    } on FormatException {
+      throw FormatException('invalid date for $key: $value');
+    }
+  }
+
+  static DateTime? _optionalDate(Map<String, dynamic> json, String key) {
+    if (!json.containsKey(key) || json[key] == null) return null;
+    return _requireDate(json, key);
   }
 
   /// 从 DownloadTask 恢复为 MusicItem

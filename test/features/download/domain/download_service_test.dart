@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -8,15 +9,24 @@ import 'package:lx_music_flutter/features/player/domain/music_item.dart';
 
 class _MemoryStorage implements DownloadTaskStorage {
   List<Map<String, dynamic>> saved = [];
+  List<Map<String, dynamic>> quarantine = [];
   int writes = 0;
 
   @override
-  List<Map<String, dynamic>> load() => saved;
+  List<dynamic> load() => saved;
 
   @override
   Future<void> save(List<Map<String, dynamic>> tasks) async {
     writes++;
     saved = tasks;
+  }
+
+  @override
+  List<Map<String, dynamic>> loadQuarantine() => quarantine;
+
+  @override
+  Future<void> saveQuarantine(List<Map<String, dynamic>> records) async {
+    quarantine = records;
   }
 }
 
@@ -340,11 +350,14 @@ void main() {
           progress: .7,
         ).toJson(),
       ];
+    final root = await Directory.systemTemp.createTemp('downloads_');
+    addTearDown(() => root.delete(recursive: true));
     final service = DownloadService(
       storage: storage,
       downloader: (_, __, ___) async {},
       wifiOnly: true,
       currentNetwork: () async => DownloadNetwork.mobile,
+      downloadDirectory: () async => root,
     );
     addTearDown(service.dispose);
 
@@ -352,5 +365,182 @@ void main() {
     expect(service.tasks.single.status, DownloadStatus.pending);
     expect(service.tasks.single.progress, 0);
     expect(service.tasks.single.savePath, isNull);
+  });
+
+  test('startup quarantines one bad record and loads valid siblings', () async {
+    final valid = DownloadTask(
+      id: 'valid',
+      musicId: 'm1',
+      name: 'Song',
+      singer: 'Singer',
+      createdAt: DateTime.utc(2026),
+      status: DownloadStatus.paused,
+    ).toJson();
+    final storage = _MemoryStorage()..saved = [valid, {'id': 7}];
+    final root = await Directory.systemTemp.createTemp('downloads_');
+    addTearDown(() => root.delete(recursive: true));
+    final service = DownloadService(
+      storage: storage,
+      downloader: (_, __, ___) async {},
+      downloadDirectory: () async => root,
+    );
+    addTearDown(service.dispose);
+
+    await service.init();
+
+    expect(service.tasks.map((task) => task.id), ['valid']);
+    expect(storage.quarantine, hasLength(1));
+    expect(storage.saved, hasLength(1));
+  });
+
+  test('outside-root completed path is quarantined and never deleted', () async {
+    final root = await Directory.systemTemp.createTemp('downloads_');
+    final outside = await Directory.systemTemp.createTemp('outside_');
+    final victim = File('${outside.path}/victim.mp3')..writeAsBytesSync([1, 2, 3]);
+    final storage = _MemoryStorage()
+      ..saved = [
+        DownloadTask(
+          id: 'escaped',
+          musicId: 'm1',
+          name: 'Song',
+          singer: 'Singer',
+          createdAt: DateTime.utc(2026),
+          status: DownloadStatus.completed,
+          savePath: victim.path,
+          fileSize: 3,
+        ).toJson()
+      ];
+    final service = DownloadService(
+      storage: storage,
+      downloader: (_, __, ___) async {},
+      downloadDirectory: () async => root,
+    );
+    addTearDown(() async {
+      await service.dispose();
+      await root.delete(recursive: true);
+      await outside.delete(recursive: true);
+    });
+
+    await service.init();
+    await service.clearCache();
+
+    expect(service.tasks, isEmpty);
+    expect(storage.quarantine, hasLength(1));
+    expect(victim.existsSync(), isTrue);
+  });
+
+  test('startup recovers promoted file and removes strict orphan and part',
+      () async {
+    final root = await Directory.systemTemp.createTemp('downloads_');
+    final recoverable = File('${root.path}/task-2.mp3')
+      ..writeAsBytesSync(List<int>.filled(2048, 1));
+    final orphan = File('${root.path}/orphan-1.flac')..writeAsBytesSync([1]);
+    final part = File('${root.path}/task-2.part')..writeAsBytesSync([1]);
+    final unrelated = File('${root.path}/notes.txt')..writeAsStringSync('keep');
+    final storage = _MemoryStorage()
+      ..saved = [
+        DownloadTask(
+          id: 'task',
+          musicId: 'm1',
+          name: 'Song',
+          singer: 'Singer',
+          createdAt: DateTime.utc(2026),
+          status: DownloadStatus.downloading,
+          attemptRevision: 2,
+        ).toJson()
+      ];
+    final service = DownloadService(
+      storage: storage,
+      downloader: (_, __, ___) async {},
+      downloadDirectory: () async => root,
+    );
+    addTearDown(() async {
+      await service.dispose();
+      await root.delete(recursive: true);
+    });
+
+    await service.init();
+
+    expect(service.tasks.single.status, DownloadStatus.completed);
+    expect(service.tasks.single.savePath, recoverable.path);
+    expect(orphan.existsSync(), isFalse);
+    expect(part.existsSync(), isFalse);
+    expect(unrelated.existsSync(), isTrue);
+  });
+
+  test(
+      'startup quarantines multi-final candidates including empty and deletes all owned',
+      () async {
+    final root = await Directory.systemTemp.createTemp('downloads_');
+    final nonEmpty = File('${root.path}/task-2.mp3')
+      ..writeAsBytesSync(List<int>.filled(2048, 1));
+    final empty = File('${root.path}/task-2.flac')..writeAsBytesSync(const []);
+    final unrelated = File('${root.path}/notes.txt')..writeAsStringSync('keep');
+    final storage = _MemoryStorage()
+      ..saved = [
+        DownloadTask(
+          id: 'task',
+          musicId: 'm1',
+          name: 'Song',
+          singer: 'Singer',
+          createdAt: DateTime.utc(2026),
+          status: DownloadStatus.downloading,
+          attemptRevision: 2,
+        ).toJson()
+      ];
+    final service = DownloadService(
+      storage: storage,
+      downloader: (_, __, ___) async {},
+      downloadDirectory: () async => root,
+    );
+    addTearDown(() async {
+      await service.dispose();
+      await root.delete(recursive: true);
+    });
+
+    await service.init();
+
+    expect(service.tasks, isEmpty);
+    expect(storage.quarantine, hasLength(1));
+    expect(nonEmpty.existsSync(), isFalse);
+    expect(empty.existsSync(), isFalse);
+    expect(unrelated.existsSync(), isTrue);
+  });
+
+  test('startup quarantines multi empty finals and deletes all owned', () async {
+    final root = await Directory.systemTemp.createTemp('downloads_');
+    final emptyMp3 = File('${root.path}/task-2.mp3')..writeAsBytesSync(const []);
+    final emptyFlac =
+        File('${root.path}/task-2.flac')..writeAsBytesSync(const []);
+    final unrelated = File('${root.path}/notes.txt')..writeAsStringSync('keep');
+    final storage = _MemoryStorage()
+      ..saved = [
+        DownloadTask(
+          id: 'task',
+          musicId: 'm1',
+          name: 'Song',
+          singer: 'Singer',
+          createdAt: DateTime.utc(2026),
+          status: DownloadStatus.downloading,
+          attemptRevision: 2,
+        ).toJson()
+      ];
+    final service = DownloadService(
+      storage: storage,
+      downloader: (_, __, ___) async {},
+      downloadDirectory: () async => root,
+    );
+    addTearDown(() async {
+      await service.dispose();
+      await root.delete(recursive: true);
+    });
+
+    await service.init();
+
+    expect(service.tasks, isEmpty);
+    expect(storage.quarantine, hasLength(1));
+    expect(emptyMp3.existsSync(), isFalse);
+    expect(emptyFlac.existsSync(), isFalse);
+    expect(unrelated.existsSync(), isTrue);
   });
 }

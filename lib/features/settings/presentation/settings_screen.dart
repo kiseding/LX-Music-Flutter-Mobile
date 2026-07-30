@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:file_picker/file_picker.dart';
+import '../../../core/io/bounded_input.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/storage/storage_service.dart';
 import 'settings_provider.dart';
@@ -554,54 +555,30 @@ class SettingsScreen extends ConsumerWidget {
       if (result == null || result.files.isEmpty) return;
 
       final file = File(result.files.first.path!);
-      final jsonStr = await file.readAsString();
-      final backup = jsonDecode(jsonStr) as Map<String, dynamic>;
-
-      if (backup['version'] != 1) {
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('无效的备份文件'),
-              duration: Duration(seconds: 2),
-            ),
-          );
-        }
-        return;
-      }
-
-      final storage = await StorageService.instance;
-
-      // 恢复歌单
-      await restoreBackupPlaylists(
-        backup,
-        ref.read(playlistServiceProvider).replaceAll,
+      final bytes = await readFileBytesBounded(
+        file,
+        maximumBytes: BackupLimits.maximumFileBytes,
       );
-      // 恢复搜索历史
-      if (backup['search_history'] != null) {
-        await storage.setStringList(
-          'search_history',
-          (backup['search_history'] as List).cast<String>(),
-        );
-      }
-      // 恢复设置
-      if (backup['theme_mode'] != null) {
-        await storage.setInt('theme_mode', backup['theme_mode'] as int);
-      }
-      if (backup['audio_quality'] != null) {
-        await storage.setInt('audio_quality', backup['audio_quality'] as int);
-      }
-      if (backup['download_quality'] != null) {
-        await storage.setInt(
-          'download_quality',
-          backup['download_quality'] as int,
-        );
-      }
-      if (backup['wifi_only_download'] != null) {
-        await storage.setBool(
-          'wifi_only_download',
-          backup['wifi_only_download'] as bool,
-        );
-      }
+      final data = decodeBackup(utf8.decode(bytes, allowMalformed: false));
+      await BackupRestoreCoordinator(
+        storage: await StorageService.instance,
+        playlists: ref.read(playlistServiceProvider),
+        publishCommitted: (data) {
+          ref
+              .read(searchHistoryProvider.notifier)
+              .applyCommitted(data.searchHistory);
+          ref.read(themeModeProvider.notifier).applyCommitted(data.themeMode);
+          ref
+              .read(audioQualityProvider.notifier)
+              .applyCommitted(data.audioQuality);
+          ref
+              .read(downloadQualityProvider.notifier)
+              .applyCommitted(data.downloadQuality);
+          ref
+              .read(wifiOnlyDownloadProvider.notifier)
+              .applyCommitted(data.wifiOnlyDownload);
+        },
+      ).restore(data);
 
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

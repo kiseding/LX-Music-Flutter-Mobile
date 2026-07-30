@@ -290,6 +290,24 @@ class PlaylistService {
     });
   }
 
+  Future<void> restoreSnapshot(PlaylistSnapshot snapshot) {
+    return _enqueue(() async {
+      if (_disposing || !_initialized) {
+        throw StateError('PlaylistService is not available for restore');
+      }
+      _validatePlaylistIds(snapshot.playlists);
+      final repaired = PlaylistSnapshot(
+        schemaVersion: 1,
+        playlists: _withSystemPlaylists(snapshot.playlists),
+      );
+      await _repository.save(repaired);
+      _playlists
+        ..clear()
+        ..addAll(repaired.playlists);
+      _revisionController.add(++_revision);
+    });
+  }
+
   Playlist? get favorites => getPlaylist('favorites');
   Playlist? get recent => getPlaylist('recent');
 

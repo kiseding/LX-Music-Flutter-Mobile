@@ -6,6 +6,10 @@ import 'package:lx_music_flutter/core/storage/secure_token_store.dart';
 import 'package:lx_music_flutter/features/cloud/domain/cloud_api_client.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+
+String cloudTokenKey([String base = 'https://cloud.example']) =>
+    originTokenKey('cloud_api_token', base);
+
 final class FakeSecureTokenStore implements SecureTokenStore {
   FakeSecureTokenStore({
     this.failWrite = false,
@@ -242,7 +246,7 @@ Future<CloudApiClient> loadedClient({
   SharedPreferences.setMockInitialValues({
     'cloud_api_base': 'https://cloud.example',
   });
-  final secure = FakeSecureTokenStore()..values['cloud_api_token'] = 'token';
+  final secure = FakeSecureTokenStore()..values[cloudTokenKey()] = 'token';
   final client = CloudApiClient(
     dio: responseDio(statusCode: statusCode, data: data, error: error),
     secureStore: secure,
@@ -473,7 +477,7 @@ void main() {
     await client.load();
 
     expect(client.token, 'legacy-token');
-    expect(await secure.read('cloud_api_token'), 'legacy-token');
+    expect(await secure.read(cloudTokenKey()), 'legacy-token');
     expect(
         (await SharedPreferences.getInstance()).containsKey('cloud_api_token'),
         isFalse);
@@ -486,12 +490,15 @@ void main() {
       'cloud_api_username': 'user',
       'cloud_api_role': 'user',
     });
-    final secure = FakeSecureTokenStore()..values['cloud_api_token'] = 'token';
+    final secure = FakeSecureTokenStore()..values[cloudTokenKey()] = 'token';
     final client = CloudApiClient(secureStore: secure);
     await client.load();
     secure.throwOnRead = true;
 
-    await expectLater(client.load(), throwsStateError);
+    await expectLater(
+      client.load(),
+      throwsA(isA<SecureTokenMigrationException>()),
+    );
 
     expect(client.isLoggedIn, isTrue);
     expect(client.token, 'token');
@@ -516,7 +523,7 @@ void main() {
 
     await client.login('user', 'password');
 
-    expect(await secure.read('cloud_api_token'), 'new-token');
+    expect(await secure.read(cloudTokenKey()), 'new-token');
     expect(
         (await SharedPreferences.getInstance()).containsKey('cloud_api_token'),
         isFalse);
@@ -540,7 +547,7 @@ void main() {
 
     await client.register('user', 'password');
 
-    expect(await secure.read('cloud_api_token'), 'new-token');
+    expect(await secure.read(cloudTokenKey()), 'new-token');
     expect(
         (await SharedPreferences.getInstance()).containsKey('cloud_api_token'),
         isFalse);
@@ -554,7 +561,7 @@ void main() {
       'cloud_api_role': 'user',
     });
     final secure = FakeSecureTokenStore(failWrite: true)
-      ..values['cloud_api_token'] = 'old-token';
+      ..values[cloudTokenKey()] = 'old-token';
     final client = CloudApiClient(
       dio: responseDio(data: {
         'token': 'new-token',
@@ -574,7 +581,7 @@ void main() {
   });
 
   test('verify persists refreshed session credentials securely', () async {
-    final secure = FakeSecureTokenStore()..values['cloud_api_token'] = 'token';
+    final secure = FakeSecureTokenStore()..values[cloudTokenKey()] = 'token';
     SharedPreferences.setMockInitialValues({
       'cloud_api_base': 'https://cloud.example',
       'cloud_api_username': 'old-user',
@@ -592,7 +599,7 @@ void main() {
 
     expect(await client.verify(), CloudVerification.valid);
 
-    expect(await secure.read('cloud_api_token'), 'token');
+    expect(await secure.read(cloudTokenKey()), 'token');
     expect(client.username, 'new-user');
     expect(client.role, 'admin');
     expect(
@@ -608,7 +615,7 @@ void main() {
       'cloud_api_role': 'user',
     });
     final secure = FakeSecureTokenStore(failWrite: true)
-      ..values['cloud_api_token'] = 'old-token';
+      ..values[cloudTokenKey()] = 'old-token';
     final client = CloudApiClient(
       dio: responseDio(data: {
         'token': 'new-token',
@@ -648,7 +655,7 @@ void main() {
     await client.login('new-user', 'password');
     await client.clearSession();
 
-    expect(await secure.read('cloud_api_token'), isNull);
+    expect(await secure.read(cloudTokenKey()), isNull);
     expect(client.isLoggedIn, isFalse);
   });
 
@@ -660,7 +667,7 @@ void main() {
       'cloud_api_role': 'user',
     });
     final secure = FakeSecureTokenStore()
-      ..values['cloud_api_token'] = 'old-token';
+      ..values[cloudTokenKey()] = 'old-token';
     var preferenceCalls = 0;
     final client = CloudApiClient(
       dio: responseDio(data: {
@@ -679,7 +686,7 @@ void main() {
 
     await expectLater(client.login('new-user', 'password'), throwsStateError);
 
-    expect(await secure.read('cloud_api_token'), 'old-token');
+    expect(await secure.read(cloudTokenKey()), 'old-token');
     expect(client.token, 'old-token');
     expect(client.username, 'old-user');
     expect(client.role, 'user');
@@ -694,7 +701,7 @@ void main() {
       'cloud_api_role': 'user',
     });
     final secure = FakeSecureTokenStore()
-      ..values['cloud_api_token'] = 'old-token';
+      ..values[cloudTokenKey()] = 'old-token';
     final sessionPreferences = FakeCloudSessionPreferences({
       'cloud_api_token': 'old-token',
       'cloud_api_username': 'old-user',
@@ -713,7 +720,7 @@ void main() {
 
     await expectLater(client.login('new-user', 'password'), throwsStateError);
 
-    expect(await secure.read('cloud_api_token'), 'old-token');
+    expect(await secure.read(cloudTokenKey()), 'old-token');
     expect(client.token, 'old-token');
     expect(client.username, 'old-user');
     expect(client.role, 'user');
@@ -732,7 +739,7 @@ void main() {
       'cloud_api_role': 'user',
     });
     final secure = FakeSecureTokenStore()
-      ..values['cloud_api_token'] = 'old-token';
+      ..values[cloudTokenKey()] = 'old-token';
     final sessionPreferences = FakeCloudSessionPreferences({
       'cloud_api_username': 'old-user',
       'cloud_api_role': 'user',
@@ -751,7 +758,7 @@ void main() {
     await expectLater(
         client.register('new-user', 'password'), throwsStateError);
 
-    expect(await secure.read('cloud_api_token'), 'old-token');
+    expect(await secure.read(cloudTokenKey()), 'old-token');
     expect(client.token, 'old-token');
     expect(client.username, 'old-user');
     expect(client.role, 'user');
@@ -768,7 +775,7 @@ void main() {
       'cloud_api_username': 'old-user',
       'cloud_api_role': 'user',
     });
-    final secure = FakeSecureTokenStore()..values['cloud_api_token'] = 'token';
+    final secure = FakeSecureTokenStore()..values[cloudTokenKey()] = 'token';
     final sessionPreferences = FakeCloudSessionPreferences({
       'cloud_api_username': 'old-user',
       'cloud_api_role': 'user',
@@ -786,7 +793,7 @@ void main() {
 
     expect(await client.verify(), CloudVerification.unavailable);
 
-    expect(await secure.read('cloud_api_token'), 'token');
+    expect(await secure.read(cloudTokenKey()), 'token');
     expect(client.token, 'token');
     expect(client.username, 'old-user');
     expect(client.role, 'user');
@@ -804,7 +811,7 @@ void main() {
       'cloud_api_role': 'user',
     });
     final secure = FakeSecureTokenStore()
-      ..values['cloud_api_token'] = 'old-token';
+      ..values[cloudTokenKey()] = 'old-token';
     final sessionPreferences = FakeCloudSessionPreferences({
       'cloud_api_token': 'old-token',
       'cloud_api_username': 'old-user',
@@ -818,7 +825,7 @@ void main() {
 
     await expectLater(client.clearSession(), throwsStateError);
 
-    expect(await secure.read('cloud_api_token'), 'old-token');
+    expect(await secure.read(cloudTokenKey()), 'old-token');
     expect(client.token, 'old-token');
     expect(client.username, 'old-user');
     expect(client.role, 'user');
@@ -832,7 +839,7 @@ void main() {
       'cloud_api_role': 'user',
     });
     final secure = FakeSecureTokenStore(failWriteValue: 'old-token')
-      ..values['cloud_api_token'] = 'old-token';
+      ..values[cloudTokenKey()] = 'old-token';
     final sessionPreferences = FakeCloudSessionPreferences({
       'cloud_api_token': 'old-token',
       'cloud_api_username': 'old-user',
@@ -850,7 +857,7 @@ void main() {
           predicate((error) => error.toString().contains('cleanup failed'))),
     );
 
-    expect(await secure.read('cloud_api_token'), isNull);
+    expect(await secure.read(cloudTokenKey()), isNull);
     expect(client.isLoggedIn, isFalse);
     expect(client.token, isNull);
     expect(client.username, 'old-user');
@@ -879,7 +886,7 @@ void main() {
       'cloud_api_role': 'user',
     });
     final secure = FakeSecureTokenStore(readAfterWrite: 'different')
-      ..values['cloud_api_token'] = 'token';
+      ..values[cloudTokenKey()] = 'token';
     final client = CloudApiClient(
       dio: responseDio(data: {
         'valid': true,
@@ -915,7 +922,7 @@ void main() {
       'cloud_api_role': 'user',
     });
     final secure = FakeSecureTokenStore(failDelete: true)
-      ..values['cloud_api_token'] = 'token';
+      ..values[cloudTokenKey()] = 'token';
     final client = CloudApiClient(secureStore: secure);
     await client.load();
 
@@ -955,7 +962,7 @@ void main() {
     await logout;
     await login;
 
-    expect(await secure.read('cloud_api_token'), isNull);
+    expect(await secure.read(cloudTokenKey()), isNull);
     expect(client.token, isNull);
     expect(client.username, isNull);
     expect(client.role, isNull);
@@ -988,7 +995,7 @@ void main() {
     await login;
 
     expect(client.baseUrl, 'https://new.example');
-    expect(await secure.read('cloud_api_token'), isNull);
+    expect(await secure.read(cloudTokenKey()), isNull);
     expect(client.token, isNull);
     final prefs = await SharedPreferences.getInstance();
     expect(prefs.getString('cloud_api_username'), isNull);
@@ -1025,7 +1032,7 @@ void main() {
     });
     await login;
 
-    expect(await secure.read('cloud_api_token'), 'newer-token');
+    expect(await secure.read(cloudTokenKey()), 'newer-token');
     expect(client.token, 'newer-token');
     expect(client.username, 'newer-register');
     expect(client.role, 'admin');
@@ -1042,7 +1049,7 @@ void main() {
       'cloud_api_role': 'user',
     });
     final secure = FakeSecureTokenStore(failWriteValue: 'old-token')
-      ..values['cloud_api_token'] = 'old-token'
+      ..values[cloudTokenKey()] = 'old-token'
       ..pauseDelete = Completer<void>()
       ..deleteStarted = Completer<void>();
     final client = CloudApiClient(secureStore: secure);
@@ -1058,10 +1065,12 @@ void main() {
       throwsA(
           predicate((error) => error.toString().contains('cleanup failed'))),
     );
-    expect(await secure.read('cloud_api_token'), isNull);
+    // Origin change already cleared active memory; failed restore of the
+    // old-origin secure key must not resurrect session metadata.
+    expect(await secure.read(cloudTokenKey()), isNull);
     expect(client.token, isNull);
-    expect(client.username, 'old-user');
-    expect(client.role, 'user');
+    expect(client.username, isNull);
+    expect(client.role, isNull);
   });
 
   test('a delayed load cannot assign an old snapshot after a newer login',
@@ -1073,7 +1082,7 @@ void main() {
     });
     final releaseRead = Completer<void>();
     final secure = FakeSecureTokenStore()
-      ..values['cloud_api_token'] = 'old-token'
+      ..values[cloudTokenKey()] = 'old-token'
       ..pauseNextRead = releaseRead
       ..readPaused = Completer<void>();
     final client = CloudApiClient(
@@ -1126,7 +1135,7 @@ void main() {
     await login;
     await load;
 
-    expect(await secure.read('cloud_api_token'), 'new-token');
+    expect(await secure.read(cloudTokenKey()), 'new-token');
     expect(client.token, 'new-token');
   });
 
@@ -1150,7 +1159,7 @@ void main() {
     await setBaseUrl;
     await load;
 
-    expect(await secure.read('cloud_api_token'), isNull);
+    expect(await secure.read(cloudTokenKey()), isNull);
     expect((await SharedPreferences.getInstance()).getString('cloud_api_token'),
         'legacy-token');
     expect(client.baseUrl, 'https://new.example');
@@ -1165,7 +1174,7 @@ void main() {
     });
     final responses = DelayedVerifyResponses();
     final secure = FakeSecureTokenStore()
-      ..values['cloud_api_token'] = 'old-token';
+      ..values[cloudTokenKey()] = 'old-token';
     final client = CloudApiClient(
       dio: responses.createDio(),
       secureStore: secure,
@@ -1182,7 +1191,7 @@ void main() {
     });
 
     expect(await verify, CloudVerification.valid);
-    expect(await secure.read('cloud_api_token'), 'new-token');
+    expect(await secure.read(cloudTokenKey()), 'new-token');
     expect(client.username, 'new-user');
     expect(client.role, 'user');
   });
@@ -1197,7 +1206,7 @@ void main() {
     });
     final releaseWrite = Completer<void>();
     final secure = FakeSecureTokenStore(failDelete: true)
-      ..values['cloud_api_token'] = 'old-token'
+      ..values[cloudTokenKey()] = 'old-token'
       ..pauseWrite = releaseWrite
       ..writeStarted = Completer<void>();
     final client = CloudApiClient(
@@ -1216,10 +1225,12 @@ void main() {
     releaseWrite.complete();
 
     await expectLater(verify, throwsA(isA<CloudSessionSafetyError>()));
-    expect(await secure.read('cloud_api_token'), 'old-token');
-    expect(client.token, 'old-token');
-    expect(client.username, 'old-user');
-    expect(client.role, 'user');
+    // Old-origin secure token remains partitioned; active session for the new
+    // origin stays cleared after the authority change.
+    expect(await secure.read(cloudTokenKey()), 'old-token');
+    expect(client.token, isNull);
+    expect(client.username, isNull);
+    expect(client.role, isNull);
     expect(
       (await SharedPreferences.getInstance())
           .getString('cloud_api_token_invalidated'),
@@ -1237,7 +1248,7 @@ void main() {
     });
     final releaseWrite = Completer<void>();
     final secure = FakeSecureTokenStore(failWriteValue: 'old-token')
-      ..values['cloud_api_token'] = 'old-token'
+      ..values[cloudTokenKey()] = 'old-token'
       ..pauseWrite = releaseWrite
       ..writeStarted = Completer<void>();
     final client = CloudApiClient(
@@ -1256,7 +1267,72 @@ void main() {
     releaseWrite.complete();
 
     await expectLater(login, throwsA(isA<CloudSessionSafetyError>()));
-    expect(await secure.read('cloud_api_token'), isNull);
+    expect(await secure.read(cloudTokenKey()), isNull);
     expect(client.token, isNull);
+  });
+
+  test('cloud tokens are isolated by normalized origin', () async {
+    SharedPreferences.setMockInitialValues({});
+    final secure = FakeSecureTokenStore();
+    final client = CloudApiClient(
+      dio: responseDio(data: {
+        'token': 'one-token',
+        'username': 'one',
+        'role': 'user',
+      }),
+      secureStore: secure,
+    );
+
+    await client.setBaseUrl('https://one.example/api');
+    await client.login('one', 'password');
+    final oneKey = originTokenKey('cloud_api_token', 'https://one.example/api');
+    expect(await secure.read(oneKey), 'one-token');
+
+    await client.setBaseUrl('https://two.example/api');
+    expect(client.isLoggedIn, isFalse);
+    expect(client.username, isNull);
+    expect(await secure.read(oneKey), 'one-token');
+    expect(
+        await secure
+            .read(originTokenKey('cloud_api_token', 'https://two.example/api')),
+        isNull);
+  });
+
+  test('same-origin path change retains cloud session', () async {
+    SharedPreferences.setMockInitialValues({});
+    final secure = FakeSecureTokenStore();
+    final client = CloudApiClient(
+      dio: responseDio(data: {
+        'token': 'token',
+        'username': 'user',
+        'role': 'user',
+      }),
+      secureStore: secure,
+    );
+    await client.setBaseUrl('https://cloud.example/one');
+    await client.login('user', 'password');
+
+    await client.setBaseUrl('https://CLOUD.example/two');
+
+    expect(client.isLoggedIn, isTrue);
+    expect(client.token, 'token');
+  });
+
+  test('legacy cloud plaintext is deleted when Keychain is unavailable',
+      () async {
+    SharedPreferences.setMockInitialValues({
+      'cloud_api_base': 'https://cloud.example',
+      'cloud_api_token': 'plaintext',
+    });
+    final secure = FakeSecureTokenStore()..throwOnRead = true;
+    final client = CloudApiClient(secureStore: secure);
+
+    await expectLater(
+        client.load(), throwsA(isA<SecureTokenMigrationException>()));
+
+    expect(
+        (await SharedPreferences.getInstance()).containsKey('cloud_api_token'),
+        isFalse);
+    expect(client.isLoggedIn, isFalse);
   });
 }

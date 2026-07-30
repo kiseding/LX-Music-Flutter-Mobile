@@ -191,34 +191,68 @@ final searchHistoryProvider =
 });
 
 class SearchHistoryNotifier extends StateNotifier<List<String>> {
-  SearchHistoryNotifier() : super([]) {
+  SearchHistoryNotifier({StorageLoader? storage})
+      : _storage = storage ?? (() => StorageService.instance),
+        super([]) {
     _load();
   }
 
+  final StorageLoader _storage;
+  int _generation = 0;
+
   Future<void> _load() async {
-    final storage = await StorageService.instance;
-    state = storage.getStringList('search_history');
+    final generation = _generation;
+    try {
+      final storage = await _storage();
+      final value = storage.getStringList('search_history');
+      if (generation == _generation) state = value;
+    } catch (_) {}
   }
 
   Future<void> add(String keyword) async {
     if (keyword.trim().isEmpty) return;
+    ++_generation;
+    final previous = state;
     final updated = [keyword, ...state.where((s) => s != keyword)];
     if (updated.length > 20) updated.removeRange(20, updated.length);
     state = updated;
-    final storage = await StorageService.instance;
-    await storage.setStringList('search_history', updated);
+    try {
+      await (await _storage()).setStringList('search_history', updated);
+    } catch (_) {
+      if (identical(state, updated) || state == updated) state = previous;
+      rethrow;
+    }
   }
 
   Future<void> remove(String keyword) async {
-    state = state.where((s) => s != keyword).toList();
-    final storage = await StorageService.instance;
-    await storage.setStringList('search_history', state);
+    ++_generation;
+    final previous = state;
+    final updated = state.where((s) => s != keyword).toList();
+    state = updated;
+    try {
+      await (await _storage()).setStringList('search_history', updated);
+    } catch (_) {
+      if (identical(state, updated) || state == updated) state = previous;
+      rethrow;
+    }
   }
 
   Future<void> clear() async {
-    state = [];
-    final storage = await StorageService.instance;
-    await storage.setStringList('search_history', []);
+    ++_generation;
+    final previous = state;
+    const updated = <String>[];
+    state = updated;
+    try {
+      await (await _storage()).setStringList('search_history', updated);
+    } catch (_) {
+      if (state.isEmpty) state = previous;
+      rethrow;
+    }
+  }
+
+  void applyCommitted(List<String> value) {
+    ++_generation;
+    state = value;
   }
 }
 

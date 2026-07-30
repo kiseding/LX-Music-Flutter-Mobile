@@ -243,6 +243,27 @@ void main() {
     await service.dispose();
   });
 
+  test('restoreSnapshot always saves then publishes even if equivalent',
+      () async {
+    final initial = systemSnapshot(additional: [playlist('keep')]);
+    final repository = MemoryPlaylistRepository(initial);
+    final service = PlaylistService(repository: repository, clock: () => _now);
+    await service.init();
+    final revisions = <int>[];
+    final subscription = service.revisions.listen(revisions.add);
+
+    await service.restoreSnapshot(initial);
+
+    expect(repository.saves, hasLength(1));
+    expect(
+      service.playlists.map((item) => item.id),
+      initial.playlists.map((item) => item.id),
+    );
+    expect(revisions, [1]);
+    await subscription.cancel();
+    await service.dispose();
+  });
+
   test('playlist mutations report durable changes and no-ops', () async {
     final repository = MemoryPlaylistRepository(systemSnapshot(additional: [
       playlist('source', songs: [song('b'), song('a')]),
