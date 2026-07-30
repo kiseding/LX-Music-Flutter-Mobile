@@ -20,6 +20,7 @@ void main() {
       source.indexOf('void _showPlaylistMoreMenu('),
     );
 
+    expect(importDialog, contains('barrierDismissible: false'));
     expect(
       RegExp(r'if \(!ctx\.mounted\) return;\s+setLocal\(\(\) => busy = false\)')
           .hasMatch(importDialog),

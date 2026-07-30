@@ -3,12 +3,19 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/widgets/artwork_image.dart';
 import '../domain/playlist.dart';
-import '../../player/domain/music_item.dart';
+import 'playlist_occurrence.dart';
 import 'playlist_provider.dart';
 import '../../player/presentation/player_provider.dart';
 
 class PlaylistDetailScreen extends ConsumerStatefulWidget {
-  const PlaylistDetailScreen({super.key});
+  const PlaylistDetailScreen({
+    super.key,
+    required this.playlistId,
+    this.focusSongId,
+  });
+
+  final String playlistId;
+  final String? focusSongId;
 
   @override
   ConsumerState<PlaylistDetailScreen> createState() =>
@@ -17,7 +24,8 @@ class PlaylistDetailScreen extends ConsumerStatefulWidget {
 
 class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
   bool _isEditing = false;
-  final List<MusicItem> _reorderedSongs = [];
+  final List<PlaylistSongOccurrence> _reorderedSongs = [];
+  String? _reorderedPlaylistId;
   final ScrollController _scrollController = ScrollController();
   String? _lastFocusedId;
 
@@ -28,14 +36,25 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
   }
 
   Playlist? _resolvePlaylist() {
-    final current = ref.watch(currentPlaylistProvider);
-    if (current == null) return null;
-    // The selected value identifies the route; the service owns live content.
-    return ref.watch(playlistServiceProvider).getPlaylist(current.id);
+    ref.watch(playlistRevisionProvider);
+    return ref.watch(playlistServiceProvider).getPlaylist(widget.playlistId);
+  }
+
+  void _syncReorderedSongs(Playlist playlist, {bool force = false}) {
+    if (!force &&
+        _isEditing &&
+        _reorderedPlaylistId == playlist.id &&
+        _reorderedSongs.isNotEmpty) {
+      return;
+    }
+    _reorderedPlaylistId = playlist.id;
+    _reorderedSongs
+      ..clear()
+      ..addAll(buildPlaylistOccurrences(playlist.id, playlist.songs));
   }
 
   void _tryScrollToFocus(Playlist playlist) {
-    final focusId = ref.read(playlistFocusSongIdProvider);
+    final focusId = widget.focusSongId;
     if (focusId == null || focusId == _lastFocusedId) return;
     final idx = playlist.songs.indexWhere((s) => s.id == focusId);
     if (idx < 0) return;
@@ -52,10 +71,9 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
-    ref.watch(playlistRevisionProvider);
     final playlist = _resolvePlaylist();
     final playerService = ref.watch(playerServiceProvider);
-    final focusId = ref.watch(playlistFocusSongIdProvider);
+    final focusId = widget.focusSongId;
 
     if (playlist == null) {
       return Container(
@@ -75,10 +93,8 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
       );
     }
 
-    if (_reorderedSongs.isEmpty && playlist.songs.isNotEmpty) {
-      _reorderedSongs
-        ..clear()
-        ..addAll(playlist.songs);
+    if (_reorderedPlaylistId != playlist.id) {
+      _syncReorderedSongs(playlist, force: true);
     }
     _tryScrollToFocus(playlist);
 
@@ -97,12 +113,9 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
               if (_isEditing) {
                 setState(() {
                   _isEditing = false;
-                  _reorderedSongs
-                    ..clear()
-                    ..addAll(playlist.songs);
+                  _syncReorderedSongs(playlist, force: true);
                 });
               } else {
-                ref.read(playlistFocusSongIdProvider.notifier).state = null;
                 Navigator.pop(context);
               }
             },
@@ -129,7 +142,9 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                   try {
                     await ref.read(playlistServiceProvider).updatePlaylist(
                           id: playlist.id,
-                          songs: _reorderedSongs,
+                          songs: _reorderedSongs
+                              .map((entry) => entry.song)
+                              .toList(),
                         );
                     if (mounted) setState(() => _isEditing = false);
                   } catch (error) {
@@ -160,13 +175,12 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                             .sortSongsByName(playlist.id);
                         if (!mounted) return;
                         setState(() {
-                          _reorderedSongs
-                            ..clear()
-                            ..addAll(ref
-                                    .read(playlistServiceProvider)
-                                    .getPlaylist(playlist.id)
-                                    ?.songs ??
-                                []);
+                          final latest = ref
+                              .read(playlistServiceProvider)
+                              .getPlaylist(playlist.id);
+                          if (latest != null) {
+                            _syncReorderedSongs(latest, force: true);
+                          }
                         });
                       case 'sort_artist':
                         await ref
@@ -174,13 +188,12 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                             .sortSongsByArtist(playlist.id);
                         if (!mounted) return;
                         setState(() {
-                          _reorderedSongs
-                            ..clear()
-                            ..addAll(ref
-                                    .read(playlistServiceProvider)
-                                    .getPlaylist(playlist.id)
-                                    ?.songs ??
-                                []);
+                          final latest = ref
+                              .read(playlistServiceProvider)
+                              .getPlaylist(playlist.id);
+                          if (latest != null) {
+                            _syncReorderedSongs(latest, force: true);
+                          }
                         });
                       case 'sort_duration':
                         await ref
@@ -188,20 +201,17 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                             .sortSongsByDuration(playlist.id);
                         if (!mounted) return;
                         setState(() {
-                          _reorderedSongs
-                            ..clear()
-                            ..addAll(ref
-                                    .read(playlistServiceProvider)
-                                    .getPlaylist(playlist.id)
-                                    ?.songs ??
-                                []);
+                          final latest = ref
+                              .read(playlistServiceProvider)
+                              .getPlaylist(playlist.id);
+                          if (latest != null) {
+                            _syncReorderedSongs(latest, force: true);
+                          }
                         });
                       case 'reorder':
                         setState(() {
                           _isEditing = true;
-                          _reorderedSongs
-                            ..clear()
-                            ..addAll(playlist.songs);
+                          _syncReorderedSongs(playlist, force: true);
                         });
                       case 'delete':
                         _showDeleteDialog(context, ref, playlist);
@@ -263,9 +273,10 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
         });
       },
       itemBuilder: (context, index) {
-        final song = _reorderedSongs[index];
+        final entry = _reorderedSongs[index];
+        final song = entry.song;
         return ListTile(
-          key: ValueKey('${song.id}_$index'),
+          key: ValueKey(entry.key),
           leading: Icon(Icons.drag_handle, color: AppColors.mutedText(context)),
           title: Text(song.name,
               style: TextStyle(color: AppColors.onScaffold(context))),

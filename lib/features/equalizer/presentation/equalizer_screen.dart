@@ -298,7 +298,7 @@ class _EqualizerScreenState extends ConsumerState<EqualizerScreen> {
           final normalizedGain = (gain + 12) / 24; // 0~1
           final handleY = height - (normalizedGain * height);
 
-          return GestureDetector(
+          final fader = GestureDetector(
             onVerticalDragUpdate: enabled
                 ? (details) {
                     final newY = details.localPosition.dy.clamp(0.0, height);
@@ -374,6 +374,29 @@ class _EqualizerScreenState extends ConsumerState<EqualizerScreen> {
                 ),
               ],
             ),
+          );
+
+          final valueLabel = '${gain > 0 ? '+' : ''}$gain dB';
+          return Semantics(
+            label: '${freqLabels[index]} Hz',
+            slider: true,
+            enabled: enabled,
+            value: valueLabel,
+            increasedValue: '${(gain + 1).clamp(-12, 12) > 0 ? '+' : ''}'
+                '${(gain + 1).clamp(-12, 12)} dB',
+            decreasedValue: '${(gain - 1).clamp(-12, 12) > 0 ? '+' : ''}'
+                '${(gain - 1).clamp(-12, 12)} dB',
+            onIncrease: enabled
+                ? () => ref
+                    .read(equalizerProvider.notifier)
+                    .setBandGain(index, (gain + 1).clamp(-12, 12))
+                : null,
+            onDecrease: enabled
+                ? () => ref
+                    .read(equalizerProvider.notifier)
+                    .setBandGain(index, (gain - 1).clamp(-12, 12))
+                : null,
+            child: ExcludeSemantics(child: fader),
           );
         },
       ),

@@ -250,6 +250,25 @@ class SearchHistoryNotifier extends StateNotifier<List<String>> {
     }
   }
 
+  Future<void> replaceAll(List<String> values) async {
+    final normalized = <String>[];
+    for (final value in values) {
+      final keyword = value.trim();
+      if (keyword.isEmpty || normalized.contains(keyword)) continue;
+      normalized.add(keyword);
+      if (normalized.length == 20) break;
+    }
+    ++_generation;
+    final previous = state;
+    state = normalized;
+    try {
+      await (await _storage()).setStringList('search_history', normalized);
+    } catch (_) {
+      if (identical(state, normalized) || state == normalized) state = previous;
+      rethrow;
+    }
+  }
+
   void applyCommitted(List<String> value) {
     ++_generation;
     state = value;

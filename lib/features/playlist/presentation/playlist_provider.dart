@@ -28,13 +28,6 @@ final playlistsProvider = Provider<List<Playlist>>((ref) {
   return playlistService.playlists;
 });
 
-final currentPlaylistProvider = StateProvider<Playlist?>((ref) {
-  return null;
-});
-
-/// 打开歌单详情时滚动/高亮的目标歌曲 id
-final playlistFocusSongIdProvider = StateProvider<String?>((ref) => null);
-
 final isSongFavoriteProvider = Provider.family<bool, String>((ref, songId) {
   ref.watch(playlistRevisionProvider);
   final playlistService = ref.watch(playlistServiceProvider);

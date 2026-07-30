@@ -349,6 +349,8 @@ class _BottomNav extends StatelessWidget {
     final muted = isDark ? const Color(0xE6FFFFFF) : const Color(0xE6000000);
     return Expanded(
       child: Pressable(
+        semanticLabel: label,
+        selected: isSelected,
         onTap: () => onTap(index),
         scale: 0.92,
         child: Column(

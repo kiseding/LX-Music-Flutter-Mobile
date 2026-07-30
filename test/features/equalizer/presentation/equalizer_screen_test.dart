@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lx_music_flutter/core/theme/app_theme.dart';
@@ -22,5 +23,27 @@ void main() {
 
       await tester.pumpWidget(const SizedBox.shrink());
     }
+  });
+
+  testWidgets('enabled frequency band exposes adjustable dB semantics',
+      (tester) async {
+    await tester.pumpWidget(
+      const ProviderScope(
+        child: MaterialApp(home: EqualizerScreen()),
+      ),
+    );
+
+    await tester.tap(find.byType(Switch));
+    await tester.pump();
+    final band = find.bySemanticsLabel('32 Hz');
+    final node = tester.getSemantics(band);
+    final before = node.value;
+
+    node.owner!.performAction(node.id, SemanticsAction.increase);
+    await tester.pump();
+
+    expect(before, '0 dB');
+    expect(tester.getSemantics(band).value, '+1 dB');
+    expect(tester.getSemantics(band).hasFlag(SemanticsFlag.isSlider), isTrue);
   });
 }

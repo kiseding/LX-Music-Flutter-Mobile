@@ -59,11 +59,10 @@ void main() {
     addTearDown(container.dispose);
     final service = container.read(playlistServiceProvider);
     await service.init();
-    container.read(currentPlaylistProvider.notifier).state = selected;
 
     await tester.pumpWidget(UncontrolledProviderScope(
       container: container,
-      child: const MaterialApp(home: PlaylistDetailScreen()),
+      child: MaterialApp(home: PlaylistDetailScreen(playlistId: selected.id)),
     ));
     expect(find.textContaining('Selected'), findsOneWidget);
 

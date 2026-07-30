@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../theme/app_colors.dart';
 
 /// 播放/暂停：lx2cf 风格
@@ -12,6 +13,7 @@ class PlayPulseButton extends StatefulWidget {
   final double iconSize;
   final bool enabled;
   final bool mini;
+  final String? semanticLabel;
 
   const PlayPulseButton({
     super.key,
@@ -21,6 +23,7 @@ class PlayPulseButton extends StatefulWidget {
     this.iconSize = 34,
     this.enabled = true,
     this.mini = false,
+    this.semanticLabel,
   });
 
   @override
@@ -34,13 +37,16 @@ class _PlayPulseButtonState extends State<PlayPulseButton>
   late final AnimationController _pressCtrl;
   Animation<double>? _scaleAnim;
   double _scale = 1.0;
+  final FocusNode _focusNode = FocusNode();
 
   @override
   void initState() {
     super.initState();
     _scaleCtrl = AnimationController(vsync: this);
-    _glowCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 600));
-    _pressCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 90));
+    _glowCtrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 600));
+    _pressCtrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 90));
     _scaleCtrl.addListener(_onScaleTick);
     _pressCtrl.addListener(() {
       if (mounted) setState(() {});
@@ -103,6 +109,7 @@ class _PlayPulseButtonState extends State<PlayPulseButton>
     _scaleCtrl.dispose();
     _glowCtrl.dispose();
     _pressCtrl.dispose();
+    _focusNode.dispose();
     super.dispose();
   }
 
@@ -123,9 +130,17 @@ class _PlayPulseButtonState extends State<PlayPulseButton>
     final glowR = (widget.mini ? 11.0 : 14.0) * gPeak;
     final glowA = 0.28 * gPeak;
 
-    return GestureDetector(
+    final onActivate = disabled ? null : widget.onPressed;
+    final label = widget.semanticLabel ?? (widget.isPlaying ? '暂停' : '播放');
+
+    final interactiveChild = GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onTapDown: disabled ? null : (_) => _pressCtrl.forward(),
+      onTapDown: disabled
+          ? null
+          : (_) {
+              _focusNode.requestFocus();
+              _pressCtrl.forward();
+            },
       onTapUp: disabled
           ? null
           : (_) {
@@ -162,6 +177,34 @@ class _PlayPulseButtonState extends State<PlayPulseButton>
             color: fg,
           ),
         ),
+      ),
+    );
+
+    return Semantics(
+      label: label,
+      button: true,
+      enabled: onActivate != null,
+      toggled: widget.isPlaying,
+      onTap: onActivate,
+      child: FocusableActionDetector(
+        focusNode: _focusNode,
+        enabled: onActivate != null,
+        mouseCursor: onActivate == null
+            ? SystemMouseCursors.basic
+            : SystemMouseCursors.click,
+        shortcuts: const <ShortcutActivator, Intent>{
+          SingleActivator(LogicalKeyboardKey.enter): ActivateIntent(),
+          SingleActivator(LogicalKeyboardKey.space): ActivateIntent(),
+        },
+        actions: <Type, Action<Intent>>{
+          ActivateIntent: CallbackAction<ActivateIntent>(
+            onInvoke: (_) {
+              onActivate?.call();
+              return null;
+            },
+          ),
+        },
+        child: ExcludeSemantics(child: interactiveChild),
       ),
     );
   }

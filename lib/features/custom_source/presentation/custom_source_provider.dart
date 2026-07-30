@@ -92,3 +92,13 @@ class CustomSourcesNotifier extends StateNotifier<List<CustomSource>> {
     return _service.getEventStream(sourceId);
   }
 }
+
+final importCustomSourceFromUrlProvider =
+    Provider<Future<bool> Function(String)>((ref) {
+  return ref.read(customSourcesProvider.notifier).importSourceFromUrl;
+});
+
+final customSourceEventStreamProvider =
+    Provider.family<Stream<Map<String, dynamic>>, String>((ref, sourceId) {
+  return ref.read(customSourcesProvider.notifier).getEventStream(sourceId);
+});

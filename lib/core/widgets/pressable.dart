@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 /// 按下缩放动效包装器，用于主要可点击控件。
 class Pressable extends StatefulWidget {
@@ -7,6 +8,9 @@ class Pressable extends StatefulWidget {
   final double scale;
   final Duration duration;
   final BorderRadius? borderRadius;
+  final String? semanticLabel;
+  final bool? selected;
+  final String? tooltip;
 
   const Pressable({
     super.key,
@@ -15,6 +19,9 @@ class Pressable extends StatefulWidget {
     this.scale = 0.92,
     this.duration = const Duration(milliseconds: 110),
     this.borderRadius,
+    this.semanticLabel,
+    this.selected,
+    this.tooltip,
   });
 
   @override
@@ -23,6 +30,7 @@ class Pressable extends StatefulWidget {
 
 class _PressableState extends State<Pressable> {
   bool _pressed = false;
+  final FocusNode _focusNode = FocusNode();
 
   void _setPressed(bool value) {
     if (_pressed == value) return;
@@ -30,17 +38,29 @@ class _PressableState extends State<Pressable> {
   }
 
   @override
+  void dispose() {
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return GestureDetector(
+    final onActivate = widget.onTap;
+    final interactiveChild = GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onTapDown: widget.onTap == null ? null : (_) => _setPressed(true),
-      onTapUp: widget.onTap == null
+      onTapDown: onActivate == null
+          ? null
+          : (_) {
+              _focusNode.requestFocus();
+              _setPressed(true);
+            },
+      onTapUp: onActivate == null
           ? null
           : (_) {
               _setPressed(false);
-              widget.onTap?.call();
+              onActivate.call();
             },
-      onTapCancel: widget.onTap == null ? null : () => _setPressed(false),
+      onTapCancel: onActivate == null ? null : () => _setPressed(false),
       child: AnimatedScale(
         scale: _pressed ? widget.scale : 1,
         duration: widget.duration,
@@ -50,8 +70,38 @@ class _PressableState extends State<Pressable> {
           duration: widget.duration,
           child: widget.borderRadius == null
               ? widget.child
-              : ClipRRect(borderRadius: widget.borderRadius!, child: widget.child),
+              : ClipRRect(
+                  borderRadius: widget.borderRadius!, child: widget.child),
         ),
+      ),
+    );
+
+    return Semantics(
+      label: widget.semanticLabel,
+      button: true,
+      enabled: onActivate != null,
+      selected: widget.selected,
+      tooltip: widget.tooltip,
+      onTap: onActivate,
+      child: FocusableActionDetector(
+        focusNode: _focusNode,
+        enabled: onActivate != null,
+        mouseCursor: onActivate == null
+            ? SystemMouseCursors.basic
+            : SystemMouseCursors.click,
+        shortcuts: const <ShortcutActivator, Intent>{
+          SingleActivator(LogicalKeyboardKey.enter): ActivateIntent(),
+          SingleActivator(LogicalKeyboardKey.space): ActivateIntent(),
+        },
+        actions: <Type, Action<Intent>>{
+          ActivateIntent: CallbackAction<ActivateIntent>(
+            onInvoke: (_) {
+              onActivate?.call();
+              return null;
+            },
+          ),
+        },
+        child: ExcludeSemantics(child: interactiveChild),
       ),
     );
   }

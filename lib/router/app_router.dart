@@ -54,9 +54,13 @@ final appRouter = GoRouter(
               builder: (context, state) => const PlaylistScreen(),
               routes: [
                 GoRoute(
-                  path: 'detail',
+                  name: 'playlistDetail',
+                  path: 'detail/:playlistId',
                   parentNavigatorKey: _rootNavigatorKey,
-                  builder: (context, state) => const PlaylistDetailScreen(),
+                  builder: (context, state) => PlaylistDetailScreen(
+                    playlistId: state.pathParameters['playlistId']!,
+                    focusSongId: state.uri.queryParameters['focusSongId'],
+                  ),
                 ),
               ],
             ),
@@ -91,7 +95,8 @@ final appRouter = GoRouter(
             reverseCurve: Curves.easeInCubic,
           );
           return SlideTransition(
-            position: Tween<Offset>(begin: const Offset(0, 1), end: Offset.zero).animate(curved),
+            position: Tween<Offset>(begin: const Offset(0, 1), end: Offset.zero)
+                .animate(curved),
             child: child,
           );
         },

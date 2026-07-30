@@ -16,6 +16,238 @@ import '../../download/presentation/download_provider.dart';
 import '../../lyric/presentation/lyric_view.dart';
 import '../../lyric/presentation/lyric_provider.dart';
 
+String _formatPlayerDuration(Duration d) {
+  final minutes = d.inMinutes.remainder(60).toString().padLeft(2, '0');
+  final seconds = d.inSeconds.remainder(60).toString().padLeft(2, '0');
+  return '$minutes:$seconds';
+}
+
+class _CurrentLyricLine extends ConsumerWidget {
+  const _CurrentLyricLine();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final lyrics = ref.watch(currentLyricProvider);
+    final currentLineIndex = ref.watch(currentLineIndexProvider);
+
+    String text = ' ';
+    String? translation;
+    var hasLine = false;
+    if (lyrics.isNotEmpty &&
+        currentLineIndex >= 0 &&
+        currentLineIndex < lyrics.lines.length) {
+      final line = lyrics.lines[currentLineIndex];
+      text = line.text.isEmpty ? ' ' : line.text;
+      translation = line.translation;
+      hasLine = true;
+    }
+
+    return SizedBox(
+      height: 44,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 32),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(
+              text,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: hasLine
+                    ? AppColors.accentOf(context)
+                    : AppColors.mutedText(context).withValues(alpha: 0.01),
+                fontSize: 14,
+                fontWeight: FontWeight.w500,
+                height: 1.2,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 2),
+            Text(
+              translation ?? ' ',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: translation != null
+                    ? AppColors.mutedText(context)
+                    : AppColors.mutedText(context).withValues(alpha: 0.01),
+                fontSize: 11,
+                height: 1.2,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PlayerProgress extends ConsumerWidget {
+  final Duration duration;
+  final bool seeking;
+  final double seekValue;
+  final void Function(double value) onDragStart;
+  final void Function(double value) onDragUpdate;
+  final Future<void> Function(Duration target) onSeekEnd;
+  final VoidCallback onSeekCancel;
+  final Future<void> Function(double value, Duration target) onTapSeek;
+
+  const _PlayerProgress({
+    required this.duration,
+    required this.seeking,
+    required this.seekValue,
+    required this.onDragStart,
+    required this.onDragUpdate,
+    required this.onSeekEnd,
+    required this.onSeekCancel,
+    required this.onTapSeek,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final position = ref.watch(playerPositionProvider);
+    final totalMs =
+        duration.inMilliseconds > 0 ? duration.inMilliseconds.toDouble() : 1.0;
+    final effectivePos = seeking
+        ? Duration(milliseconds: (seekValue * totalMs).round())
+        : position;
+    final ratio = (effectivePos.inMilliseconds / totalMs).clamp(0.0, 1.0);
+    final displayPos = effectivePos;
+
+    Duration adjusted(Duration position, int deltaSeconds) {
+      final milliseconds = (position.inMilliseconds + deltaSeconds * 1000)
+          .clamp(0, duration.inMilliseconds);
+      return Duration(milliseconds: milliseconds);
+    }
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          SizedBox(
+            width: 36,
+            child: Text(
+              _formatPlayerDuration(displayPos),
+              style: TextStyle(
+                  color: AppColors.mutedText(context),
+                  fontSize: 11,
+                  fontFeatures: [FontFeature.tabularFigures()]),
+            ),
+          ),
+          const SizedBox(width: 5),
+          Expanded(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final width = constraints.maxWidth;
+                final interactiveTrack = GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onHorizontalDragStart: (d) {
+                    onDragStart((d.localPosition.dx / width).clamp(0.0, 1.0));
+                  },
+                  onHorizontalDragUpdate: (d) {
+                    onDragUpdate((d.localPosition.dx / width).clamp(0.0, 1.0));
+                  },
+                  onHorizontalDragEnd: (_) {
+                    final target =
+                        Duration(milliseconds: (seekValue * totalMs).round());
+                    onSeekEnd(target);
+                  },
+                  onHorizontalDragCancel: onSeekCancel,
+                  onTapUp: (d) {
+                    final v = (d.localPosition.dx / width).clamp(0.0, 1.0);
+                    final target =
+                        Duration(milliseconds: (v * totalMs).round());
+                    onTapSeek(v, target);
+                  },
+                  child: SizedBox(
+                    height: 28,
+                    child: Center(
+                      child: Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          Container(
+                            height: 10,
+                            decoration: BoxDecoration(
+                              color: AppColors.cardBorder(context),
+                              borderRadius: BorderRadius.circular(5),
+                            ),
+                          ),
+                          FractionallySizedBox(
+                            widthFactor: ratio,
+                            child: Container(
+                              height: 10,
+                              decoration: BoxDecoration(
+                                color: AppColors.accentOf(context),
+                                borderRadius: BorderRadius.circular(5),
+                              ),
+                            ),
+                          ),
+                          Positioned(
+                            left: (width * ratio - 9).clamp(0.0, width - 18),
+                            top: -4,
+                            child: Container(
+                              width: 18,
+                              height: 18,
+                              decoration: BoxDecoration(
+                                color: AppColors.accentOf(context),
+                                shape: BoxShape.circle,
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: AppColors.accentOf(context)
+                                        .withAlpha(120),
+                                    blurRadius: 12,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+                return Semantics(
+                  label: '播放进度',
+                  slider: true,
+                  enabled: duration > Duration.zero,
+                  value:
+                      '${_formatPlayerDuration(displayPos)} / ${_formatPlayerDuration(duration)}',
+                  increasedValue:
+                      _formatPlayerDuration(adjusted(displayPos, 10)),
+                  decreasedValue:
+                      _formatPlayerDuration(adjusted(displayPos, -10)),
+                  onIncrease: duration > Duration.zero
+                      ? () => ref.read(seekProvider)(adjusted(displayPos, 10))
+                      : null,
+                  onDecrease: duration > Duration.zero
+                      ? () => ref.read(seekProvider)(adjusted(displayPos, -10))
+                      : null,
+                  child: ExcludeSemantics(child: interactiveTrack),
+                );
+              },
+            ),
+          ),
+          const SizedBox(width: 5),
+          SizedBox(
+            width: 36,
+            child: Text(
+              _formatPlayerDuration(duration),
+              textAlign: TextAlign.right,
+              style: TextStyle(
+                  color: AppColors.mutedText(context),
+                  fontSize: 11,
+                  fontFeatures: [FontFeature.tabularFigures()]),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class PlayerScreen extends ConsumerStatefulWidget {
   const PlayerScreen({super.key});
 
@@ -26,7 +258,7 @@ class PlayerScreen extends ConsumerStatefulWidget {
 class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   late PageController _pageController;
   int _currentPage = 0;
-  bool _seeking = false;
+  late bool _seeking;
   double _seekValue = 0; // 0..1 only while finger is down
   bool _wasPlayingBeforeSeek = false;
   late final ScrubSession _scrubSession;
@@ -43,6 +275,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       finish: ref.read(finishScrubProvider),
       cancel: ref.read(cancelScrubProvider),
     );
+    _seeking = false;
   }
 
   void _cancelActiveScrub() {
@@ -66,22 +299,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     final playerService = ref.watch(playerServiceProvider);
     final currentMusic = ref.watch(currentMusicProvider);
     final playbackState = ref.watch(playbackStateProvider).value;
-    final position = ref.watch(playerPositionProvider);
     final playMode = ref.watch(playModeProvider);
-
-    // 监听全局播放器消息（PlayerScreen 内部也可以监听以确保及时弹出）
-    ref.listen<String?>(playerMessageProvider, (previous, next) {
-      if (next != null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(next),
-            backgroundColor: AppColors.error,
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-        ref.read(playerMessageProvider.notifier).state = null;
-      }
-    });
 
     if (currentMusic == null) {
       return Scaffold(
@@ -178,9 +396,17 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                                   ),
                                 ),
                                 _buildSongInfo(currentMusic, isFavorite),
-                                _buildCurrentLyricLine(),
-                                _buildProgressSection(
-                                    playerService, position, duration),
+                                const _CurrentLyricLine(),
+                                _PlayerProgress(
+                                  duration: duration,
+                                  seeking: _seeking,
+                                  seekValue: _seekValue,
+                                  onDragStart: _beginSeek,
+                                  onDragUpdate: _updateSeek,
+                                  onSeekEnd: _finishSeek,
+                                  onSeekCancel: _cancelSeek,
+                                  onTapSeek: _tapSeek,
+                                ),
                                 _buildControls(
                                     playerService, isPlaying, playMode),
                                 _buildSourceQualityBar(currentMusic),
@@ -247,17 +473,19 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          GestureDetector(
-            onTap: () => Navigator.pop(context),
-            child: Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(
-                color: AppColors.fill(context),
-                borderRadius: BorderRadius.circular(18),
-                border: Border.all(color: AppColors.cardBorder(context)),
-              ),
-              child: Icon(Icons.keyboard_arrow_down,
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: AppColors.fill(context),
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: AppColors.cardBorder(context)),
+            ),
+            child: IconButton(
+              tooltip: '收起播放器',
+              padding: EdgeInsets.zero,
+              onPressed: () => Navigator.pop(context),
+              icon: Icon(Icons.keyboard_arrow_down,
                   color: AppColors.secondaryText(context), size: 20),
             ),
           ),
@@ -443,64 +671,6 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     );
   }
 
-  /// 固定高度占位，避免无歌词→有歌词时整页跳动
-  Widget _buildCurrentLyricLine() {
-    final lyrics = ref.watch(currentLyricProvider);
-    final currentLineIndex = ref.watch(currentLineIndexProvider);
-
-    String text = ' ';
-    String? translation;
-    var hasLine = false;
-    if (lyrics.isNotEmpty &&
-        currentLineIndex >= 0 &&
-        currentLineIndex < lyrics.lines.length) {
-      final line = lyrics.lines[currentLineIndex];
-      text = line.text.isEmpty ? ' ' : line.text;
-      translation = line.translation;
-      hasLine = true;
-    }
-
-    return SizedBox(
-      height: 44,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 32),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(
-              text,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: hasLine
-                    ? AppColors.accentOf(context)
-                    : AppColors.mutedText(context).withValues(alpha: 0.01),
-                fontSize: 14,
-                fontWeight: FontWeight.w500,
-                height: 1.2,
-              ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-            const SizedBox(height: 2),
-            Text(
-              translation ?? ' ',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: translation != null
-                    ? AppColors.mutedText(context)
-                    : AppColors.mutedText(context).withValues(alpha: 0.01),
-                fontSize: 11,
-                height: 1.2,
-              ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   /// 全屏歌词页底部简约栏：歌名-歌手 | 播放键（下移 10px，字号加大）
   Widget _buildLyricMiniBar(
       MusicItem music, PlayerService playerService, bool isPlaying) {
@@ -536,163 +706,57 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     );
   }
 
-  Widget _buildProgressSection(
-      PlayerService playerService, Duration position, Duration duration) {
-    final totalMs =
-        duration.inMilliseconds > 0 ? duration.inMilliseconds.toDouble() : 1.0;
-    // 仅拖动时用本地值；松手后立刻跟 playerPositionProvider（唯一时钟）
-    final effectivePos = _seeking
-        ? Duration(milliseconds: (_seekValue * totalMs).round())
-        : position;
-    final ratio = (effectivePos.inMilliseconds / totalMs).clamp(0.0, 1.0);
-    final displayPos = effectivePos;
+  void _beginSeek(double value) {
+    final playing = ref.read(playbackStateProvider).value?.playing ?? false;
+    setState(() {
+      _seeking = true;
+      _wasPlayingBeforeSeek = playing;
+      _seekValue = value;
+    });
+    _dragOperation = _scrubSession.begin();
+  }
 
-    return Padding(
-      // 进度条两侧各再缩 5px（时间与条间距加大）
-      padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          SizedBox(
-            width: 36,
-            child: Text(
-              _formatDuration(displayPos),
-              style: TextStyle(
-                  color: AppColors.mutedText(context),
-                  fontSize: 11,
-                  fontFeatures: [FontFeature.tabularFigures()]),
-            ),
-          ),
-          const SizedBox(width: 5),
-          Expanded(
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final width = constraints.maxWidth;
-                return GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onHorizontalDragStart: (d) async {
-                    final playing =
-                        ref.read(playbackStateProvider).value?.playing ?? false;
-                    setState(() {
-                      _seeking = true;
-                      _wasPlayingBeforeSeek = playing;
-                      _seekValue = (d.localPosition.dx / width).clamp(0.0, 1.0);
-                    });
-                    _dragOperation = _scrubSession.begin();
-                  },
-                  onHorizontalDragUpdate: (d) {
-                    setState(() {
-                      _seekValue = (d.localPosition.dx / width).clamp(0.0, 1.0);
-                    });
-                  },
-                  onHorizontalDragEnd: (_) async {
-                    final target =
-                        Duration(milliseconds: (_seekValue * totalMs).round());
-                    final operation = _dragOperation;
-                    if (operation == null) return;
-                    final mayClear = await _scrubSession.finish(
-                      operation,
-                      target,
-                      resumeAfter: _wasPlayingBeforeSeek,
-                    );
-                    if (mounted && mayClear) {
-                      if (identical(_dragOperation, operation)) {
-                        _dragOperation = null;
-                      }
-                      setState(() => _seeking = false);
-                    }
-                  },
-                  onHorizontalDragCancel: () {
-                    _cancelActiveScrub();
-                    if (mounted) setState(() {});
-                  },
-                  onTapUp: (d) async {
-                    final playing =
-                        ref.read(playbackStateProvider).value?.playing ?? false;
-                    final v = (d.localPosition.dx / width).clamp(0.0, 1.0);
-                    final target =
-                        Duration(milliseconds: (v * totalMs).round());
-                    setState(() {
-                      _seekValue = v;
-                      _seeking = true;
-                      _wasPlayingBeforeSeek = playing;
-                    });
-                    final operation = _scrubSession.begin();
-                    final mayClear = await _scrubSession.finish(
-                      operation,
-                      target,
-                      resumeAfter: playing,
-                    );
-                    if (mounted && mayClear) {
-                      setState(() => _seeking = false);
-                    }
-                  },
-                  child: SizedBox(
-                    height: 28,
-                    child: Center(
-                      child: Stack(
-                        clipBehavior: Clip.none,
-                        children: [
-                          Container(
-                            height: 10,
-                            decoration: BoxDecoration(
-                              color: AppColors.cardBorder(context),
-                              borderRadius: BorderRadius.circular(5),
-                            ),
-                          ),
-                          FractionallySizedBox(
-                            widthFactor: ratio,
-                            child: Container(
-                              height: 10,
-                              decoration: BoxDecoration(
-                                color: AppColors.accentOf(context),
-                                borderRadius: BorderRadius.circular(5),
-                              ),
-                            ),
-                          ),
-                          // 圆点
-                          Positioned(
-                            left: (width * ratio - 9).clamp(0.0, width - 18),
-                            top: -4,
-                            child: Container(
-                              width: 18,
-                              height: 18,
-                              decoration: BoxDecoration(
-                                color: AppColors.accentOf(context),
-                                shape: BoxShape.circle,
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: AppColors.accentOf(context)
-                                        .withAlpha(120),
-                                    blurRadius: 12,
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                );
-              },
-            ),
-          ),
-          const SizedBox(width: 5),
-          SizedBox(
-            width: 36,
-            child: Text(
-              _formatDuration(duration),
-              textAlign: TextAlign.right,
-              style: TextStyle(
-                  color: AppColors.mutedText(context),
-                  fontSize: 11,
-                  fontFeatures: [FontFeature.tabularFigures()]),
-            ),
-          ),
-        ],
-      ),
+  void _updateSeek(double value) {
+    setState(() => _seekValue = value);
+  }
+
+  Future<void> _finishSeek(Duration target) async {
+    final operation = _dragOperation;
+    if (operation == null) return;
+    final mayClear = await _scrubSession.finish(
+      operation,
+      target,
+      resumeAfter: _wasPlayingBeforeSeek,
     );
+    if (mounted && mayClear) {
+      if (identical(_dragOperation, operation)) {
+        _dragOperation = null;
+      }
+      setState(() => _seeking = false);
+    }
+  }
+
+  void _cancelSeek() {
+    _cancelActiveScrub();
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _tapSeek(double value, Duration target) async {
+    final playing = ref.read(playbackStateProvider).value?.playing ?? false;
+    setState(() {
+      _seekValue = value;
+      _seeking = true;
+      _wasPlayingBeforeSeek = playing;
+    });
+    final operation = _scrubSession.begin();
+    final mayClear = await _scrubSession.finish(
+      operation,
+      target,
+      resumeAfter: playing,
+    );
+    if (mounted && mayClear) {
+      setState(() => _seeking = false);
+    }
   }
 
   Widget _buildControls(
@@ -703,6 +767,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           IconButton(
+            tooltip: '播放模式',
             icon: Icon(
               _getPlayModeIcon(playMode),
               color: AppColors.mutedText(context),
@@ -714,6 +779,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
             },
           ),
           Pressable(
+            semanticLabel: '上一首',
             onTap: playerService.previous,
             child: Padding(
               padding: EdgeInsets.all(8),
@@ -728,6 +794,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
             iconSize: 34,
           ),
           Pressable(
+            semanticLabel: '下一首',
             onTap: playerService.next,
             child: Padding(
               padding: EdgeInsets.all(8),
@@ -736,6 +803,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
             ),
           ),
           IconButton(
+            tooltip: '播放队列',
             icon: Icon(Icons.queue_music,
                 color: AppColors.mutedText(context), size: 22),
             onPressed: () => _showPlaylist(context),
@@ -883,12 +951,6 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         ),
       ),
     );
-  }
-
-  String _formatDuration(Duration d) {
-    final minutes = d.inMinutes.remainder(60).toString().padLeft(2, '0');
-    final seconds = d.inSeconds.remainder(60).toString().padLeft(2, '0');
-    return '$minutes:$seconds';
   }
 
   void _showMoreMenu(BuildContext context, MusicItem music) {

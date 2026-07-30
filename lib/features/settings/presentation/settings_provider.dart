@@ -227,9 +227,7 @@ class SyncServerUrlNotifier extends StateNotifier<String?> {
   SyncServerUrlNotifier({StorageLoader? storage, String? initialValue})
       : _storage = storage ?? (() => StorageService.instance),
         super(
-          initialValue == null
-              ? null
-              : validateHttpsServiceUrl(initialValue),
+          initialValue == null ? null : validateHttpsServiceUrl(initialValue),
         ) {
     if (initialValue == null) {
       _load();
@@ -298,8 +296,7 @@ class DefaultSearchPlatformNotifier extends StateNotifier<String> {
     try {
       final storage = await _storage();
       final v = storage.getString('default_search_platform');
-      if (generation == _generation &&
-          (v == 'tx' || v == 'kw' || v == 'wy')) {
+      if (generation == _generation && (v == 'tx' || v == 'kw' || v == 'wy')) {
         state = v!;
       }
     } catch (_) {}

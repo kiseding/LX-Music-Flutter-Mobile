@@ -7,6 +7,12 @@ import '../presentation/lyric_provider.dart';
 import '../../player/presentation/player_provider.dart';
 import '../../player/domain/music_item.dart';
 
+String _formatLyricTime(Duration duration) {
+  final minutes = duration.inMinutes.remainder(60).toString().padLeft(2, '0');
+  final seconds = duration.inSeconds.remainder(60).toString().padLeft(2, '0');
+  return '$minutes:$seconds';
+}
+
 class LyricView extends ConsumerStatefulWidget {
   final bool isFullScreen;
 
@@ -104,7 +110,6 @@ class _LyricViewState extends ConsumerState<LyricView> {
     final lyrics = loadState.lyrics;
     final currentLineIndex = ref.watch(currentLineIndexProvider);
     final currentMusic = ref.watch(currentMusicProvider);
-    final position = ref.watch(playerPositionProvider);
 
     final primary = AppColors.onScaffold(context);
     final secondary = AppColors.secondaryText(context);
@@ -175,7 +180,7 @@ class _LyricViewState extends ConsumerState<LyricView> {
       );
     }
 
-    return ShaderMask(
+    final lyricList = ShaderMask(
       shaderCallback: (Rect bounds) {
         return const LinearGradient(
           begin: Alignment.topCenter,
@@ -212,56 +217,90 @@ class _LyricViewState extends ConsumerState<LyricView> {
               : (widget.isFullScreen ? 16.0 : 14.0);
           final weight = isCurrent ? FontWeight.bold : FontWeight.normal;
 
+          final lineContent = Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                if (isCurrent && line.hasWordTiming)
+                  _PositionedKtvLyricLine(
+                    line: line,
+                    lineIndex: index,
+                    lyrics: lyrics,
+                    activeColor: lineColor,
+                    dimColor: dimColor,
+                    fontSize: fontSize,
+                    fontWeight: weight,
+                  )
+                else
+                  Text(
+                    line.text,
+                    textAlign: TextAlign.center,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: lineColor,
+                      fontSize: fontSize,
+                      fontWeight: weight,
+                    ),
+                  ),
+                if (line.translation != null)
+                  Text(
+                    line.translation!,
+                    textAlign: TextAlign.center,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: transColor,
+                      fontSize: isCurrent
+                          ? (widget.isFullScreen ? 13 : 11)
+                          : (widget.isFullScreen ? 11 : 10),
+                    ),
+                  ),
+              ],
+            ),
+          );
+
           return GestureDetector(
             onTap: () => ref.read(seekProvider)(line.time),
             behavior: HitTestBehavior.opaque,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  if (isCurrent && line.hasWordTiming)
-                    _KtvLyricLine(
-                      line: line,
-                      lineIndex: index,
-                      lyrics: lyrics,
-                      position: position,
-                      activeColor: lineColor,
-                      dimColor: dimColor,
-                      fontSize: fontSize,
-                      fontWeight: weight,
-                    )
-                  else
-                    Text(
-                      line.text,
-                      textAlign: TextAlign.center,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: lineColor,
-                        fontSize: fontSize,
-                        fontWeight: weight,
-                      ),
-                    ),
-                  if (line.translation != null)
-                    Text(
-                      line.translation!,
-                      textAlign: TextAlign.center,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: transColor,
-                        fontSize: isCurrent
-                            ? (widget.isFullScreen ? 13 : 11)
-                            : (widget.isFullScreen ? 11 : 10),
-                      ),
-                    ),
-                ],
-              ),
+            child: Semantics(
+              button: true,
+              selected: isCurrent,
+              label: line.text,
+              value: _formatLyricTime(line.time),
+              onTap: () => ref.read(seekProvider)(line.time),
+              child: ExcludeSemantics(child: lineContent),
             ),
           );
         },
       ),
+    );
+
+    final currentText =
+        currentLineIndex >= 0 && currentLineIndex < lyrics.lines.length
+            ? lyrics.lines[currentLineIndex].text
+            : '';
+    final previousIndex = lyrics.isEmpty
+        ? -1
+        : (currentLineIndex - 1).clamp(0, lyrics.lines.length - 1);
+    final nextIndex = lyrics.isEmpty
+        ? -1
+        : (currentLineIndex + 1).clamp(0, lyrics.lines.length - 1);
+
+    return Semantics(
+      label: '歌词',
+      value: currentText,
+      decreasedValue:
+          previousIndex < 0 ? null : lyrics.lines[previousIndex].text,
+      increasedValue: nextIndex < 0 ? null : lyrics.lines[nextIndex].text,
+      onDecrease: previousIndex < 0
+          ? null
+          : () => ref.read(seekProvider)(lyrics.lines[previousIndex].time),
+      onIncrease: nextIndex < 0
+          ? null
+          : () => ref.read(seekProvider)(lyrics.lines[nextIndex].time),
+      child: lyricList,
     );
   }
 
@@ -305,24 +344,21 @@ class _LyricViewState extends ConsumerState<LyricView> {
             ),
             if (actionLabel != null && onAction != null) ...[
               const SizedBox(height: 20),
-              GestureDetector(
-                onTap: onAction,
-                child: Container(
-                  height: 38,
+              OutlinedButton(
+                onPressed: onAction,
+                style: OutlinedButton.styleFrom(
+                  backgroundColor: AppColors.fill(context),
+                  foregroundColor: secondary,
+                  side: BorderSide(color: AppColors.cardBorder(context)),
+                  shape: const StadiumBorder(),
+                  minimumSize: const Size(0, 38),
                   padding: const EdgeInsets.symmetric(horizontal: 20),
-                  decoration: BoxDecoration(
-                    color: AppColors.fill(context),
-                    borderRadius: BorderRadius.circular(999),
-                    border: Border.all(color: AppColors.cardBorder(context)),
-                  ),
-                  child: Center(
-                    child: Text(actionLabel,
-                        style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            color: secondary)),
-                  ),
                 ),
+                child: Text(actionLabel,
+                    style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: secondary)),
               ),
             ],
           ],
@@ -334,6 +370,41 @@ class _LyricViewState extends ConsumerState<LyricView> {
   Future<void> _retryLyric(MusicItem? music) async {
     if (music == null) return;
     await ref.read(currentLyricLoadProvider.notifier).retry();
+  }
+}
+
+class _PositionedKtvLyricLine extends ConsumerWidget {
+  final LyricLine line;
+  final int lineIndex;
+  final Lyrics lyrics;
+  final Color activeColor;
+  final Color dimColor;
+  final double fontSize;
+  final FontWeight fontWeight;
+
+  const _PositionedKtvLyricLine({
+    required this.line,
+    required this.lineIndex,
+    required this.lyrics,
+    required this.activeColor,
+    required this.dimColor,
+    required this.fontSize,
+    required this.fontWeight,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final position = ref.watch(playerPositionProvider);
+    return _KtvLyricLine(
+      line: line,
+      lineIndex: lineIndex,
+      lyrics: lyrics,
+      position: position,
+      activeColor: activeColor,
+      dimColor: dimColor,
+      fontSize: fontSize,
+      fontWeight: fontWeight,
+    );
   }
 }
 

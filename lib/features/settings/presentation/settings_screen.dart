@@ -284,7 +284,10 @@ class SettingsScreen extends ConsumerWidget {
               ],
             ),
           ),
-          _buildToggle(context, value, onChanged),
+          Switch(
+            value: value,
+            onChanged: onChanged,
+          ),
         ],
       ),
     );
@@ -334,42 +337,6 @@ class SettingsScreen extends ConsumerWidget {
               size: 18,
             ),
           ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildToggle(
-    BuildContext context,
-    bool value,
-    ValueChanged<bool> onChanged,
-  ) {
-    return GestureDetector(
-      onTap: () => onChanged(!value),
-      child: Container(
-        width: 44,
-        height: 26,
-        decoration: BoxDecoration(
-          color: value ? AppColors.accentOf(context) : AppColors.fill2(context),
-          borderRadius: BorderRadius.circular(13),
-          border: value
-              ? Border.all(color: Colors.transparent)
-              : Border.all(color: AppColors.cardBorder(context)),
-        ),
-        child: AnimatedAlign(
-          duration: const Duration(milliseconds: 200),
-          alignment: value ? Alignment.centerRight : Alignment.centerLeft,
-          child: Container(
-            width: 18,
-            height: 18,
-            margin: EdgeInsets.symmetric(horizontal: 3),
-            decoration: BoxDecoration(
-              color: value
-                  ? Theme.of(context).colorScheme.onPrimary
-                  : AppColors.onScaffold(context),
-              shape: BoxShape.circle,
-            ),
-          ),
         ),
       ),
     );

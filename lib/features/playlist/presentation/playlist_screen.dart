@@ -284,16 +284,16 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
 
   void _openPlaylist(
     BuildContext context,
-    WidgetRef ref,
     Playlist playlist, {
     String? focusSongId,
   }) {
-    // 用最新 playlistService 数据，避免 stale 引用
-    final latest =
-        ref.read(playlistServiceProvider).getPlaylist(playlist.id) ?? playlist;
-    ref.read(currentPlaylistProvider.notifier).state = latest;
-    ref.read(playlistFocusSongIdProvider.notifier).state = focusSongId;
-    context.push('/playlist/detail');
+    context.pushNamed(
+      'playlistDetail',
+      pathParameters: {'playlistId': playlist.id},
+      queryParameters: {
+        if (focusSongId != null) 'focusSongId': focusSongId,
+      },
+    );
   }
 
   Widget _buildSongHitItem(
@@ -312,8 +312,7 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
         border: Border.all(color: AppColors.cardBorder(context)),
       ),
       child: ListTile(
-        onTap: () =>
-            _openPlaylist(context, ref, playlist, focusSongId: song.id),
+        onTap: () => _openPlaylist(context, playlist, focusSongId: song.id),
         leading: ClipRRect(
           borderRadius: BorderRadius.circular(8),
           child: SizedBox(
@@ -380,7 +379,7 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
       child: InkWell(
         borderRadius: BorderRadius.circular(16),
         onTap: () {
-          if (favorites != null) _openPlaylist(context, ref, favorites);
+          if (favorites != null) _openPlaylist(context, favorites);
         },
         child: Container(
           padding: const EdgeInsets.all(16),
@@ -427,12 +426,8 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
                   ],
                 ),
               ),
-              GestureDetector(
-                onTap: () {
-                  if (favorites != null && favorites.songs.isNotEmpty) {
-                    playerService.playPlaylist(favorites.songs);
-                  }
-                },
+              Semantics(
+                container: true,
                 child: Container(
                   width: 48,
                   height: 48,
@@ -440,10 +435,19 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
                     color: onAccent.withAlpha(40),
                     shape: BoxShape.circle,
                   ),
-                  child: Icon(
-                    Icons.play_arrow_rounded,
-                    color: onAccent,
-                    size: 30,
+                  child: IconButton(
+                    tooltip: '播放全部',
+                    padding: EdgeInsets.zero,
+                    onPressed: () {
+                      if (favorites != null && favorites.songs.isNotEmpty) {
+                        playerService.playPlaylist(favorites.songs);
+                      }
+                    },
+                    icon: Icon(
+                      Icons.play_arrow_rounded,
+                      color: onAccent,
+                      size: 30,
+                    ),
                   ),
                 ),
               ),
@@ -470,7 +474,7 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
       child: InkWell(
         borderRadius: BorderRadius.circular(16),
         onTap: () {
-          if (recent != null) _openPlaylist(context, ref, recent);
+          if (recent != null) _openPlaylist(context, recent);
         },
         child: Container(
           padding: const EdgeInsets.all(16),
@@ -517,12 +521,8 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
                   ],
                 ),
               ),
-              GestureDetector(
-                onTap: () {
-                  if (recent != null && recent.songs.isNotEmpty) {
-                    playerService.playPlaylist(recent.songs);
-                  }
-                },
+              Semantics(
+                container: true,
                 child: Container(
                   width: 48,
                   height: 48,
@@ -530,10 +530,19 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
                     color: onBlue.withAlpha(40),
                     shape: BoxShape.circle,
                   ),
-                  child: Icon(
-                    Icons.play_arrow_rounded,
-                    color: onBlue,
-                    size: 30,
+                  child: IconButton(
+                    tooltip: '播放全部',
+                    padding: EdgeInsets.zero,
+                    onPressed: () {
+                      if (recent != null && recent.songs.isNotEmpty) {
+                        playerService.playPlaylist(recent.songs);
+                      }
+                    },
+                    icon: Icon(
+                      Icons.play_arrow_rounded,
+                      color: onBlue,
+                      size: 30,
+                    ),
                   ),
                 ),
               ),
@@ -559,7 +568,7 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
       ),
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
-        onTap: () => _openPlaylist(context, ref, playlist),
+        onTap: () => _openPlaylist(context, playlist),
         child: Row(
           children: [
             Container(
@@ -894,6 +903,7 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
 
     await showDialog(
       context: context,
+      barrierDismissible: false,
       builder: (ctx) {
         return StatefulBuilder(
           builder: (ctx, setLocal) {

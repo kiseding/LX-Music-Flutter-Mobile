@@ -125,30 +125,35 @@ class PositionNotifier extends StateNotifier<Duration>
   PositionNotifier(this._player) : super(Duration.zero) {
     final player = _player;
     if (player == null) return;
-    state = player.position;
+    update(player.position);
 
     // 官方 positionStream（内部 createPositionStream），seek 后会跟 updatePosition
     _posSub = player.positionStream.listen((p) {
       if (_frozen) return;
-      if ((p - state).inMilliseconds.abs() >= 16) state = p;
+      if ((p - state).inMilliseconds.abs() >= 16) update(p);
     });
 
     // seek 不连续：立刻跳到目标，歌词/进度同步
     _discSub = player.positionDiscontinuityStream.listen((d) {
       if (_frozen) return;
       final p = player.position;
-      state = p;
+      update(p);
     });
 
     // 兜底轮询（部分 iOS 场景 stream 间隙）
     _timer = Timer.periodic(const Duration(milliseconds: 100), (_) {
       if (_frozen) return;
       final p = player.position;
-      if ((p - state).inMilliseconds.abs() >= 30) state = p;
+      if ((p - state).inMilliseconds.abs() >= 30) update(p);
     });
   }
 
   Duration get position => state;
+
+  void update(Duration next) {
+    if (next == state) return;
+    state = next;
+  }
 
   @override
   void freeze() {
@@ -157,13 +162,13 @@ class PositionNotifier extends StateNotifier<Duration>
 
   @override
   void unfreeze(Duration position) {
-    state = position;
+    update(position);
     _frozen = false;
   }
 
   void jumpTo(Duration position) {
     if (_frozen) return;
-    state = position;
+    update(position);
   }
 
   @override
