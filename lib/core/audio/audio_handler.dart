@@ -399,6 +399,8 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
   /// Preloads have separate authority: only their original queue slot and
   /// request generation may receive metadata, and never once the item is live.
+  /// Successful preloads keep the cache lease until that occurrence is loaded
+  /// or discarded by a generation bump.
   bool acceptPreloadedPlayback({
     required String mediaId,
     required int requestToken,
@@ -429,7 +431,13 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       _trackLeaseRelease(resolution.leaseOrNull);
       return false;
     }
-    _trackLeaseRelease(resolution.leaseOrNull);
+    final previous = _pendingResolutions.remove(request.occurrenceId);
+    final previousLease = previous?.leaseOrNull;
+    if (previousLease != null &&
+        !identical(previousLease, resolution.leaseOrNull)) {
+      _trackLeaseRelease(previousLease);
+    }
+    _pendingResolutions[request.occurrenceId] = resolution;
     return true;
   }
 
@@ -1343,12 +1351,17 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     );
   }
 
-  /// 立刻停止当前输出并广播暂停态，提升手动切歌手感。
+  /// 立刻停止当前输出；进度归零。
+  /// 锁屏/控制中心切歌时必须保持 playing=true，否则 iOS 会结束后台音频会话。
   Future<_PlaybackHalt> _haltCurrentPlayback() async {
     _bumpGeneration();
     _cancelForegroundCacheWork();
     final owner = await _commands.pausePreservingIntent();
-    _publishPlaybackState(override: AudioProcessingState.buffering);
+    _publishPlaybackState(
+      override: AudioProcessingState.buffering,
+      playingOverride: true,
+      positionOverride: Duration.zero,
+    );
     return _PlaybackHalt(owner);
   }
 
@@ -1633,11 +1646,15 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       _currentIndex = index;
       _activeOccurrenceId = occurrenceId;
       _activeItemId = itemId;
+      // Keep system now-playing session alive during skip (lock screen / Control
+      // Center). Publishing playing:false here stops iOS audio and looks stuck.
+      final keepPlaying = seamless || _userWantsPlay;
       mediaItem.add(item);
       queue.add(List.unmodifiable(_queue));
       final manualBufferingPublication = _publishPlaybackState(
         override: AudioProcessingState.buffering,
-        playingOverride: seamless ? true : false,
+        playingOverride: keepPlaying ? true : false,
+        positionOverride: Duration.zero,
       );
       final cachedUrl = item.extras?['url']?.toString();
       final cachedQ = item.extras?['requestedQuality']?.toString();
@@ -1814,7 +1831,14 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
             _queue[transactionIndex].copyWith(extras: baseExtras);
         _replaceQueueItem(transactionIndex, updatedItem);
         queue.add(List.from(_queue));
+        // Publish metadata before source install so lock screen/Dynamic Island
+        // show the correct title/art while buffering the new track.
         mediaItem.add(updatedItem);
+        _publishPlaybackState(
+          override: AudioProcessingState.buffering,
+          playingOverride: keepPlaying ? true : false,
+          positionOverride: Duration.zero,
+        );
         foregroundRequest.item = updatedItem;
         _activeItemId = itemId;
 

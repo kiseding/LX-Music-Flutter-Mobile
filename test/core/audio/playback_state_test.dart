@@ -289,6 +289,8 @@ void main() {
     await selectedResolverStarted.future;
 
     expect(player.pauseCalls, 1);
+    // Native player is paused during resolve, but system now-playing stays
+    // playing=true so lock-screen / Control Center skips do not kill the session.
     expect(player.playing, isFalse);
     expect(handler.mediaItem.value?.id, 'B');
     expect(handler.currentQueueIndex, 1);
@@ -297,7 +299,8 @@ void main() {
       handler.playbackState.value.processingState,
       AudioProcessingState.buffering,
     );
-    expect(handler.playbackState.value.playing, isFalse);
+    expect(handler.playbackState.value.playing, isTrue);
+    expect(handler.playbackState.value.updatePosition, Duration.zero);
 
     releaseSelectedResolver.complete();
     await selection;

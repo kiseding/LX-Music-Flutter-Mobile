@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../network/outbound_url.dart';
+import 'artwork_disk_cache.dart';
 
 /// Headers / client identity required by some music CDNs (especially NetEase).
 ///
@@ -229,7 +230,11 @@ class ArtworkNetworkImage extends ImageProvider<ArtworkNetworkImage> {
       assert(key == this);
       final uri = Uri.parse(key.resolvedUrl);
       final headers = artworkRequestHeaders(key.resolvedUrl);
-      final bytes = await key._loader.load(
+      // Prefer 12h disk cache (shared with lock-screen art download).
+      Uint8List? bytes = await ArtworkDiskCache.instance.bytesForUrl(
+        key.resolvedUrl,
+      );
+      bytes ??= await key._loader.load(
         uri,
         headers,
         (cumulative, total) {
@@ -239,6 +244,9 @@ class ArtworkNetworkImage extends ImageProvider<ArtworkNetworkImage> {
           ));
         },
       );
+      if (bytes.isNotEmpty) {
+        unawaited(ArtworkDiskCache.instance.put(key.resolvedUrl, bytes));
+      }
 
       if (bytes.lengthInBytes == 0) {
         throw Exception('ArtworkNetworkImage is an empty file: $uri');

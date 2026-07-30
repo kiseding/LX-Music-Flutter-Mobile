@@ -1,9 +1,13 @@
 import 'package:audio_service/audio_service.dart';
 import '../domain/music_item.dart';
 import '../../../core/audio/audio_handler.dart';
+import '../../../core/widgets/artwork_disk_cache.dart';
 
 class PlayerService {
-  PlayerService();
+  PlayerService({ArtworkDiskCache? artworkCache})
+      : _artworkCache = artworkCache ?? ArtworkDiskCache.instance;
+
+  final ArtworkDiskCache _artworkCache;
 
   // 获取状态
   Stream<PlaybackState> get playbackStateStream => audioHandler.playbackState;
@@ -20,7 +24,7 @@ class PlayerService {
 
   // 播放单首歌曲
   Future<void> playSong(MusicItem song) async {
-    final item = _convertToMediaItem(song);
+    final item = await _convertToMediaItem(song);
     if (audioHandler is LxAudioHandler) {
       final handler = audioHandler as LxAudioHandler;
       await handler.setPlaylist([item]);
@@ -29,7 +33,10 @@ class PlayerService {
 
   // 播放歌曲列表
   Future<void> playPlaylist(List<MusicItem> songs, {int index = 0}) async {
-    final items = songs.map((s) => _convertToMediaItem(s)).toList();
+    final items = <MediaItem>[];
+    for (final song in songs) {
+      items.add(await _convertToMediaItem(song));
+    }
     if (audioHandler is LxAudioHandler) {
       final handler = audioHandler as LxAudioHandler;
       await handler.setPlaylist(items, initialIndex: index);
@@ -47,18 +54,17 @@ class PlayerService {
     }
   }
 
-  // 辅助方法：统一转换模型
-  MediaItem _convertToMediaItem(MusicItem song) {
+  // 辅助方法：统一转换模型。锁屏/灵动岛需要本地 file artUri（远程 CDN 常无 Referer）。
+  Future<MediaItem> _convertToMediaItem(MusicItem song) async {
+    final artUri = await _artworkCache.localArtUri(song.artwork);
     return MediaItem(
       id: song.id,
       album: song.album,
       title: song.name,
       artist: song.singer,
       duration: song.duration,
-      artUri: (song.artwork != null && song.artwork!.isNotEmpty)
-          ? Uri.parse(song.artwork!)
-          : null,
-      extras: song.toJson(), // 核心：将完整数据带入 AudioHandler，供解析器使用
+      artUri: artUri,
+      extras: song.toJson(),
     );
   }
 
@@ -77,7 +83,7 @@ class PlayerService {
 
   // 添加到下一首播放
   Future<void> playNext(MusicItem song) async {
-    final item = _convertToMediaItem(song);
+    final item = await _convertToMediaItem(song);
     if (audioHandler is LxAudioHandler) {
       final handler = audioHandler as LxAudioHandler;
       final items = List<MediaItem>.from(handler.queueItems);
@@ -97,7 +103,7 @@ class PlayerService {
 
   // 添加到队列末尾
   Future<void> addToQueue(MusicItem song) async {
-    final item = _convertToMediaItem(song);
+    final item = await _convertToMediaItem(song);
     if (audioHandler is LxAudioHandler) {
       final handler = audioHandler as LxAudioHandler;
       final items = List<MediaItem>.from(handler.queueItems);

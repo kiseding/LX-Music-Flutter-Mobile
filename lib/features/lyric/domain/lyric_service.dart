@@ -5,21 +5,27 @@ import '../data/lyric_parser.dart';
 import '../../player/domain/music_item.dart';
 import '../../../core/network/music_source_service.dart';
 import '../../../core/network/outbound_url.dart';
+import '../../../core/storage/ttl_cache.dart';
 
 class LyricService {
   final Dio _dio = Dio();
   final MusicSourceService? _musicSourceService;
-  final Map<String, Lyrics> _cache = {};
+  final TtlCache<Lyrics> _cache;
 
-  LyricService([this._musicSourceService]);
+  LyricService([
+    this._musicSourceService,
+    TtlCache<Lyrics>? cache,
+  ]) : _cache = cache ??
+            TtlCache<Lyrics>(ttl: TtlCache.defaultTtl);
 
   Future<Lyrics> fetchLyric(MusicItem music) async {
     debugPrint(
         '[LyricService] fetchLyric: ${music.name}, platform=${music.platform}, songmid=${music.songmid}, source=${music.source}');
 
-    if (_cache.containsKey(music.id)) {
+    final cached = _cache.get(music.id);
+    if (cached != null) {
       debugPrint('[LyricService] 命中缓存');
-      return _cache[music.id]!;
+      return cached;
     }
 
     if (music.lyricsUrl != null && music.lyricsUrl!.isNotEmpty) {
@@ -29,7 +35,7 @@ class LyricService {
         if (response.statusCode == 200 && response.data is String) {
           final lyrics = _parseLyricString(response.data);
           debugPrint('[LyricService] lyricsUrl 获取成功, ${lyrics.lines.length} 行');
-          _cache[music.id] = lyrics;
+          _cache.set(music.id, lyrics);
           return lyrics;
         }
       } catch (e) {
@@ -45,7 +51,7 @@ class LyricService {
           final lyrics = _parseLyricString(lyricStr);
           debugPrint(
               '[LyricService] MusicSourceService 获取成功, ${lyrics.lines.length} 行');
-          _cache[music.id] = lyrics;
+          _cache.set(music.id, lyrics);
           return lyrics;
         } else {
           debugPrint('[LyricService] MusicSourceService 返回空');

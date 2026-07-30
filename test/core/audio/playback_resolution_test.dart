@@ -1055,7 +1055,9 @@ void main() {
       expect(player.lastInstalledUri,
           PlaybackCacheService.toPlayableUri('/tmp/second.mp3'));
       expect(player.lastInstalledTag, same(handler.queueItems[1]));
-      expect(player.sourceInstallCount, greaterThanOrEqualTo(4));
+      // Initial install + at least one skip install; recovery may coalesce with
+      // the authoritative selection when the session stays playing.
+      expect(player.sourceInstallCount, greaterThanOrEqualTo(3));
     });
 
     test('active occurrence moved during resolution still installs once',
