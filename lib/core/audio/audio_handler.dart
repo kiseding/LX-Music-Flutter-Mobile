@@ -1353,6 +1353,8 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
   /// 立刻停止当前输出；进度归零。
   /// 锁屏/控制中心切歌时必须保持 playing=true，否则 iOS 会结束后台音频会话。
+  /// 装源成功后必须尽快 [releasePreservingIntent]，否则 effectivePlaying 一直为 false，
+  /// 新曲装完也不会自动 play，表现为锁屏下一首直接停住。
   Future<_PlaybackHalt> _haltCurrentPlayback() async {
     _bumpGeneration();
     _cancelForegroundCacheWork();
@@ -1906,8 +1908,17 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
           sourceGeneration: gen,
           mediaId: itemId,
         );
+        // Release skip-halt before publish so effectivePlaying can become true
+        // and the coordinator will play the newly installed source. Do not
+        // re-record play intent here — quality reload / interruption paths
+        // may intentionally stay paused.
+        if (preservingPauseOwner != null) {
+          await _commands.releasePreservingIntent(preservingPauseOwner);
+          preservingPauseOwner = null;
+        }
         _publishPlaybackState(
           playingOverride: _commands.effectivePlaying ? true : null,
+          positionOverride: Duration.zero,
         );
         if (!_isStale(gen)) _schedulePreload();
       } catch (e, stackTrace) {
@@ -2207,6 +2218,24 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       final curExtras = Map<String, dynamic>.from(current.extras ?? {});
       curExtras.addAll(patch);
       mediaItem.add(current.copyWith(extras: curExtras));
+    }
+  }
+
+  /// Background artwork warm-up: set local file artUri without reloading audio.
+  void patchQueueArtUri(String mediaId, Uri artUri) {
+    if (_disposed) return;
+    var changed = false;
+    for (var i = 0; i < _queue.length; i++) {
+      if (_queue[i].id != mediaId) continue;
+      if (_queue[i].artUri == artUri) continue;
+      _replaceQueueItem(i, _queue[i].copyWith(artUri: artUri));
+      changed = true;
+    }
+    if (!changed) return;
+    queue.add(List.unmodifiable(_queue));
+    final current = mediaItem.value;
+    if (current != null && current.id == mediaId && current.artUri != artUri) {
+      mediaItem.add(current.copyWith(artUri: artUri));
     }
   }
 
