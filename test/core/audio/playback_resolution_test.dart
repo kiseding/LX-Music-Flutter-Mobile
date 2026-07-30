@@ -89,6 +89,122 @@ void main() {
       expect(result.qualityExtras['actualQuality'], '320k');
     });
 
+    test('lossless cache failure continues to a cached lossy candidate',
+        () async {
+      final qualities = <String>[];
+      final resolver = PlaybackUrlResolver<MusicItem>(
+        resolvePlayableUrl: (music, {required preferredQuality}) async {
+          qualities.add(preferredQuality);
+          return _playResult(
+            url: 'https://cdn.example/$preferredQuality.mp3',
+            quality: preferredQuality,
+          );
+        },
+        acquireOrDownload: ({
+          required remoteUrl,
+          required platform,
+          required songId,
+          required quality,
+        }) async {
+          if (quality == 'flac') return null;
+          return _FakeLease('/tmp/$quality.mp3', 'key-$quality', (_) {})
+              .asLease();
+        },
+        songIdFor: (music) => music.songmid ?? music.id,
+      );
+
+      final result = await resolver.resolve(
+        _item(),
+        preferredQuality: 'flac',
+      );
+
+      expect(qualities, ['flac', '320k']);
+      expect(result, isA<CachedPlayback>());
+      expect(result!.playableUrl, 'file:///tmp/320k.mp3');
+      expect(result.qualityExtras['requestedQuality'], 'flac');
+    });
+
+    test('lossless cache failure never streams the lossless URL', () async {
+      final resolver = PlaybackUrlResolver<MusicItem>(
+        resolvePlayableUrl: (music, {required preferredQuality}) async {
+          if (preferredQuality != 'flac') return null;
+          return _playResult(
+            url: 'https://cdn.example/song.flac',
+            quality: preferredQuality,
+          );
+        },
+        acquireOrDownload: ({
+          required remoteUrl,
+          required platform,
+          required songId,
+          required quality,
+        }) async =>
+            null,
+        songIdFor: (music) => music.songmid ?? music.id,
+      );
+
+      final result = await resolver.resolve(
+        _item(),
+        preferredQuality: 'flac',
+      );
+
+      expect(result, isNull);
+    });
+
+    test('hires and flac24bit also require a local cache', () async {
+      for (final quality in ['hires', 'flac24bit']) {
+        final resolver = PlaybackUrlResolver<MusicItem>(
+          resolvePlayableUrl: (music, {required preferredQuality}) async {
+            if (preferredQuality != quality) return null;
+            return _playResult(
+              url: 'https://cdn.example/song.flac',
+              quality: preferredQuality,
+            );
+          },
+          acquireOrDownload: ({
+            required remoteUrl,
+            required platform,
+            required songId,
+            required quality,
+          }) async =>
+              null,
+          songIdFor: (music) => music.songmid ?? music.id,
+        );
+
+        expect(
+          await resolver.resolve(_item(), preferredQuality: quality),
+          isNull,
+          reason: '$quality must not stream remotely after cache failure',
+        );
+      }
+    });
+
+    test('lossy cache failure may stream the validated remote URL', () async {
+      final resolver = PlaybackUrlResolver<MusicItem>(
+        resolvePlayableUrl: (music, {required preferredQuality}) async =>
+            _playResult(
+          url: 'https://cdn.example/$preferredQuality.mp3',
+          quality: preferredQuality,
+        ),
+        acquireOrDownload: ({
+          required remoteUrl,
+          required platform,
+          required songId,
+          required quality,
+        }) async =>
+            null,
+        songIdFor: (music) => music.songmid ?? music.id,
+      );
+
+      final result = await resolver.resolve(
+        _item(),
+        preferredQuality: '320k',
+      );
+
+      expect(result, isA<StreamingPlayback>());
+      expect(result!.playableUrl, 'https://cdn.example/320k.mp3');
+    });
+
     test('invalid remote URL fails without streaming', () async {
       final resolver = PlaybackUrlResolver<MusicItem>(
         resolvePlayableUrl: (music, {required preferredQuality}) async =>

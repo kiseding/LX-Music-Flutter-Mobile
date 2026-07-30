@@ -173,6 +173,27 @@ class PlaybackUrlResolver<T> {
     this.isPlayableUrl = isPlayableMediaUrl,
   });
 
+  static const _qualityChain = [
+    'hires',
+    'flac24bit',
+    'flac',
+    '320k',
+    '192k',
+    '128k',
+  ];
+
+  bool _requiresLocalCache(String quality) {
+    final value = quality.toLowerCase();
+    return value == 'flac' || value == 'flac24bit' || value == 'hires';
+  }
+
+  List<String> _qualityCandidates(String preferred) {
+    final value = preferred.isEmpty ? '320k' : preferred;
+    final index = _qualityChain.indexOf(value);
+    if (index < 0) return [value, ..._qualityChain.where((q) => q != value)];
+    return _qualityChain.sublist(index);
+  }
+
   int beginGeneration({bool cancelPrevious = false}) {
     if (cancelPrevious) {
       cancelAllTracked();
@@ -232,62 +253,63 @@ class PlaybackUrlResolver<T> {
       _generationKeys[gen] = <String>{};
     }
 
-    final result = await resolvePlayableUrl(
-      music,
-      preferredQuality: preferredQuality,
-    );
-    if (!_generationKeys.containsKey(gen)) return null;
-    if (result == null || !isPlayableUrl(result.url)) return null;
-
     final songId = songIdFor(music);
-    final qualityKey = result.actualQuality.isNotEmpty
-        ? result.actualQuality
-        : preferredQuality;
-    final key = PlaybackCacheService.cacheKey(
-      platform: result.platform,
-      songId: songId,
-      quality: qualityKey,
-    );
-    noteCacheKey(gen, key);
-    if (!_generationKeys.containsKey(gen)) {
-      cancelCacheKey?.call(key);
-      return null;
-    }
+    for (final candidateQuality in _qualityCandidates(preferredQuality)) {
+      if (!_generationKeys.containsKey(gen)) return null;
+      final result = await resolvePlayableUrl(
+        music,
+        preferredQuality: candidateQuality,
+      );
+      if (!_generationKeys.containsKey(gen)) return null;
+      if (result == null || !isPlayableUrl(result.url)) continue;
 
-    final lease = await acquireOrDownload(
-      remoteUrl: result.url,
-      platform: result.platform,
-      songId: songId,
-      quality: qualityKey,
-    );
-    if (!_generationKeys.containsKey(gen)) {
-      if (lease != null) {
-        await lease.release();
-      } else {
+      final qualityKey = result.actualQuality.isNotEmpty
+          ? result.actualQuality
+          : candidateQuality;
+      final key = PlaybackCacheService.cacheKey(
+        platform: result.platform,
+        songId: songId,
+        quality: qualityKey,
+      );
+      noteCacheKey(gen, key);
+      if (!_generationKeys.containsKey(gen)) {
         cancelCacheKey?.call(key);
+        return null;
       }
-      return null;
+
+      final lease = await acquireOrDownload(
+        remoteUrl: result.url,
+        platform: result.platform,
+        songId: songId,
+        quality: qualityKey,
+      );
+      if (!_generationKeys.containsKey(gen)) {
+        if (lease != null) await lease.release();
+        cancelCacheKey?.call(key);
+        return null;
+      }
+      if (lease == null && _requiresLocalCache(candidateQuality)) {
+        continue;
+      }
+
+      // Resolution completed; stop tracking this generation for cancellation.
+      _generationKeys.remove(gen);
+      final qualityExtras = <String, dynamic>{
+        'remoteUrl': result.url,
+        'actualQuality': result.actualQuality,
+        'requestedQuality': preferredQuality,
+        'platform': result.platform,
+        'cacheKey': key,
+        'songId': songId,
+      };
+      if (lease != null) {
+        qualityExtras['url'] = lease.playableUri;
+        return CachedPlayback(lease, qualityExtras);
+      }
+      qualityExtras['url'] = result.url;
+      return StreamingPlayback(result.url, qualityExtras);
     }
-
-    // Resolution completed; stop tracking this generation for cancel purposes.
-    _generationKeys.remove(gen);
-
-    final qualityExtras = <String, dynamic>{
-      'remoteUrl': result.url,
-      'actualQuality': result.actualQuality,
-      'requestedQuality': result.requestedQuality,
-      'platform': result.platform,
-      'cacheKey': key,
-      'songId': songId,
-    };
-
-    if (lease != null) {
-      qualityExtras['url'] = lease.playableUri;
-      return CachedPlayback(lease, qualityExtras);
-    }
-
-    qualityExtras['url'] = result.url;
-    return StreamingPlayback(result.url, qualityExtras);
+    return null;
   }
 }
 
