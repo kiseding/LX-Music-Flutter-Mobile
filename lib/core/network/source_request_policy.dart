@@ -211,9 +211,10 @@ class SourceRequestPolicy {
     'host',
     'content-length',
   };
+  // Only strip hop/proxy/forwarding headers on the first hop. Authorization and
+  // Cookie must reach same-origin sponsored custom sources (2033247 parity).
+  // Cross-origin redirects still drop them via _crossOriginHeaders allowlist.
   static const _sensitive = {
-    'authorization',
-    'cookie',
     'proxy-authorization',
     'x-forwarded-for',
     'x-forwarded-host',

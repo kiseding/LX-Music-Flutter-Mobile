@@ -222,8 +222,7 @@ void main() {
       );
     });
 
-    test('strips sensitive and hop-by-hop headers case-insensitively',
-        () async {
+    test('keeps first-hop auth headers and strips hop-by-hop headers', () async {
       final policy = policyWith({
         'example.com': ['93.184.216.34'],
       });
@@ -231,7 +230,7 @@ void main() {
       final request = await policy.validate(Uri.parse('https://example.com'), {
         'headers': {
           'Host': 'internal',
-          'Authorization': 'secret',
+          'Authorization': 'Bearer sponsor-token',
           'Cookie': 'session=secret',
           'Proxy-Authorization': 'secret',
           'Connection': 'keep-alive',
@@ -242,13 +241,16 @@ void main() {
         },
       });
 
+      // Match 2033247 Dio behavior: first-hop Authorization/Cookie must reach
+      // sponsored custom-source APIs; only hop-by-hop/proxy headers are stripped.
+      expect(request.headers['Authorization'], 'Bearer sponsor-token');
+      expect(request.headers['Cookie'], 'session=secret');
       expect(request.headers['X-Custom'], 'compatible');
       expect(
         request.headers.keys.map((name) => name.toLowerCase()),
         isNot(containsAll([
           'host',
-          'authorization',
-          'cookie',
+          'proxy-authorization',
           'connection',
           'transfer-encoding',
           'content-length',
@@ -400,17 +402,40 @@ void main() {
           'Accept-Language': 'en',
           'User-Agent': 'source-agent',
           'Content-Type': 'text/plain',
+          'Authorization': 'Bearer sponsor-token',
+          'Cookie': 'session=secret',
           'X-Api-Key': 'secret',
           'X-Custom': 'private',
         },
       );
 
+      expect(requests.first.headers['Authorization'], 'Bearer sponsor-token');
+      expect(requests.first.headers['Cookie'], 'session=secret');
       expect(requests.last.headers['Accept'], 'application/json');
       expect(requests.last.headers['Accept-Language'], 'en');
       expect(requests.last.headers['User-Agent'], 'source-agent');
       expect(requests.last.headers['Content-Type'], 'text/plain');
+      expect(requests.last.headers, isNot(contains('Authorization')));
+      expect(requests.last.headers, isNot(contains('Cookie')));
       expect(requests.last.headers, isNot(contains('X-Api-Key')));
       expect(requests.last.headers, isNot(contains('X-Custom')));
+    });
+
+    test('same-origin redirect keeps first-hop auth headers', () async {
+      final requests = await followRedirect(
+        status: 307,
+        location: '/done',
+        headers: {
+          'Authorization': 'Bearer sponsor-token',
+          'Cookie': 'session=secret',
+          'X-Api-Key': 'secret',
+          'Content-Type': 'text/plain',
+        },
+      );
+
+      expect(requests.last.headers['Authorization'], 'Bearer sponsor-token');
+      expect(requests.last.headers['Cookie'], 'session=secret');
+      expect(requests.last.headers['X-Api-Key'], 'secret');
     });
 
     test('cross-origin body-dropping redirect forwards no content headers',
