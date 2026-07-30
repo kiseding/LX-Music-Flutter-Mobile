@@ -54,6 +54,10 @@ void main() {
     expect(bridge, contains('_formatRequestError'));
     expect(bridge, contains('_supportsAction'));
     expect(bridge, contains('_validateCapabilities'));
+    expect(bridge, contains("'type': 'diagnostic'"));
+    expect(bridge, contains("'capability_rejected'"));
+    expect(bridge, contains("'empty_result'"));
+    expect(bridge, contains("'invalid_result'"));
     // _callRequestEvent 现在迭代 handler 数组，第一个非空返回即胜出。
     expect(
         bridge, contains('var handlers = globalThis._requestHandlers || [];'));

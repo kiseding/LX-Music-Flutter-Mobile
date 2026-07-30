@@ -876,6 +876,15 @@ class CustomSourceEngine {
     });
   }
 
+  void _emitDiagnostic(String code, Map<String, dynamic> data) {
+    _eventController.add({
+      'type': 'diagnostic',
+      'sourceId': _currentSource?.id,
+      'code': code,
+      'data': data,
+    });
+  }
+
   void _executeJsCallback(String callbackId, List<dynamic> args,
       {String? url}) {
     if (_runtime == null) return;
@@ -1090,6 +1099,11 @@ class CustomSourceEngine {
         ? (params['info'] as Map)['type']?.toString()
         : null;
     if (!_supportsAction(source, action.toString(), quality)) {
+      _emitDiagnostic('capability_rejected', {
+        'action': action,
+        'platform': source,
+        'quality': quality,
+      });
       // 能力拒绝是正常回退路径：源未声明 lyric/pic/musicUrl 时直接返回 null，
       // MusicSourceService 会回退到内置源或其它自定义源。不冒充为错误事件，
       // 否则 UI 会刷出“Source does not support lyric for …”红字噪音。
@@ -1480,14 +1494,31 @@ class CustomSourceEngine {
         }
       });
       if (result == null) {
+        _emitDiagnostic('empty_result', {
+          'platform': platform,
+          'quality': resolvedQuality,
+        });
         return null;
       }
 
       if (result is String) {
         final s = result.trim();
-        return s.startsWith('http') ? (url: s, type: null) : null;
+        if (s.startsWith('http')) return (url: s, type: null);
+        _emitDiagnostic('invalid_result', {
+          'platform': platform,
+          'quality': resolvedQuality,
+          'kind': 'string',
+        });
+        return null;
       }
-      if (result is! Map) return null;
+      if (result is! Map) {
+        _emitDiagnostic('invalid_result', {
+          'platform': platform,
+          'quality': resolvedQuality,
+          'kind': result.runtimeType.toString(),
+        });
+        return null;
+      }
 
       String? type = result['type']?.toString() ??
           result['quality']?.toString() ??
@@ -1514,10 +1545,20 @@ class CustomSourceEngine {
         if (u != null && u.startsWith('http')) return (url: u, type: type);
       }
 
+      _emitDiagnostic('invalid_result', {
+        'platform': platform,
+        'quality': resolvedQuality,
+        'kind': 'map_without_url',
+      });
       return null;
     } catch (e) {
       debugPrint(
           '[LX] getMusicUrlDetailed failed source=${music.source} id=${music.id}: $e');
+      _emitDiagnostic('request_error', {
+        'platform': _resolveScriptSource(music),
+        'quality': quality,
+        'error': e.toString(),
+      });
       return null;
     }
   }
