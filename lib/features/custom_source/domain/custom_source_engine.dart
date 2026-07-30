@@ -302,6 +302,21 @@ class CustomSourceEngine {
             }
           }
 
+          final statusCode = response.statusCode;
+          if (statusCode != null && (statusCode < 200 || statusCode >= 300)) {
+            final diagnostic = <String, dynamic>{
+              'statusCode': response.statusCode,
+              'bodyType': body.runtimeType.toString(),
+            };
+            if (body is Map) {
+              diagnostic['code'] = body['code'];
+              diagnostic['message'] = body['message']?.toString();
+            } else if (body is String) {
+              diagnostic['bodyLength'] = body.length;
+            }
+            _emitDiagnostic('http_error_response', diagnostic);
+          }
+
           final Map<String, String> flatHeaders = {};
           response.headers.forEach((name, values) {
             flatHeaders[name.toLowerCase()] = values.join(', ');

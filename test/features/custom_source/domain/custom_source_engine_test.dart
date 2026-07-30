@@ -58,6 +58,9 @@ void main() {
     expect(bridge, contains("'capability_rejected'"));
     expect(bridge, contains("'empty_result'"));
     expect(bridge, contains("'invalid_result'"));
+    expect(bridge, contains("'http_error_response'"));
+    expect(bridge, contains("'statusCode': response.statusCode"));
+    expect(bridge, contains("'bodyType': body.runtimeType.toString()"));
     // _callRequestEvent 现在迭代 handler 数组，第一个非空返回即胜出。
     expect(
         bridge, contains('var handlers = globalThis._requestHandlers || [];'));
