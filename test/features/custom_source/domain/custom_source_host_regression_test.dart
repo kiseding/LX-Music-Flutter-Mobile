@@ -51,4 +51,22 @@ void main() {
       greaterThan(bridge.indexOf('await _drainDeferredMessages();')),
     );
   });
+
+  test('host request path restores session cookies and safe query merge', () {
+    final bridge = File(
+      'lib/features/custom_source/domain/custom_source_engine.dart',
+    ).readAsStringSync();
+
+    expect(bridge, contains('_cookieJar.clear()'));
+    expect(bridge, contains("_applyStoredCookies(uri, headers)"));
+    expect(bridge, contains('_storeCookiesFromResponse(url, response.headers)'));
+    expect(bridge, contains('base.queryParametersAll'));
+    expect(bridge, contains("'rawData': rawB64"));
+    expect(
+      bridge,
+      contains(
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      ),
+    );
+  });
 }

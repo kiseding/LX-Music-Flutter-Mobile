@@ -28,6 +28,10 @@ void main() {
 
       expect(request.uri, Uri.parse('https://example.com/a'));
       expect(request.addresses, [publicAddress]);
+      expect(
+        request.headers['User-Agent'],
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      );
     });
 
     test('rejects cleartext, credentials, and missing hosts', () async {
@@ -196,13 +200,40 @@ void main() {
       }
     });
 
-    test('rejects a DNS result containing any non-public address', () async {
+    test('keeps public addresses when DNS returns mixed public/private',
+        () async {
       final policy = policyWith({
-        'mixed.example': ['93.184.216.34', '127.0.0.1'],
+        'mixed.example': ['127.0.0.1', '93.184.216.34', '::1'],
+      });
+
+      final request =
+          await policy.validate(Uri.parse('https://mixed.example/a'), {});
+
+      expect(request.addresses, [publicAddress]);
+    });
+
+    test('prefers IPv4 when both public families are returned', () async {
+      final ipv6 = InternetAddress('2606:2800:220:1:248:1893:25c8:1946');
+      final policy = policyWith({
+        'dual.example': [
+          '2606:2800:220:1:248:1893:25c8:1946',
+          '93.184.216.34',
+        ],
+      });
+
+      final request =
+          await policy.validate(Uri.parse('https://dual.example/a'), {});
+
+      expect(request.addresses, [publicAddress, ipv6]);
+    });
+
+    test('rejects DNS results with only non-public addresses', () async {
+      final policy = policyWith({
+        'private.example': ['127.0.0.1', '10.0.0.1'],
       });
 
       await expectLater(
-        policy.validate(Uri.parse('https://mixed.example/a'), {}),
+        policy.validate(Uri.parse('https://private.example/a'), {}),
         throwsA(
           isA<SourceRequestPolicyException>()
               .having((error) => error.code, 'code', 'blocked_address'),

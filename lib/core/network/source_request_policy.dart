@@ -260,10 +260,16 @@ class SourceRequestPolicy {
       throw const SourceRequestPolicyException(
           'dns_failed', 'DNS returned no addresses');
     }
-    if (addresses.any((address) => !_isPublic(address))) {
+    final publicAddresses =
+        addresses.where(_isPublic).toList(growable: false);
+    if (publicAddresses.isEmpty) {
       throw const SourceRequestPolicyException(
           'blocked_address', 'Destination is not public');
     }
+    final orderedAddresses = [...publicAddresses]..sort((left, right) {
+        if (left.type == right.type) return 0;
+        return left.type == InternetAddressType.IPv4 ? -1 : 1;
+      });
 
     final rawHeaders = options['headers'];
     final headers = <String, String>{};
@@ -278,11 +284,11 @@ class SourceRequestPolicy {
     }
     if (!headers.keys.any((key) => key.toLowerCase() == 'user-agent')) {
       headers['User-Agent'] =
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36';
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
     }
     return ValidatedSourceRequest(
       uri: uri,
-      addresses: List.unmodifiable(addresses),
+      addresses: List.unmodifiable(orderedAddresses),
       method: (options['method']?.toString() ?? 'GET').toUpperCase(),
       headers: Map.unmodifiable(headers),
       body: options['body'],

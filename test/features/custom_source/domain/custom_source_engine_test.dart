@@ -34,8 +34,8 @@ void main() {
     expect(bridge, contains('The event is not supported:'));
     expect(bridge, contains("'statusMessage':"));
     expect(bridge, contains("'responseRaw':"));
+    expect(bridge, contains("'rawData':"));
     expect(bridge, contains('res.rawData = res.responseRaw;'));
-    expect(bridge, isNot(contains("'rawData': base64Encode")));
     expect(bridge, contains("'bytes':"));
     expect(bridge, contains('lx_request_cancel'));
     expect(bridge, contains('SourceRequestSandbox'));
@@ -47,6 +47,11 @@ void main() {
       bridge.indexOf('_httpCancellations.remove(callbackId);'),
       greaterThan(bridge.indexOf('await withSourceResponseLease(response')),
     );
+    expect(bridge, contains('_cookieJar'));
+    expect(bridge, contains('_mergeRequestUri'));
+    expect(bridge, contains('_applyStoredCookies'));
+    expect(bridge, contains('_storeCookiesFromResponse'));
+    expect(bridge, contains('_formatRequestError'));
     expect(bridge, contains('_supportsAction'));
     expect(bridge, contains('_validateCapabilities'));
     // _callRequestEvent 现在迭代 handler 数组，第一个非空返回即胜出。

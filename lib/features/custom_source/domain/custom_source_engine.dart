@@ -73,6 +73,7 @@ class CustomSourceEngine {
 
   final Map<String, Completer<dynamic>> _pendingRequests = {};
   final Map<String, SourceRequestCancellation> _httpCancellations = {};
+  final Map<String, Map<String, String>> _cookieJar = {};
   Completer<void>? _initCompleter;
   LxSourceCapabilities _capabilities = LxSourceCapabilities.fromInitData(null);
   final List<Map<String, dynamic>> _deferredMessages = [];
@@ -101,6 +102,7 @@ class CustomSourceEngine {
     }
     _pendingRequests.clear();
     _deferredMessages.clear();
+    _cookieJar.clear();
     final init = _initCompleter;
     if (init != null && !init.isCompleted) {
       init.completeError(StateError(reason));
@@ -304,7 +306,9 @@ class CustomSourceEngine {
           response.headers.forEach((name, values) {
             flatHeaders[name.toLowerCase()] = values.join(', ');
           });
+          _storeCookiesFromResponse(url, response.headers);
 
+          final rawB64 = base64Encode(rawBytes);
           debugPrint(
               '[LX] lx_request HTTP done callbackId=$callbackId status=${response.statusCode} bytes=${rawBytes.length}');
           if (!response.isCancelled) {
@@ -318,7 +322,8 @@ class CustomSourceEngine {
                     'body': body,
                     'headers': flatHeaders,
                     'bytes': rawBytes.length,
-                    'responseRaw': base64Encode(rawBytes),
+                    'responseRaw': rawB64,
+                    'rawData': rawB64,
                   },
                   body,
                 ],
@@ -326,9 +331,11 @@ class CustomSourceEngine {
           }
         });
       } catch (e) {
-        debugPrint('[LX] lx_request HTTP FAIL callbackId=$callbackId err=$e');
+        final message = _formatRequestError(e);
+        debugPrint(
+            '[LX] lx_request HTTP FAIL callbackId=$callbackId err=$message');
         if (requestCancellation?.isCancelled != true) {
-          _executeJsCallback(callbackId, [e.toString(), null, null], url: url);
+          _executeJsCallback(callbackId, [message, null, null], url: url);
         }
       } finally {
         _httpCancellations.remove(callbackId);
@@ -1509,6 +1516,8 @@ class CustomSourceEngine {
 
       return null;
     } catch (e) {
+      debugPrint(
+          '[LX] getMusicUrlDetailed failed source=${music.source} id=${music.id}: $e');
       return null;
     }
   }
@@ -1617,11 +1626,8 @@ class CustomSourceEngine {
       }
     }
 
-    final uri = Uri.parse(url).replace(
-      queryParameters: queryParams == null
-          ? null
-          : {...Uri.parse(url).queryParameters, ...queryParams},
-    );
+    final uri = _mergeRequestUri(url, queryParams);
+    _applyStoredCookies(uri, headers);
     return _requestSandbox.request(
       uri,
       {
@@ -1632,6 +1638,87 @@ class CustomSourceEngine {
       },
       cancellation: cancellation,
     );
+  }
+
+  Uri _mergeRequestUri(String url, Map<String, dynamic>? queryParams) {
+    final base = Uri.parse(url);
+    if (queryParams == null || queryParams.isEmpty) return base;
+
+    final merged = <String, List<String>>{};
+    base.queryParametersAll.forEach((key, values) {
+      merged[key] = List<String>.from(values);
+    });
+    queryParams.forEach((key, value) {
+      final name = key.toString();
+      if (value == null) {
+        merged.remove(name);
+        return;
+      }
+      if (value is Iterable && value is! String) {
+        merged[name] = value.map((item) => item.toString()).toList();
+      } else {
+        merged[name] = [value.toString()];
+      }
+    });
+    return base.replace(queryParameters: merged);
+  }
+
+  void _applyStoredCookies(Uri uri, Map<String, dynamic> headers) {
+    if (headers.keys.any((k) => k.toLowerCase() == 'cookie')) return;
+    final host = uri.host.toLowerCase();
+    if (host.isEmpty) return;
+    final pairs = <String>[];
+    _cookieJar.forEach((cookieHost, cookies) {
+      if (host == cookieHost || host.endsWith('.$cookieHost')) {
+        cookies.forEach((name, value) {
+          pairs.add('$name=$value');
+        });
+      }
+    });
+    if (pairs.isNotEmpty) {
+      headers['Cookie'] = pairs.join('; ');
+    }
+  }
+
+  void _storeCookiesFromResponse(
+    String url,
+    Map<String, List<String>> headers,
+  ) {
+    final host = Uri.tryParse(url)?.host.toLowerCase();
+    if (host == null || host.isEmpty) return;
+    final setCookies = <String>[];
+    headers.forEach((name, values) {
+      if (name.toLowerCase() == 'set-cookie') {
+        setCookies.addAll(values);
+      }
+    });
+    if (setCookies.isEmpty) return;
+
+    final jar = _cookieJar.putIfAbsent(host, () => <String, String>{});
+    for (final raw in setCookies) {
+      final first = raw.split(';').first.trim();
+      final eq = first.indexOf('=');
+      if (eq <= 0) continue;
+      final name = first.substring(0, eq).trim();
+      final value = first.substring(eq + 1).trim();
+      if (name.isEmpty) continue;
+      if (value.isEmpty ||
+          value.toLowerCase() == 'delete' ||
+          value == '""' ||
+          value == "''") {
+        jar.remove(name);
+      } else {
+        jar[name] = value;
+      }
+    }
+    if (jar.isEmpty) _cookieJar.remove(host);
+  }
+
+  String _formatRequestError(Object error) {
+    if (error is SourceRequestPolicyException) {
+      return '${error.code}: ${error.message}';
+    }
+    return error.toString();
   }
 
   String? _headerValue(Map<String, List<String>> headers, String name) {
