@@ -1275,23 +1275,14 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       occurrenceId: nextOccurrence,
       position: Duration.zero,
     );
-
-    // 锁屏后台解析可能包含完整无损下载。先播放长静音，避免旧曲在下载
-    // 完成前自然结束后 iOS 挂起 isolate。
-    final keepaliveInstalled = await _commands.installTemporarySource(
-      sourceCommandToken,
-      SilenceAudioSource(duration: const Duration(days: 1)),
-    );
-    if (!keepaliveInstalled &&
-        !_commands.ownsSourceRequest(sourceCommandToken, nextOccurrence)) {
-      return;
-    }
+    final halt = seamless ? null : await _haltCurrentPlayback();
+    if (_disposed) return;
     if (seamless) _userWantsPlay = true;
     final liveIndex = _indexOfOccurrence(nextOccurrence);
     if (liveIndex < 0 ||
         !_commands.ownsSourceRequest(sourceCommandToken, nextOccurrence)) {
-      if (keepaliveInstalled) {
-        await _commands.discardTemporarySource(sourceCommandToken);
+      if (halt != null) {
+        await _commands.releasePreservingIntent(halt.owner);
       }
       return;
     }
@@ -1301,7 +1292,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       preserveUserIntent: true,
       provenance: provenance,
       sourceCommandToken: sourceCommandToken,
-      keepNativePlayingDuringTransition: true,
+      preservingPauseOwner: halt?.owner,
     );
   }
 
@@ -1342,20 +1333,12 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       occurrenceId: previousOccurrence,
       position: Duration.zero,
     );
-    final keepaliveInstalled = await _commands.installTemporarySource(
-      sourceCommandToken,
-      SilenceAudioSource(duration: const Duration(days: 1)),
-    );
-    if (!keepaliveInstalled &&
-        !_commands.ownsSourceRequest(sourceCommandToken, previousOccurrence)) {
-      return;
-    }
+    final halt = await _haltCurrentPlayback();
+    if (_disposed) return;
     final liveIndex = _indexOfOccurrence(previousOccurrence);
     if (liveIndex < 0 ||
         !_commands.ownsSourceRequest(sourceCommandToken, previousOccurrence)) {
-      if (keepaliveInstalled) {
-        await _commands.discardTemporarySource(sourceCommandToken);
-      }
+      await _commands.releasePreservingIntent(halt.owner);
       return;
     }
     await _loadQueueItem(
@@ -1363,7 +1346,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       preserveUserIntent: true,
       provenance: provenance,
       sourceCommandToken: sourceCommandToken,
-      keepNativePlayingDuringTransition: true,
+      preservingPauseOwner: halt.owner,
     );
   }
 

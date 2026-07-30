@@ -46,6 +46,30 @@ void main() {
     expect(update, isNot(contains('setAudioSource')));
   });
 
+  test('next and previous install only the selected track source', () async {
+    MediaItem item(String id) => MediaItem(
+          id: id,
+          title: id,
+          extras: {
+            'url': 'file:///tmp/$id.mp3',
+            'requestedQuality': '320k',
+          },
+        );
+    await handler.setPlaylist([item('A'), item('B')]);
+    final loadsBeforeNext = player.sourceLoadCalls;
+
+    await handler.skipToNext();
+
+    expect(player.sourceLoadCalls, loadsBeforeNext + 1);
+    expect((player.loadedSource as ProgressiveAudioSource).tag.id, 'B');
+
+    final loadsBeforePrevious = player.sourceLoadCalls;
+    await handler.skipToPrevious();
+
+    expect(player.sourceLoadCalls, loadsBeforePrevious + 1);
+    expect((player.loadedSource as ProgressiveAudioSource).tag.id, 'A');
+  });
+
   test('playNext inserts a removed duplicate after the current item', () async {
     audioHandler = handler;
     const currentId = 'B';
