@@ -1293,7 +1293,6 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       positionOverride: Duration.zero,
     );
     final sourceCommandToken = _commands.requestSource(
-      mediaId: nextItem.id,
       occurrenceId: nextOccurrence,
       position: Duration.zero,
     );
@@ -1376,7 +1375,6 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       positionOverride: Duration.zero,
     );
     final sourceCommandToken = _commands.requestSource(
-      mediaId: previousItem.id,
       occurrenceId: previousOccurrence,
       position: Duration.zero,
     );
@@ -1604,7 +1602,6 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         ? _commands.recordExplicitPlayIntent()
         : _commands.setDesiredPlayingPreservingIntent(false));
     final sourceCommandToken = _commands.requestSource(
-      mediaId: selectedItem.id,
       occurrenceId: selectedOccurrenceId!,
       position: initialPosition,
     );
@@ -1678,7 +1675,6 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       final itemId = item.id;
       final commandToken = sourceCommandToken ??
           _commands.requestSource(
-            mediaId: itemId,
             occurrenceId: occurrenceId,
             position: initialPosition,
           );
@@ -2128,7 +2124,6 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     if (retained < 0) {
       _bumpGeneration();
       _commands.requestSource(
-        mediaId: _activeItemId!,
         occurrenceId: _activeOccurrenceId!,
         position: Duration.zero,
       );
@@ -2211,7 +2206,6 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         final replacementId = _queue[replacementIndex].id;
         final replacementOccurrence = _occurrenceIdAt(replacementIndex);
         final sourceCommandToken = _commands.requestSource(
-          mediaId: replacementId,
           occurrenceId: replacementOccurrence,
           position: Duration.zero,
         );
@@ -2378,7 +2372,6 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         reloadOccurrence == null ? -1 : _indexOfOccurrence(reloadOccurrence);
     if (initialIndex < 0 || _currentIndex != initialIndex) return;
     final sourceCommandToken = _commands.requestSource(
-      mediaId: reloadItemId!,
       occurrenceId: reloadOccurrence!,
       position: reloadIntent.position,
     );

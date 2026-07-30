@@ -104,7 +104,6 @@ class PlaybackCommandCoordinator {
   Future<void> get settled => _tail;
 
   int requestSource({
-    required String mediaId,
     required int occurrenceId,
     required Duration position,
   }) {
@@ -112,7 +111,6 @@ class PlaybackCommandCoordinator {
     final token = ++_sourceToken;
     _desiredSource = _DesiredSource(
       token: token,
-      mediaId: mediaId,
       occurrenceId: occurrenceId,
       position: position,
     );
@@ -626,14 +624,12 @@ enum _PlayEndReason { preservingPause, pause, stop, completed, unknown }
 
 class _DesiredSource {
   final int token;
-  final String mediaId;
   final int occurrenceId;
   final Duration position;
   AudioSource? source;
 
   _DesiredSource({
     required this.token,
-    required this.mediaId,
     required this.occurrenceId,
     required this.position,
   });

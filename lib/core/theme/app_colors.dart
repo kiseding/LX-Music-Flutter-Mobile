@@ -4,16 +4,12 @@ import 'package:flutter/material.dart';
 abstract final class AppColors {
   // Dark — 比 #0A0A0A 更接近系统纯黑
   static const Color bg = Color(0xFF000000);
-  static const Color bgGradientStart = Color(0xFF000000);
-  static const Color bgGradientEnd = Color(0xFF000000);
   static const Color surface = Color(0x14FFFFFF); // 8%
   static const Color surface2 = Color(0x1FFFFFFF); // 12%
   static const Color border = Color(0x1AFFFFFF);
-  static const Color borderActive = Color(0x33FFFFFF);
 
   static const Color amber = Color(0xFF1ED760);
   static const Color amberDim = Color(0x331ED760);
-  static const Color amberGlow = Color(0x1A1ED760);
 
   static const Color textPrimary = Color(0xFFF5F5F7);
   static const Color textSecondary = Color(0x99FFFFFF);
@@ -24,7 +20,6 @@ abstract final class AppColors {
 
   static const Color success = Color(0xFF1ED760);
   static const Color error = Color(0xFFFF453A); // iOS system red
-  static const Color warning = Color(0xFFFFD60A);
   static const Color info = Color(0xFF0A84FF);
 
   static const Color surfaceDark = Color(0xFF1C1C1E); // iOS secondary system bg
@@ -38,10 +33,8 @@ abstract final class AppColors {
   static const Color lightTextSecondary = Color(0x993C3C43);
   static const Color lightTextMuted = Color(0x4D3C3C43);
   static const Color lightBorder = Color(0x1A3C3C43);
-  static const Color lightBorderActive = Color(0x333C3C43);
   static const Color lightAccent = Color(0xFF1DB954);
   static const Color lightMiniBar = Color(0xF2FFFFFF);
-  static const Color lightSurfaceDark = Color(0xFFFFFFFF);
   static const Color lightSurfaceVariant = Color(0xFFE5E5EA);
 
   static bool isDark(BuildContext c) => Theme.of(c).brightness == Brightness.dark;
@@ -57,6 +50,5 @@ abstract final class AppColors {
   static Color fill2(BuildContext c) => isDark(c) ? surface2 : const Color(0x29787880);
   static Color accentOf(BuildContext c) => Theme.of(c).colorScheme.primary;
   static Color miniBar(BuildContext c) => isDark(c) ? const Color(0xF21C1C1E) : lightMiniBar;
-  static Color chevron(BuildContext c) => mutedText(c);
   static Color dialogBg(BuildContext c) => isDark(c) ? surfaceDark : lightSurface;
 }

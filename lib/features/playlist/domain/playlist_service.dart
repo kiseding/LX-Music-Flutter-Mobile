@@ -117,7 +117,7 @@ class PlaylistService {
         songs: songs == null ? null : List.unmodifiable(songs),
         updatedAt: _clock(),
       );
-      final next = [...current]..[index] = updated;
+      final next = _replacePlaylistAt(current, index, updated);
       return (next: next, result: updated, changed: true);
     });
   }
@@ -150,7 +150,7 @@ class PlaylistService {
         songs: List.unmodifiable([...existing.songs, song]),
         updatedAt: _clock(),
       );
-      final next = [...current]..[index] = updated;
+      final next = _replacePlaylistAt(current, index, updated);
       return (next: next, result: true, changed: true);
     });
   }
@@ -168,7 +168,7 @@ class PlaylistService {
         ),
         updatedAt: _clock(),
       );
-      final next = [...current]..[index] = updated;
+      final next = _replacePlaylistAt(current, index, updated);
       return (next: next, result: true, changed: true);
     });
   }
@@ -205,7 +205,7 @@ class PlaylistService {
         songs: List.unmodifiable(songs),
         updatedAt: _clock(),
       );
-      final next = [...current]..[index] = updated;
+      final next = _replacePlaylistAt(current, index, updated);
       return (next: next, result: true, changed: true);
     });
   }
@@ -251,7 +251,7 @@ class PlaylistService {
         songs: List.unmodifiable(songs),
         updatedAt: _clock(),
       );
-      final next = [...current]..[index] = updated;
+      final next = _replacePlaylistAt(current, index, updated);
       return (next: next, result: true, changed: true);
     });
   }
@@ -270,7 +270,7 @@ class PlaylistService {
         songs: List.unmodifiable([...favorites.songs, ...additions]),
         updatedAt: _clock(),
       );
-      final next = [...current]..[favoritesIndex] = updated;
+      final next = _replacePlaylistAt(current, favoritesIndex, updated);
       return (next: next, result: additions.length, changed: true);
     });
   }
@@ -317,6 +317,12 @@ class PlaylistService {
     return _disposeFuture = _tail.then((_) => _revisionController.close());
   }
 
+  List<Playlist> _replacePlaylistAt(
+    List<Playlist> current,
+    int index,
+    Playlist replacement,
+  ) => [...current]..[index] = replacement;
+
   Future<bool> _sortSongs(
     String playlistId,
     int Function(MusicItem, MusicItem) compare,
@@ -334,7 +340,7 @@ class PlaylistService {
         songs: List.unmodifiable(songs),
         updatedAt: _clock(),
       );
-      final next = [...current]..[index] = updated;
+      final next = _replacePlaylistAt(current, index, updated);
       return (next: next, result: true, changed: true);
     });
   }

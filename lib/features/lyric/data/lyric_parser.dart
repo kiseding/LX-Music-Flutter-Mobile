@@ -301,9 +301,4 @@ class LyricParser {
     return LyricLine(time: time, text: text, words: words);
   }
 
-  static String formatTime(Duration duration) {
-    final minutes = duration.inMinutes.remainder(60).toString().padLeft(2, '0');
-    final seconds = duration.inSeconds.remainder(60).toString().padLeft(2, '0');
-    return '$minutes:$seconds';
-  }
 }

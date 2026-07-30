@@ -131,6 +131,160 @@ void main() {
     expect(prefs.getInt('theme_mode'), ThemeMode.light.index);
   });
 
+  test('failed download quality persistence rolls back the optimistic state',
+      () async {
+    SharedPreferences.setMockInitialValues({
+      'download_quality': AudioQualityOption.high.index,
+    });
+    final preferences = await SharedPreferences.getInstance();
+    final notifier = DownloadQualityNotifier(
+      storage: () async => StorageService.forTesting(
+        preferences,
+        writeOverride: (_, __, ___) async => false,
+      ),
+    );
+
+    await expectLater(
+      notifier.setQuality(AudioQualityOption.lossless),
+      throwsA(isA<StorageWriteException>()),
+    );
+
+    expect(notifier.state, AudioQualityOption.high);
+  });
+
+  test('stale failed download write cannot roll back a newer same-value write',
+      () async {
+    SharedPreferences.setMockInitialValues({
+      'download_quality': AudioQualityOption.high.index,
+    });
+    final preferences = await SharedPreferences.getInstance();
+    final firstWriteStarted = Completer<void>();
+    final firstWrite = Completer<bool>();
+    var writeCount = 0;
+    final storage = StorageService.forTesting(
+      preferences,
+      writeOverride: (_, __, ___) {
+        if (writeCount++ == 0) {
+          firstWriteStarted.complete();
+          return firstWrite.future;
+        }
+        return Future.value(true);
+      },
+    );
+    final notifier = DownloadQualityNotifier(storage: () async => storage);
+
+    final staleWrite = notifier.setQuality(AudioQualityOption.lossless);
+    await firstWriteStarted.future;
+    await notifier.setQuality(AudioQualityOption.lossless);
+    firstWrite.complete(false);
+
+    await expectLater(staleWrite, throwsA(isA<StorageWriteException>()));
+    expect(notifier.state, AudioQualityOption.lossless);
+  });
+
+  test('stale delayed loader cannot persist over a newer download quality',
+      () async {
+    SharedPreferences.setMockInitialValues({
+      'download_quality': AudioQualityOption.high.index,
+    });
+    final preferences = await SharedPreferences.getInstance();
+    final storage = StorageService.forTesting(preferences);
+    final firstMutationLoaderRequested = Completer<void>();
+    final firstMutationStorage = Completer<StorageService>();
+    var loadCount = 0;
+    final notifier = DownloadQualityNotifier(storage: () {
+      loadCount++;
+      if (loadCount == 2) {
+        firstMutationLoaderRequested.complete();
+        return firstMutationStorage.future;
+      }
+      return Future.value(storage);
+    });
+    await Future<void>.delayed(Duration.zero);
+
+    final staleWrite = notifier.setQuality(AudioQualityOption.lossless);
+    await firstMutationLoaderRequested.future;
+    await notifier.setQuality(AudioQualityOption.hires);
+    expect(
+      preferences.getInt('download_quality'),
+      AudioQualityOption.hires.index,
+    );
+
+    firstMutationStorage.complete(storage);
+    await staleWrite;
+
+    expect(notifier.state, AudioQualityOption.hires);
+    expect(
+      preferences.getInt('download_quality'),
+      AudioQualityOption.hires.index,
+    );
+  });
+
+  test('stale delayed loader cannot persist over a newer sync URL', () async {
+    SharedPreferences.setMockInitialValues({
+      'sync_server_url': 'https://old.example',
+    });
+    final preferences = await SharedPreferences.getInstance();
+    final storage = StorageService.forTesting(preferences);
+    final firstMutationLoaderRequested = Completer<void>();
+    final firstMutationStorage = Completer<StorageService>();
+    var loadCount = 0;
+    final notifier = SyncServerUrlNotifier(storage: () {
+      loadCount++;
+      if (loadCount == 2) {
+        firstMutationLoaderRequested.complete();
+        return firstMutationStorage.future;
+      }
+      return Future.value(storage);
+    });
+    await Future<void>.delayed(Duration.zero);
+
+    final staleWrite = notifier.setUrl('https://first.example');
+    await firstMutationLoaderRequested.future;
+    await notifier.setUrl('https://second.example');
+    expect(preferences.getString('sync_server_url'), 'https://second.example');
+
+    firstMutationStorage.complete(storage);
+    await staleWrite;
+
+    expect(notifier.state, 'https://second.example');
+    expect(preferences.getString('sync_server_url'), 'https://second.example');
+  });
+
+  test('stale audio quality completion cannot apply the old quality', () async {
+    SharedPreferences.setMockInitialValues({
+      'audio_quality': AudioQualityOption.high.index,
+    });
+    final preferences = await SharedPreferences.getInstance();
+    final firstWriteStarted = Completer<void>();
+    final firstWrite = Completer<bool>();
+    final appliedQualities = <String>[];
+    var writeCount = 0;
+    final storage = StorageService.forTesting(
+      preferences,
+      writeOverride: (_, __, ___) {
+        if (writeCount++ == 0) {
+          firstWriteStarted.complete();
+          return firstWrite.future;
+        }
+        return Future.value(true);
+      },
+    );
+    final notifier = AudioQualityNotifier(
+      storage: () async => storage,
+      applyPreferredQuality: (quality) async => appliedQualities.add(quality),
+    );
+
+    final staleWrite = notifier.setQuality(AudioQualityOption.low);
+    await firstWriteStarted.future;
+    await notifier.setQuality(AudioQualityOption.hires);
+    firstWrite.complete(true);
+    await staleWrite;
+
+    expect(notifier.state, AudioQualityOption.hires);
+    expect(appliedQualities, ['hires']);
+  });
+
   test('failed history load does not overwrite clear mutation', () async {
     SharedPreferences.setMockInitialValues({'search_history': ['old']});
     final prefs = await SharedPreferences.getInstance();

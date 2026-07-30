@@ -50,79 +50,109 @@ final defaultSearchPlatformProvider =
 
 // ---- Notifiers ----
 
-class ThemeModeNotifier extends StateNotifier<ThemeMode> {
-  ThemeModeNotifier({StorageLoader? storage})
+abstract class _PersistedSettingNotifier<T> extends StateNotifier<T> {
+  _PersistedSettingNotifier(T initialState, {StorageLoader? storage})
       : _storage = storage ?? (() => StorageService.instance),
-        super(ThemeMode.system) {
-    _load();
-  }
+        super(initialState);
 
   final StorageLoader _storage;
   int _generation = 0;
+  Future<void> _writeTail = Future.value();
 
-  Future<void> _load() async {
+  Future<void> _load(T? Function(StorageService storage) read) async {
     final generation = _generation;
     try {
-      final storage = await _storage();
-      final index = storage.getInt('theme_mode');
-      if (generation == _generation && index != null) {
-        state = ThemeMode.values[index.clamp(0, ThemeMode.values.length - 1)];
-      }
+      final value = read(await _storage());
+      if (generation == _generation && value != null) state = value;
     } catch (_) {
-      // load failure must not overwrite a newer mutation
+      // A failed load must not overwrite a newer mutation.
     }
   }
 
-  Future<void> setThemeMode(ThemeMode mode) async {
-    ++_generation;
+  Future<bool> _persist(
+    T value,
+    Future<bool> Function(StorageService storage) write,
+  ) async {
+    final generation = ++_generation;
     final previous = state;
-    state = mode;
+    state = value;
     try {
-      await (await _storage()).setInt('theme_mode', mode.index);
+      final storage = await _storage();
+      if (generation != _generation) return false;
+
+      final pendingWrite = _writeTail.then<bool>((_) async {
+        if (generation != _generation) return false;
+        await write(storage);
+        return generation == _generation;
+      });
+      _writeTail = pendingWrite.then<void>(
+        (_) {},
+        onError: (_, __) {},
+      );
+      return await pendingWrite;
     } catch (_) {
-      if (state == mode) state = previous;
+      if (generation == _generation && state == value) state = previous;
       rethrow;
     }
   }
 
-  void applyCommitted(ThemeMode mode) {
+  void applyCommittedValue(T value) {
     ++_generation;
-    state = mode;
+    state = value;
   }
 }
 
-class AudioQualityNotifier extends StateNotifier<AudioQualityOption> {
-  AudioQualityNotifier({StorageLoader? storage})
-      : _storage = storage ?? (() => StorageService.instance),
-        super(AudioQualityOption.high) {
-    _load();
+class ThemeModeNotifier extends _PersistedSettingNotifier<ThemeMode> {
+  ThemeModeNotifier({StorageLoader? storage})
+      : super(ThemeMode.system, storage: storage) {
+    _load((storage) {
+      final index = storage.getInt('theme_mode');
+      return index == null
+          ? null
+          : ThemeMode.values[index.clamp(0, ThemeMode.values.length - 1)];
+    });
   }
 
-  final StorageLoader _storage;
-  int _generation = 0;
+  Future<void> setThemeMode(ThemeMode mode) async {
+    await _persist(mode, (storage) => storage.setInt('theme_mode', mode.index));
+  }
 
-  Future<void> _load() async {
-    final generation = _generation;
-    try {
-      final storage = await _storage();
+  void applyCommitted(ThemeMode mode) {
+    applyCommittedValue(mode);
+  }
+}
+
+class AudioQualityNotifier
+    extends _PersistedSettingNotifier<AudioQualityOption> {
+  AudioQualityNotifier({
+    StorageLoader? storage,
+    Future<void> Function(String quality)? applyPreferredQuality,
+  }) : _applyPreferredQuality =
+            applyPreferredQuality ?? _applyPreferredQualityToHandler,
+        super(AudioQualityOption.high, storage: storage) {
+    _load((storage) {
       final index = storage.getInt('audio_quality');
-      if (generation == _generation && index != null) {
-        state = AudioQualityOption
-            .values[index.clamp(0, AudioQualityOption.values.length - 1)];
-      }
-    } catch (_) {}
+      return index == null
+          ? null
+          : AudioQualityOption
+              .values[index.clamp(0, AudioQualityOption.values.length - 1)];
+    });
+  }
+
+  final Future<void> Function(String quality) _applyPreferredQuality;
+
+  static Future<void> _applyPreferredQualityToHandler(String quality) async {
+    if (audioHandler is LxAudioHandler) {
+      await (audioHandler as LxAudioHandler).applyPreferredQuality(quality);
+    }
   }
 
   Future<void> setQuality(AudioQualityOption quality) async {
-    ++_generation;
-    final previous = state;
-    state = quality;
-    try {
-      await (await _storage()).setInt('audio_quality', quality.index);
-    } catch (_) {
-      if (state == quality) state = previous;
-      rethrow;
-    }
+    final ownsPersistedValue = await _persist(
+      quality,
+      (storage) => storage.setInt('audio_quality', quality.index),
+    );
+    if (!ownsPersistedValue) return;
     // 立即让正在播放的队列按新音质重解析，避免继续用旧 extras.url
     final token = switch (quality) {
       AudioQualityOption.low => '128k',
@@ -132,94 +162,57 @@ class AudioQualityNotifier extends StateNotifier<AudioQualityOption> {
       AudioQualityOption.hires => 'hires',
     };
     try {
-      if (audioHandler is LxAudioHandler) {
-        await (audioHandler as LxAudioHandler).applyPreferredQuality(token);
-      }
+      await _applyPreferredQuality(token);
     } catch (_) {
       // audioHandler 可能尚未 init（单测）；忽略
     }
   }
 
   void applyCommitted(AudioQualityOption quality) {
-    ++_generation;
-    state = quality;
+    applyCommittedValue(quality);
   }
 }
 
-class DownloadQualityNotifier extends StateNotifier<AudioQualityOption> {
+class DownloadQualityNotifier
+    extends _PersistedSettingNotifier<AudioQualityOption> {
   DownloadQualityNotifier({StorageLoader? storage})
-      : _storage = storage ?? (() => StorageService.instance),
-        super(AudioQualityOption.high) {
-    _load();
-  }
-
-  final StorageLoader _storage;
-  int _generation = 0;
-
-  Future<void> _load() async {
-    final generation = _generation;
-    try {
-      final storage = await _storage();
+      : super(AudioQualityOption.high, storage: storage) {
+    _load((storage) {
       final index = storage.getInt('download_quality');
-      if (generation == _generation && index != null) {
-        state = AudioQualityOption
-            .values[index.clamp(0, AudioQualityOption.values.length - 1)];
-      }
-    } catch (_) {}
+      return index == null
+          ? null
+          : AudioQualityOption
+              .values[index.clamp(0, AudioQualityOption.values.length - 1)];
+    });
   }
 
   Future<void> setQuality(AudioQualityOption quality) async {
-    ++_generation;
-    final previous = state;
-    state = quality;
-    try {
-      await (await _storage()).setInt('download_quality', quality.index);
-    } catch (_) {
-      if (state == quality) state = previous;
-      rethrow;
-    }
+    await _persist(
+      quality,
+      (storage) => storage.setInt('download_quality', quality.index),
+    );
   }
 
   void applyCommitted(AudioQualityOption quality) {
-    ++_generation;
-    state = quality;
+    applyCommittedValue(quality);
   }
 }
 
-class WifiOnlyDownloadNotifier extends StateNotifier<bool> {
+class WifiOnlyDownloadNotifier extends _PersistedSettingNotifier<bool> {
   WifiOnlyDownloadNotifier({StorageLoader? storage})
-      : _storage = storage ?? (() => StorageService.instance),
-        super(true) {
-    _load();
-  }
-
-  final StorageLoader _storage;
-  int _generation = 0;
-
-  Future<void> _load() async {
-    final generation = _generation;
-    try {
-      final storage = await _storage();
-      final value = storage.getBool('wifi_only_download');
-      if (generation == _generation && value != null) state = value;
-    } catch (_) {}
+      : super(true, storage: storage) {
+    _load((storage) => storage.getBool('wifi_only_download'));
   }
 
   Future<void> setWifiOnly(bool value) async {
-    ++_generation;
-    final previous = state;
-    state = value;
-    try {
-      await (await _storage()).setBool('wifi_only_download', value);
-    } catch (_) {
-      if (state == value) state = previous;
-      rethrow;
-    }
+    await _persist(
+      value,
+      (storage) => storage.setBool('wifi_only_download', value),
+    );
   }
 
   void applyCommitted(bool value) {
-    ++_generation;
-    state = value;
+    applyCommittedValue(value);
   }
 }
 
@@ -236,6 +229,7 @@ class SyncServerUrlNotifier extends StateNotifier<String?> {
 
   final StorageLoader _storage;
   int _generation = 0;
+  Future<void> _writeTail = Future.value();
 
   Future<void> _load() async {
     final generation = _generation;
@@ -252,26 +246,53 @@ class SyncServerUrlNotifier extends StateNotifier<String?> {
     } catch (_) {}
   }
 
+  Future<void> _persist(
+    int generation,
+    String? previous,
+    String? attemptedValue,
+    Future<bool> Function(StorageService storage) write,
+  ) async {
+    try {
+      final storage = await _storage();
+      if (generation != _generation) return;
+
+      final pendingWrite = _writeTail.then<void>((_) async {
+        if (generation != _generation) return;
+        await write(storage);
+      });
+      _writeTail = pendingWrite.then<void>(
+        (_) {},
+        onError: (_, __) {},
+      );
+      await pendingWrite;
+    } catch (_) {
+      if (generation == _generation && state == attemptedValue) {
+        state = previous;
+      }
+      rethrow;
+    }
+  }
+
   Future<void> setUrl(String? url) async {
-    ++_generation;
+    final generation = ++_generation;
     final previous = state;
     if (url != null) {
       final validated = validateHttpsServiceUrl(url);
       state = validated;
-      try {
-        await (await _storage()).setString('sync_server_url', validated);
-      } catch (_) {
-        if (state == validated) state = previous;
-        rethrow;
-      }
+      await _persist(
+        generation,
+        previous,
+        validated,
+        (storage) => storage.setString('sync_server_url', validated),
+      );
     } else {
       state = null;
-      try {
-        await (await _storage()).remove('sync_server_url');
-      } catch (_) {
-        if (state == null) state = previous;
-        rethrow;
-      }
+      await _persist(
+        generation,
+        previous,
+        null,
+        (storage) => storage.remove('sync_server_url'),
+      );
     }
   }
 
@@ -281,42 +302,24 @@ class SyncServerUrlNotifier extends StateNotifier<String?> {
   }
 }
 
-class DefaultSearchPlatformNotifier extends StateNotifier<String> {
+class DefaultSearchPlatformNotifier extends _PersistedSettingNotifier<String> {
   DefaultSearchPlatformNotifier({StorageLoader? storage})
-      : _storage = storage ?? (() => StorageService.instance),
-        super('tx') {
-    _load();
-  }
-
-  final StorageLoader _storage;
-  int _generation = 0;
-
-  Future<void> _load() async {
-    final generation = _generation;
-    try {
-      final storage = await _storage();
-      final v = storage.getString('default_search_platform');
-      if (generation == _generation && (v == 'tx' || v == 'kw' || v == 'wy')) {
-        state = v!;
-      }
-    } catch (_) {}
+      : super('tx', storage: storage) {
+    _load((storage) {
+      final value = storage.getString('default_search_platform');
+      return value == 'tx' || value == 'kw' || value == 'wy' ? value : null;
+    });
   }
 
   Future<void> setPlatform(String platform) async {
     if (platform != 'tx' && platform != 'kw' && platform != 'wy') return;
-    ++_generation;
-    final previous = state;
-    state = platform;
-    try {
-      await (await _storage()).setString('default_search_platform', platform);
-    } catch (_) {
-      if (state == platform) state = previous;
-      rethrow;
-    }
+    await _persist(
+      platform,
+      (storage) => storage.setString('default_search_platform', platform),
+    );
   }
 
   void applyCommitted(String platform) {
-    ++_generation;
-    state = platform;
+    applyCommittedValue(platform);
   }
 }

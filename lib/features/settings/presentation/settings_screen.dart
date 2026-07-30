@@ -567,13 +567,6 @@ class SettingsScreen extends ConsumerWidget {
     }
   }
 
-  String _getCacheSizeText(WidgetRef ref) {
-    final tasks = ref.watch(downloadTasksProvider);
-    final completedTasks = tasks.where((t) => t.savePath != null).length;
-    if (completedTasks == 0) return '暂无缓存';
-    return '$completedTasks 个文件';
-  }
-
   Future<void> _clearCache(BuildContext context) async {
     final confirmed = await showDialog<bool>(
       context: context,

@@ -12,24 +12,11 @@ class PlayerService {
 
   final ArtworkDiskCache _artworkCache;
 
-  Stream<PlaybackState> get playbackStateStream => audioHandler.playbackState;
-  Stream<MediaItem?> get mediaItemStream => audioHandler.mediaItem;
-
   PlaybackState get playbackState => audioHandler.playbackState.value;
-  MediaItem? get currentMediaItem => audioHandler.mediaItem.value;
   bool get isPlaying => audioHandler.playbackState.value.playing;
 
   Future<void> setQueue(List<MusicItem> songs, {int startIndex = 0}) async {
     await playPlaylist(songs, index: startIndex);
-  }
-
-  Future<void> playSong(MusicItem song) async {
-    final item = _convertToMediaItemSync(song);
-    if (audioHandler is LxAudioHandler) {
-      final handler = audioHandler as LxAudioHandler;
-      await handler.setPlaylist([item]);
-      unawaited(_warmArtForQueue([song], preferIndex: 0));
-    }
   }
 
   /// Instant start: no await on artwork download.
@@ -126,18 +113,6 @@ class PlayerService {
       items.insert(insertIndex, item);
       await handler.updateQueue(items);
       unawaited(_warmArtForQueue([song], preferIndex: 0));
-    }
-  }
-
-  Future<void> addToQueue(MusicItem song) async {
-    final item = _convertToMediaItemSync(song);
-    if (audioHandler is LxAudioHandler) {
-      final handler = audioHandler as LxAudioHandler;
-      final items = List<MediaItem>.from(handler.queueItems);
-      if (items.any((queueItem) => queueItem.id == item.id)) return;
-      items.add(item);
-      await handler.updateQueue(items);
-      unawaited(_warmArtForQueue([song], preferIndex: items.length - 1));
     }
   }
 

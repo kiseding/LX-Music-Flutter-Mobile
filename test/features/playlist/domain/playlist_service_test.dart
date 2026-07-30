@@ -374,6 +374,29 @@ void main() {
     await service.dispose();
   });
 
+  test('addSongToPlaylist persists the timestamped replacement', () async {
+    final updatedAt = _now.add(const Duration(minutes: 1));
+    final addedSong = song('added');
+    final repository = MemoryPlaylistRepository(systemSnapshot(additional: [
+      playlist('custom'),
+    ]));
+    final service = PlaylistService(
+      repository: repository,
+      clock: () => updatedAt,
+    );
+    await service.init();
+
+    expect(await service.addSongToPlaylist('custom', addedSong), isTrue);
+
+    final savedPlaylist = repository.saves.single.playlists
+        .firstWhere((playlist) => playlist.id == 'custom');
+    expect(service.getPlaylist('custom')!.songs, [addedSong]);
+    expect(savedPlaylist.songs, [addedSong]);
+    expect(service.getPlaylist('custom')!.updatedAt, updatedAt);
+    expect(savedPlaylist.updatedAt, updatedAt);
+    await service.dispose();
+  });
+
   test('equivalent replaceAll is a deep semantic no-op', () async {
     final initial = systemSnapshot(additional: [
       playlist('custom', songs: [

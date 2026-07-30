@@ -13,7 +13,6 @@ void main() {
     addTearDown(player.dispose);
     final sourceGate = player.gateNextMutation();
     final request = coordinator.requestSource(
-      mediaId: 'A',
       occurrenceId: 1,
       position: Duration.zero,
     );
@@ -38,7 +37,6 @@ void main() {
     final coordinator = PlaybackCommandCoordinator(player);
     addTearDown(player.dispose);
     final request = coordinator.requestSource(
-      mediaId: 'B',
       occurrenceId: 2,
       position: Duration.zero,
     );
@@ -61,7 +59,6 @@ void main() {
     final coordinator = PlaybackCommandCoordinator(player);
     addTearDown(player.dispose);
     final first = coordinator.requestSource(
-      mediaId: 'A',
       occurrenceId: 1,
       position: Duration.zero,
     );
@@ -72,7 +69,6 @@ void main() {
     expect(coordinator.installedSourceIsAuthoritative, isTrue);
 
     final request = coordinator.requestSource(
-      mediaId: 'B',
       occurrenceId: 2,
       position: Duration.zero,
     );
@@ -85,7 +81,6 @@ void main() {
     );
     await sourceGate.started.future;
     coordinator.requestSource(
-      mediaId: 'C',
       occurrenceId: 3,
       position: Duration.zero,
     );
@@ -105,7 +100,6 @@ void main() {
     );
     addTearDown(player.dispose);
     final request = coordinator.requestSource(
-      mediaId: 'B',
       occurrenceId: 2,
       position: Duration.zero,
     );
@@ -134,7 +128,6 @@ void main() {
     final coordinator = PlaybackCommandCoordinator(player);
     addTearDown(player.dispose);
     final request = coordinator.requestSource(
-      mediaId: 'B',
       occurrenceId: 2,
       position: Duration.zero,
     );
@@ -157,7 +150,6 @@ void main() {
     addTearDown(player.dispose);
     final sourceGate = player.gateNextMutation();
     final request = coordinator.requestSource(
-      mediaId: 'A',
       occurrenceId: 1,
       position: Duration.zero,
     );
@@ -215,7 +207,6 @@ void main() {
     addTearDown(player.dispose);
     final sourceGate = player.gateNextMutation();
     final request = coordinator.requestSource(
-      mediaId: 'A',
       occurrenceId: 1,
       position: Duration.zero,
     );
@@ -227,7 +218,6 @@ void main() {
     final stopping = coordinator.stopAndWait();
 
     final rejected = coordinator.requestSource(
-      mediaId: 'B',
       occurrenceId: 2,
       position: Duration.zero,
     );
@@ -262,7 +252,6 @@ void main() {
     addTearDown(player.dispose);
     final sourceGate = player.gateNextMutation();
     final request = coordinator.requestSource(
-      mediaId: 'A',
       occurrenceId: 1,
       position: Duration.zero,
     );
@@ -273,7 +262,6 @@ void main() {
     await sourceGate.started.future;
     final stopping = coordinator.stopAndWait();
     coordinator.requestSource(
-      mediaId: 'late',
       occurrenceId: 2,
       position: Duration.zero,
     );
@@ -335,7 +323,6 @@ void main() {
     final coordinator = PlaybackCommandCoordinator(player);
     addTearDown(player.dispose);
     final request = coordinator.requestSource(
-      mediaId: 'A',
       occurrenceId: 1,
       position: Duration.zero,
     );
@@ -538,7 +525,6 @@ void main() {
     await _install(coordinator);
     await coordinator.recordExplicitPlayIntent();
     coordinator.requestSource(
-      mediaId: 'B',
       occurrenceId: 2,
       position: Duration.zero,
     );
@@ -566,7 +552,6 @@ void main() {
     await _install(coordinator);
     await coordinator.recordExplicitPlayIntent();
     coordinator.requestSource(
-      mediaId: 'B',
       occurrenceId: 2,
       position: Duration.zero,
     );
@@ -603,12 +588,10 @@ void main() {
     final coordinator = PlaybackCommandCoordinator(player);
     addTearDown(player.dispose);
     final stale = coordinator.requestSource(
-      mediaId: 'A',
       occurrenceId: 1,
       position: Duration.zero,
     );
     final current = coordinator.requestSource(
-      mediaId: 'B',
       occurrenceId: 2,
       position: Duration.zero,
     );
@@ -635,7 +618,6 @@ void main() {
     final coordinator = PlaybackCommandCoordinator(player);
     addTearDown(player.dispose);
     final request = coordinator.requestSource(
-      mediaId: 'A',
       occurrenceId: 1,
       position: Duration.zero,
     );
@@ -657,7 +639,6 @@ void main() {
     final coordinator = PlaybackCommandCoordinator(player);
     addTearDown(player.dispose);
     final request = coordinator.requestSource(
-      mediaId: 'A',
       occurrenceId: 1,
       position: Duration.zero,
     );
@@ -706,7 +687,6 @@ void main() {
 
 Future<void> _install(PlaybackCommandCoordinator coordinator) async {
   final request = coordinator.requestSource(
-    mediaId: 'A',
     occurrenceId: 1,
     position: Duration.zero,
   );
