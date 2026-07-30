@@ -308,6 +308,42 @@ void main() {
     expect(handler.playbackState.value.playing, isTrue);
   });
 
+  test('next keeps native audio session playing while resolving new source',
+      () async {
+    final player = _PlaybackStateAudioPlayer()
+      ..sourceInstallProcessingState = ProcessingState.ready;
+    final handler = LxAudioHandler(player: player);
+    addTearDown(player.dispose);
+    final resolverStarted = Completer<void>();
+    final releaseResolver = Completer<void>();
+    handler.urlResolver = (id, [extras]) async {
+      if (id == 'B') {
+        resolverStarted.complete();
+        await releaseResolver.future;
+      }
+      return 'file:///tmp/$id.mp3';
+    };
+    await handler.setPlaylist(const [
+      MediaItem(id: 'A', title: 'A'),
+      MediaItem(id: 'B', title: 'B'),
+    ]);
+    final pausesBeforeSkip = player.pauseCalls;
+
+    final navigation = handler.skipToNext();
+    await resolverStarted.future;
+
+    expect(player.pauseCalls, pausesBeforeSkip);
+    expect(player.playing, isTrue);
+    expect(handler.mediaItem.value?.id, 'B');
+    expect(handler.playbackState.value.processingState,
+        AudioProcessingState.buffering);
+    expect(handler.playbackState.value.playing, isTrue);
+
+    releaseResolver.complete();
+    await navigation;
+    expect(player.playing, isTrue);
+  });
+
   test('selection does not publish metadata before native pause completes',
       () async {
     final player = _PlaybackStateAudioPlayer()

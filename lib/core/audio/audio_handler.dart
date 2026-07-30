@@ -1276,15 +1276,12 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       position: Duration.zero,
     );
 
-    // 用户点「下一首」：立刻停当前曲，避免听感重叠。
-    // 自动连播（seamless）：不要 pause/playing:false，否则锁屏下 iOS 会杀会话。
-    final halt = seamless ? null : await _haltCurrentPlayback();
-    if (_disposed) return;
+    // 系统媒体命令可能在锁屏后台执行。解析新源期间必须让真实播放器继续
+    // 输出，否则 iOS 会挂起 isolate，后续 commitSource 永远没有机会执行。
     if (seamless) _userWantsPlay = true;
     final liveIndex = _indexOfOccurrence(nextOccurrence);
     if (liveIndex < 0 ||
         !_commands.ownsSourceRequest(sourceCommandToken, nextOccurrence)) {
-      if (halt != null) await _commands.releasePreservingIntent(halt.owner);
       return;
     }
     await _loadQueueItem(
@@ -1293,7 +1290,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       preserveUserIntent: true,
       provenance: provenance,
       sourceCommandToken: sourceCommandToken,
-      preservingPauseOwner: halt?.owner,
+      keepNativePlayingDuringTransition: true,
     );
   }
 
@@ -1334,12 +1331,10 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       occurrenceId: previousOccurrence,
       position: Duration.zero,
     );
-    final halt = await _haltCurrentPlayback();
-    if (_disposed) return;
+    // 与下一首相同，锁屏后台解析期间不能暂停真实播放器。
     final liveIndex = _indexOfOccurrence(previousOccurrence);
     if (liveIndex < 0 ||
         !_commands.ownsSourceRequest(sourceCommandToken, previousOccurrence)) {
-      await _commands.releasePreservingIntent(halt.owner);
       return;
     }
     await _loadQueueItem(
@@ -1347,7 +1342,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       preserveUserIntent: true,
       provenance: provenance,
       sourceCommandToken: sourceCommandToken,
-      preservingPauseOwner: halt.owner,
+      keepNativePlayingDuringTransition: true,
     );
   }
 
@@ -1581,6 +1576,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     PlaybackStartProvenance? provenance,
     int? sourceCommandToken,
     PreservingPauseOwner? preservingPauseOwner,
+    bool keepNativePlayingDuringTransition = false,
   }) {
     if (_disposed) return Future<void>.value();
     return _trackOperation(() => _loadQueueItemImpl(
@@ -1592,6 +1588,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
           provenance: provenance,
           sourceCommandToken: sourceCommandToken,
           preservingPauseOwner: preservingPauseOwner,
+          keepNativePlayingDuringTransition: keepNativePlayingDuringTransition,
         ));
   }
 
@@ -1604,6 +1601,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     PlaybackStartProvenance? provenance,
     int? sourceCommandToken,
     PreservingPauseOwner? preservingPauseOwner,
+    bool keepNativePlayingDuringTransition = false,
   }) async {
     try {
       if (index < 0 || index >= _queue.length) return;
@@ -1925,6 +1923,12 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         debugPrint('[AudioHandler] 播放失败: $e');
         await _discardStagedLease(occurrenceId, stagedLease);
         if (_disposed) Error.throwWithStackTrace(e, stackTrace);
+        // Lock-screen navigation keeps the old source alive while resolving.
+        // Once resolution/install has failed there is no pending background
+        // work to protect, so stop mismatched old audio before fallback.
+        if (keepNativePlayingDuringTransition && _player.playing) {
+          preservingPauseOwner = await _commands.pausePreservingIntent();
+        }
         var transactionIndex = activeItemIndex();
         if (transactionIndex >= 0 && _currentIndex == transactionIndex) {
           onError?.call('播放歌曲 "${item.title}" 失败: $e');

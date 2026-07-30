@@ -34,7 +34,7 @@ void main() {
       'lib/core/audio/audio_handler.dart',
     ).readAsStringSync();
     final play = handler.substring(
-      handler.indexOf('Future<void> play() async'),
+      handler.indexOf('Future<void> _play() async'),
       handler.indexOf('/// 供测试：模拟当前曲播放完成'),
     );
     expect(play, contains('_commands.recordExplicitPlayIntent()'));

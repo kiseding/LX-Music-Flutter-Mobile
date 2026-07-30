@@ -552,21 +552,22 @@ void main() {
     expect(player.playing, isFalse);
   });
 
-  test('skip halt cannot forget a completed interruption cycle', () async {
-    final pauseGate = _Gate();
+  test('skip source transition cannot forget a completed interruption cycle',
+      () async {
+    final sourceGate = _Gate();
     final player = _InterruptionAudioPlayer();
     final handler = LxAudioHandler(player: player);
     addTearDown(player.dispose);
     await handler.setPlaylist([_item('A'), _item('B')]);
     await pumpEventQueue();
-    player.gateNextPause(pauseGate);
+    player.gateNextSourceInstall(sourceGate);
     final playCalls = player.playCalls;
 
     final skip = handler.skipToNext();
-    await pauseGate.started.future;
+    await sourceGate.started.future;
     await handler.beginAudioInterruption();
     await handler.endAudioInterruption(mayResume: false);
-    pauseGate.release.complete();
+    sourceGate.release.complete();
     await skip;
     await pumpEventQueue();
 
