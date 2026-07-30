@@ -86,6 +86,7 @@ class CustomSourceEngine {
     _requestSandbox = SourceRequestSandbox(
       policy: requestPolicy ?? SourceRequestPolicy(),
       transport: requestTransport ?? SourcePinnedTransport().call,
+      maximumRedirects: 10,
     );
   }
 
@@ -278,26 +279,18 @@ class CustomSourceEngine {
           final rawBytes = response.bytes;
           dynamic body = utf8.decode(rawBytes, allowMalformed: true);
           if (!isBinary) {
-            // 优化 JSON 自动解析逻辑
-            final contentType =
-                _headerValue(response.headers, 'content-type')?.toLowerCase() ??
-                    '';
-            if (options['json'] == true ||
-                contentType.contains('application/json') ||
-                (body is String && body.trim().startsWith('{'))) {
-              if (body is String && body.isNotEmpty) {
-                final String bodyStr = body;
-                try {
-                  if (bodyStr.length > 50000) {
-                    final dynamic decoded =
-                        await compute<String, dynamic>(_decodeDynamic, bodyStr);
-                    body = decoded;
-                  } else {
-                    body = json.decode(bodyStr);
-                  }
-                } catch (e) {
-                  // 忽略解析错误，保持原始字符串
+            if (body is String && body.isNotEmpty) {
+              final String bodyStr = body;
+              try {
+                if (bodyStr.length > 50000) {
+                  final dynamic decoded =
+                      await compute<String, dynamic>(_decodeDynamic, bodyStr);
+                  body = decoded;
+                } else {
+                  body = json.decode(bodyStr);
                 }
+              } catch (e) {
+                // 忽略解析错误，保持原始字符串
               }
             }
           }
@@ -1775,15 +1768,6 @@ class CustomSourceEngine {
       return '${error.code}: ${error.message}';
     }
     return error.toString();
-  }
-
-  String? _headerValue(Map<String, List<String>> headers, String name) {
-    for (final entry in headers.entries) {
-      if (entry.key.toLowerCase() == name.toLowerCase()) {
-        return entry.value.join(', ');
-      }
-    }
-    return null;
   }
 
   String _redactUrl(String? url) {

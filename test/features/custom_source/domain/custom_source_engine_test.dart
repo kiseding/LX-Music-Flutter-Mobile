@@ -52,6 +52,7 @@ void main() {
     expect(bridge, contains('_applyStoredCookies'));
     expect(bridge, contains('_storeCookiesFromResponse'));
     expect(bridge, contains('_formatRequestError'));
+    expect(bridge, contains('maximumRedirects: 10'));
     expect(bridge, contains('_supportsAction'));
     expect(bridge, contains('_validateCapabilities'));
     expect(bridge, contains("'type': 'diagnostic'"));
@@ -61,6 +62,11 @@ void main() {
     expect(bridge, contains("'http_error_response'"));
     expect(bridge, contains("'statusCode': response.statusCode"));
     expect(bridge, contains("'bodyType': body.runtimeType.toString()"));
+    expect(bridge, contains('body = json.decode(bodyStr);'));
+    expect(
+      bridge,
+      isNot(contains("contentType.contains('application/json') ||")),
+    );
     // _callRequestEvent 现在迭代 handler 数组，第一个非空返回即胜出。
     expect(
         bridge, contains('var handlers = globalThis._requestHandlers || [];'));
