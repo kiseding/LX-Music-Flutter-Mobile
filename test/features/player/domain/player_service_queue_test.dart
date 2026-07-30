@@ -46,7 +46,7 @@ void main() {
     expect(update, isNot(contains('setAudioSource')));
   });
 
-  test('next and previous install only the selected track source', () async {
+  test('next and previous finish on the selected track source', () async {
     MediaItem item(String id) => MediaItem(
           id: id,
           title: id,
@@ -56,18 +56,50 @@ void main() {
           },
         );
     await handler.setPlaylist([item('A'), item('B')]);
-    final loadsBeforeNext = player.sourceLoadCalls;
 
     await handler.skipToNext();
 
-    expect(player.sourceLoadCalls, loadsBeforeNext + 1);
     expect((player.loadedSource as ProgressiveAudioSource).tag.id, 'B');
 
-    final loadsBeforePrevious = player.sourceLoadCalls;
     await handler.skipToPrevious();
 
-    expect(player.sourceLoadCalls, loadsBeforePrevious + 1);
     expect((player.loadedSource as ProgressiveAudioSource).tag.id, 'A');
+  });
+
+  test('next keeps a tagged native source playing while URL resolution waits',
+      () async {
+    final resolverStarted = Completer<void>();
+    final releaseResolver = Completer<void>();
+    MediaItem item(String id, {bool resolved = true}) => MediaItem(
+          id: id,
+          title: id,
+          extras: resolved
+              ? {
+                  'url': 'file:///tmp/$id.mp3',
+                  'requestedQuality': '320k',
+                }
+              : null,
+        );
+    await handler.setPlaylist([item('A'), item('B', resolved: false)]);
+    handler.urlResolver = (id, [extras]) async {
+      if (id == 'B') {
+        resolverStarted.complete();
+        await releaseResolver.future;
+      }
+      return 'file:///tmp/$id.mp3';
+    };
+
+    final skip = handler.skipToNext();
+    await resolverStarted.future;
+
+    expect(player.playing, isTrue);
+    final temporary = player.loadedSource;
+    expect(temporary, isA<SilenceAudioSource>());
+    expect((temporary as SilenceAudioSource).tag, isA<MediaItem>());
+    expect((temporary.tag as MediaItem).id, 'B');
+
+    releaseResolver.complete();
+    await skip;
   });
 
   test('playNext inserts a removed duplicate after the current item', () async {

@@ -649,6 +649,28 @@ void main() {
     expect((result as SourceCommitFailed).error, same(error));
   });
 
+  test('authoritative source commit accepts an installed source after a late error',
+      () async {
+    final player = _LifecycleAudioPlayer()
+      ..sourceInstallError = StateError('late source error')
+      ..sourceInstallErrorAfterSet = true;
+    final coordinator = PlaybackCommandCoordinator(player);
+    addTearDown(player.dispose);
+    final request = coordinator.requestSource(
+      mediaId: 'A',
+      occurrenceId: 1,
+      position: Duration.zero,
+    );
+
+    final result = await coordinator.commitSource(
+      request,
+      AudioSource.uri(Uri.parse('file:///tmp/A.mp3')),
+    );
+
+    expect(result, isA<SourceCommitInstalled>());
+    expect(coordinator.installedSourceToken, request);
+  });
+
   test('failed seek is consumed before a later interruption pause', () async {
     final errors = <String>[];
     final player = _LifecycleAudioPlayer()..failNextSeek = true;
@@ -790,6 +812,7 @@ class _Gate {
 }
 
 class _LifecycleAudioPlayer extends AudioPlayer {
+  AudioSource? _audioSource;
   bool _playing = false;
   ProcessingState _processingState = ProcessingState.ready;
   Completer<void>? _playLifecycle;
@@ -797,7 +820,11 @@ class _LifecycleAudioPlayer extends AudioPlayer {
   int seekCalls = 0;
   bool failNextSeek = false;
   Object? sourceInstallError;
+  bool sourceInstallErrorAfterSet = false;
   final calls = <String>[];
+
+  @override
+  AudioSource? get audioSource => _audioSource;
 
   @override
   bool get playing => _playing;
@@ -814,8 +841,10 @@ class _LifecycleAudioPlayer extends AudioPlayer {
   }) async {
     calls.add('source');
     final error = sourceInstallError;
-    if (error != null) throw error;
+    if (error != null && !sourceInstallErrorAfterSet) throw error;
+    _audioSource = source;
     _processingState = ProcessingState.ready;
+    if (error != null) throw error;
     return null;
   }
 

@@ -283,6 +283,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   int _installedSourceOwnerToken = 0;
   int _installedPlaybackGeneration = -1;
   String? _installedMediaId;
+  int? _nativeTransitionSourceToken;
   int _lastHandledCompletionGeneration = -1;
   String? _activeItemId;
   AudioServiceRepeatMode _repeatMode = AudioServiceRepeatMode.none;
@@ -834,7 +835,13 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     Duration? positionOverride,
   }) {
     if (_disposed) return _playbackPublicationToken;
-    final playing = playingOverride ?? _player.playing;
+    final transitionToken = _nativeTransitionSourceToken;
+    final keepingNativeSession =
+        transitionToken != null &&
+            transitionToken == _commands.desiredSourceToken &&
+            _commands.desiredPlayingIntent;
+    final playing =
+        playingOverride ?? (keepingNativeSession ? true : _player.playing);
     final publicationToken = ++_playbackPublicationToken;
     playbackState.add(PlaybackState(
       controls: [
@@ -849,7 +856,10 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         MediaAction.seekBackward,
       },
       processingState:
-          override ?? audioProcessingState(_player.processingState),
+          override ??
+              (keepingNativeSession
+                  ? AudioProcessingState.buffering
+                  : audioProcessingState(_player.processingState)),
       playing: playing,
       updatePosition: positionOverride ?? _player.position,
       bufferedPosition: _player.bufferedPosition,
@@ -1270,19 +1280,44 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     );
     if (nextIndex < 0) return;
     final nextOccurrence = _occurrenceIdAt(nextIndex);
+    final nextItem = _queue[nextIndex];
+    _bumpGeneration();
+    _cancelForegroundCacheWork();
+    _currentIndex = nextIndex;
+    _activeOccurrenceId = nextOccurrence;
+    _activeItemId = nextItem.id;
+    mediaItem.add(nextItem);
+    _publishPlaybackState(
+      override: AudioProcessingState.buffering,
+      playingOverride: true,
+      positionOverride: Duration.zero,
+    );
     final sourceCommandToken = _commands.requestSource(
-      mediaId: _queue[nextIndex].id,
+      mediaId: nextItem.id,
       occurrenceId: nextOccurrence,
       position: Duration.zero,
     );
-    final halt = seamless ? null : await _haltCurrentPlayback();
-    if (_disposed) return;
+    _nativeTransitionSourceToken = sourceCommandToken;
+    final keepaliveInstalled = await _commands.installTemporarySource(
+      sourceCommandToken,
+      audioSourceFor('', tag: nextItem),
+    );
+    if (!keepaliveInstalled &&
+        !_commands.ownsSourceRequest(sourceCommandToken, nextOccurrence)) {
+      if (_nativeTransitionSourceToken == sourceCommandToken) {
+        _nativeTransitionSourceToken = null;
+      }
+      return;
+    }
     if (seamless) _userWantsPlay = true;
     final liveIndex = _indexOfOccurrence(nextOccurrence);
     if (liveIndex < 0 ||
         !_commands.ownsSourceRequest(sourceCommandToken, nextOccurrence)) {
-      if (halt != null) {
-        await _commands.releasePreservingIntent(halt.owner);
+      if (keepaliveInstalled) {
+        await _commands.discardTemporarySource(sourceCommandToken);
+      }
+      if (_nativeTransitionSourceToken == sourceCommandToken) {
+        _nativeTransitionSourceToken = null;
       }
       return;
     }
@@ -1292,7 +1327,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       preserveUserIntent: true,
       provenance: provenance,
       sourceCommandToken: sourceCommandToken,
-      preservingPauseOwner: halt?.owner,
+      keepNativePlayingDuringTransition: true,
     );
   }
 
@@ -1328,17 +1363,44 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     );
     if (prevIndex < 0) return;
     final previousOccurrence = _occurrenceIdAt(prevIndex);
+    final previousItem = _queue[prevIndex];
+    _bumpGeneration();
+    _cancelForegroundCacheWork();
+    _currentIndex = prevIndex;
+    _activeOccurrenceId = previousOccurrence;
+    _activeItemId = previousItem.id;
+    mediaItem.add(previousItem);
+    _publishPlaybackState(
+      override: AudioProcessingState.buffering,
+      playingOverride: true,
+      positionOverride: Duration.zero,
+    );
     final sourceCommandToken = _commands.requestSource(
-      mediaId: _queue[prevIndex].id,
+      mediaId: previousItem.id,
       occurrenceId: previousOccurrence,
       position: Duration.zero,
     );
-    final halt = await _haltCurrentPlayback();
-    if (_disposed) return;
+    _nativeTransitionSourceToken = sourceCommandToken;
+    final keepaliveInstalled = await _commands.installTemporarySource(
+      sourceCommandToken,
+      audioSourceFor('', tag: previousItem),
+    );
+    if (!keepaliveInstalled &&
+        !_commands.ownsSourceRequest(sourceCommandToken, previousOccurrence)) {
+      if (_nativeTransitionSourceToken == sourceCommandToken) {
+        _nativeTransitionSourceToken = null;
+      }
+      return;
+    }
     final liveIndex = _indexOfOccurrence(previousOccurrence);
     if (liveIndex < 0 ||
         !_commands.ownsSourceRequest(sourceCommandToken, previousOccurrence)) {
-      await _commands.releasePreservingIntent(halt.owner);
+      if (keepaliveInstalled) {
+        await _commands.discardTemporarySource(sourceCommandToken);
+      }
+      if (_nativeTransitionSourceToken == sourceCommandToken) {
+        _nativeTransitionSourceToken = null;
+      }
       return;
     }
     await _loadQueueItem(
@@ -1346,7 +1408,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       preserveUserIntent: true,
       provenance: provenance,
       sourceCommandToken: sourceCommandToken,
-      preservingPauseOwner: halt.owner,
+      keepNativePlayingDuringTransition: true,
     );
   }
 
@@ -1909,6 +1971,9 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         _installedSourceOwnerToken = commandToken;
         _installedPlaybackGeneration = gen;
         _installedMediaId = itemId;
+        if (_nativeTransitionSourceToken == commandToken) {
+          _nativeTransitionSourceToken = null;
+        }
         _adoptInstalledSourceForInterruption(
           sourceGeneration: gen,
           mediaId: itemId,
@@ -1953,6 +2018,9 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         if (keepNativePlayingDuringTransition &&
             _installedSourceOwnerToken != commandToken) {
           await _commands.discardTemporarySource(commandToken);
+          if (_nativeTransitionSourceToken == commandToken) {
+            _nativeTransitionSourceToken = null;
+          }
         }
         if (!sourceInstallAttempted &&
             !sourceTransitionFollows &&

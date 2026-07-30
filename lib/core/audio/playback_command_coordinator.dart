@@ -464,12 +464,17 @@ class PlaybackCommandCoordinator {
             initialPosition: desiredSource.position,
           );
         } catch (error, stackTrace) {
-          _failedSourceToken = desiredSource.token;
-          _failedSourceCommit = SourceCommitFailed(error, stackTrace);
-          if (_desiredSource?.token == desiredSource.token) {
-            _onStateChanged?.call();
+          // AVPlayer can report an item error after the native player has
+          // already adopted the replacement source. Treat that source as
+          // installed so a stale -11800 does not surface as a failed skip.
+          if (!identical(_player.audioSource, desiredSource.source)) {
+            _failedSourceToken = desiredSource.token;
+            _failedSourceCommit = SourceCommitFailed(error, stackTrace);
+            if (_desiredSource?.token == desiredSource.token) {
+              _onStateChanged?.call();
+            }
+            return;
           }
-          return;
         }
         _installedSourceToken = desiredSource.token;
         _temporarySourceToken = null;
