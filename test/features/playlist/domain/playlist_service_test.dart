@@ -628,6 +628,36 @@ void main() {
     await subscription.cancel();
   });
 
+  test('addToRecent updates recent without invalidating playlist pages',
+      () async {
+    final repository = MemoryPlaylistRepository(systemSnapshot());
+    final service = PlaylistService(repository: repository, clock: () => _now);
+    await service.init();
+    final revisions = <int>[];
+    final pageRevisions = <int>[];
+    final recentRevisions = <int>[];
+    final subscription = service.revisions.listen(revisions.add);
+    final pageSubscription = service.pageRevisions.listen(pageRevisions.add);
+    final recentSubscription =
+        service.recentRevisions.listen(recentRevisions.add);
+    addTearDown(() async {
+      await subscription.cancel();
+      await pageSubscription.cancel();
+      await recentSubscription.cancel();
+      await service.dispose();
+    });
+
+    expect(await service.addToRecent(song('new')), isTrue);
+    expect(revisions, [1]);
+    expect(recentRevisions, [1]);
+    expect(pageRevisions, isEmpty);
+
+    await service.addSongToPlaylist('favorites', song('favorite'));
+    expect(revisions, [1, 2]);
+    expect(recentRevisions, [1, 2]);
+    expect(pageRevisions, [2]);
+  });
+
   test('addToRecent refreshes same-id content but exact repeats are no-ops',
       () async {
     final original = detailedSong('a', name: 'Old', meta: {'version': 1});

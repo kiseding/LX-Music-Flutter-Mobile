@@ -20,6 +20,10 @@ class PlaylistService {
   final List<Playlist> _playlists = [];
   final StreamController<int> _revisionController =
       StreamController<int>.broadcast();
+  final StreamController<int> _pageRevisionController =
+      StreamController<int>.broadcast();
+  final StreamController<int> _recentRevisionController =
+      StreamController<int>.broadcast();
 
   Future<void> _tail = Future.value();
   Future<void>? _initFuture;
@@ -31,6 +35,8 @@ class PlaylistService {
   List<Playlist> get playlists => List.unmodifiable(_playlists);
   int get revision => _revision;
   Stream<int> get revisions => _revisionController.stream;
+  Stream<int> get pageRevisions => _pageRevisionController.stream;
+  Stream<int> get recentRevisions => _recentRevisionController.stream;
 
   Future<List<Playlist>> getAllPlaylists() => _hydrateAll(_playlists);
 
@@ -302,25 +308,28 @@ class PlaylistService {
   }
 
   Future<bool> addToRecent(MusicItem song) {
-    return _mutate((current) {
-      final index = _indexOf(current, 'recent');
-      final existing = current[index];
-      final seenIds = <String>{};
-      final songs = <MusicItem>[];
-      for (final item in [song, ...existing.songs]) {
-        if (seenIds.add(item.id)) songs.add(item);
-        if (songs.length == 100) break;
-      }
-      if (_sameSongs(songs, existing.songs)) {
-        return (next: current, result: false, changed: false);
-      }
-      final updated = existing.copyWith(
-        songs: List.unmodifiable(songs),
-        updatedAt: _clock(),
-      );
-      final next = _replacePlaylistAt(current, index, updated);
-      return (next: next, result: true, changed: true);
-    });
+    return _mutate(
+      (current) {
+        final index = _indexOf(current, 'recent');
+        final existing = current[index];
+        final seenIds = <String>{};
+        final songs = <MusicItem>[];
+        for (final item in [song, ...existing.songs]) {
+          if (seenIds.add(item.id)) songs.add(item);
+          if (songs.length == 100) break;
+        }
+        if (_sameSongs(songs, existing.songs)) {
+          return (next: current, result: false, changed: false);
+        }
+        final updated = existing.copyWith(
+          songs: List.unmodifiable(songs),
+          updatedAt: _clock(),
+        );
+        final next = _replacePlaylistAt(current, index, updated);
+        return (next: next, result: true, changed: true);
+      },
+      revisionScope: PlaylistMutationScope.recent,
+    );
   }
 
   Future<int> addAllSongsToFavorites(String playlistId) {
@@ -343,18 +352,21 @@ class PlaylistService {
   }
 
   Future<void> replaceAll(List<Playlist> playlists) {
-    return _mutate<void>((current) {
-      _validatePlaylistIds(playlists);
-      final repaired = _withSystemPlaylists(playlists);
-      if (_samePlaylists(current, repaired)) {
-        return (next: current, result: null, changed: false);
-      }
-      return (
-        next: List<Playlist>.unmodifiable(repaired),
-        result: null,
-        changed: true,
-      );
-    });
+    return _mutate<void>(
+      (current) {
+        _validatePlaylistIds(playlists);
+        final repaired = _withSystemPlaylists(playlists);
+        if (_samePlaylists(current, repaired)) {
+          return (next: current, result: null, changed: false);
+        }
+        return (
+          next: List<Playlist>.unmodifiable(repaired),
+          result: null,
+          changed: true,
+        );
+      },
+      revisionScope: PlaylistMutationScope.all,
+    );
   }
 
   Future<void> restoreSnapshot(PlaylistSnapshot snapshot) {
@@ -374,7 +386,7 @@ class PlaylistService {
       _playlists
         ..clear()
         ..addAll(persisted.playlists);
-      _revisionController.add(++_revision);
+      _notifyRevisions(PlaylistMutationScope.all);
     });
   }
 
@@ -384,7 +396,11 @@ class PlaylistService {
   Future<void> dispose() {
     if (_disposeFuture != null) return _disposeFuture!;
     _disposing = true;
-    return _disposeFuture = _tail.then((_) => _revisionController.close());
+    return _disposeFuture = _tail.then((_) {
+      _revisionController.close();
+      _pageRevisionController.close();
+      _recentRevisionController.close();
+    });
   }
 
   List<Playlist> _replacePlaylistAt(
@@ -418,8 +434,9 @@ class PlaylistService {
   Future<T> _mutate<T>(
     FutureOr<({List<Playlist> next, T result, bool changed})> Function(
       List<Playlist> current,
-    ) operation,
-  ) {
+    ) operation, {
+    PlaylistMutationScope revisionScope = PlaylistMutationScope.all,
+  }) {
     if (_disposing) {
       return Future.error(StateError('PlaylistService is disposed'));
     }
@@ -442,9 +459,19 @@ class PlaylistService {
       _playlists
         ..clear()
         ..addAll(persisted.playlists);
-      _revisionController.add(++_revision);
+      _notifyRevisions(revisionScope);
       return mutation.result;
     });
+  }
+
+  void _notifyRevisions(PlaylistMutationScope scope) {
+    _revisionController.add(++_revision);
+    if (scope == PlaylistMutationScope.all) {
+      _pageRevisionController.add(_revision);
+      _recentRevisionController.add(_revision);
+    } else if (scope == PlaylistMutationScope.recent) {
+      _recentRevisionController.add(_revision);
+    }
   }
 
   Future<List<Playlist>> _hydrateAll(List<Playlist> playlists) async {
@@ -617,3 +644,5 @@ final class PlaylistSongMatch {
   final MusicItem song;
   final int index;
 }
+
+enum PlaylistMutationScope { all, recent }

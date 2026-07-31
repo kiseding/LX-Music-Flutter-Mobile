@@ -272,6 +272,14 @@ class PlaybackCommandCoordinator {
     return _markDirty();
   }
 
+  Future<void> clearPreservingPauseOwners() {
+    if (_shutdown) return Future<void>.value();
+    if (_preservingPauseOwners.isEmpty) return settled;
+    _preservingPauseOwners.clear();
+    _retirePausedPlayLifecycle();
+    return _markDirty();
+  }
+
   Future<void> reconcilePlayingIntent() =>
       _shutdown ? Future<void>.value() : _markDirty();
 

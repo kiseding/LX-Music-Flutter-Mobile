@@ -1062,10 +1062,27 @@ class _PlaybackQueueSheetState extends ConsumerState<_PlaybackQueueSheet> {
 
   void _scrollToCurrentIfNeeded(int pageIndex, int currentIndex, int pageStart) {
     if (currentIndex < pageStart || _focusedPageForScroll == pageIndex) return;
-    _focusedPageForScroll = pageIndex;
     final offsetInPage = currentIndex - pageStart;
+    _focusedPageForScroll = pageIndex;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_queueScrollController.hasClients) return;
+      if (!mounted) return;
+      if (!_queueScrollController.hasClients) {
+        _focusedPageForScroll = null;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          if (!_queueScrollController.hasClients) return;
+          final position = _queueScrollController.position;
+          final target = (offsetInPage * 72.0 -
+                  (position.viewportDimension - 72.0) / 2)
+              .clamp(0.0, position.maxScrollExtent);
+          _queueScrollController.animateTo(
+            target,
+            duration: const Duration(milliseconds: 280),
+            curve: Curves.easeOutCubic,
+          );
+        });
+        return;
+      }
       final position = _queueScrollController.position;
       final target = (offsetInPage * 72.0 - (position.viewportDimension - 72.0) / 2)
           .clamp(0.0, position.maxScrollExtent);

@@ -2267,6 +2267,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
           : _commands.setDesiredPlayingPreservingIntent(false),
     );
     _bumpGeneration();
+    _lazyQueueEpoch++;
     _queue
       ..clear()
       ..addAll(items);
@@ -2288,6 +2289,9 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     _currentIndex = safeIndex;
     _activeItemId = items[safeIndex].id;
     mediaItem.add(items[safeIndex]);
+    if (playWhenReady) {
+      unawaited(_commands.clearPreservingPauseOwners());
+    }
 
     // 始终走 skipToQueueItem，统一解析/缓存/预加载
     await _loadQueueItem(

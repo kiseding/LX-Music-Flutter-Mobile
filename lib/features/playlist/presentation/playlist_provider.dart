@@ -23,6 +23,14 @@ final playlistRevisionProvider = StreamProvider<int>((ref) {
   return ref.watch(playlistServiceProvider).revisions;
 });
 
+final playlistPageRevisionProvider = StreamProvider<int>((ref) {
+  return ref.watch(playlistServiceProvider).pageRevisions;
+});
+
+final playlistRecentRevisionProvider = StreamProvider<int>((ref) {
+  return ref.watch(playlistServiceProvider).recentRevisions;
+});
+
 final playlistsProvider = Provider<List<Playlist>>((ref) {
   ref.watch(playlistRevisionProvider);
   final playlistService = ref.watch(playlistServiceProvider);
@@ -52,7 +60,10 @@ final class PlaylistSongsPageRequest {
 
 final playlistSongsPageProvider = FutureProvider.autoDispose
     .family<PlaylistSongPage, PlaylistSongsPageRequest>((ref, request) {
-  ref.watch(playlistRevisionProvider);
+  ref.watch(playlistPageRevisionProvider);
+  if (request.playlistId == 'recent') {
+    ref.watch(playlistRecentRevisionProvider);
+  }
   return ref.read(playlistServiceProvider).getSongsPage(
         request.playlistId,
         offset: request.offset,

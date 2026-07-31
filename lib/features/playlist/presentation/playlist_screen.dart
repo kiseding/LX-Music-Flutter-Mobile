@@ -65,6 +65,7 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
   @override
   Widget build(BuildContext context) {
     final playlists = ref.watch(playlistsProvider);
+    ref.watch(playlistRecentRevisionProvider);
     final playlistService = ref.watch(playlistServiceProvider);
     final favorites = playlistService.favorites;
     final recent = playlistService.recent;
