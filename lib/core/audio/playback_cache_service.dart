@@ -266,9 +266,10 @@ class PlaybackUrlResolver<T> {
       final qualityKey = result.actualQuality.isNotEmpty
           ? result.actualQuality
           : candidateQuality;
+      final resolvedSongId = result.songId.isNotEmpty ? result.songId : songId;
       final key = PlaybackCacheService.cacheKey(
         platform: result.platform,
-        songId: songId,
+        songId: resolvedSongId,
         quality: qualityKey,
       );
       noteCacheKey(gen, key);
@@ -280,7 +281,7 @@ class PlaybackUrlResolver<T> {
       final lease = await acquireOrDownload(
         remoteUrl: result.url,
         platform: result.platform,
-        songId: songId,
+        songId: resolvedSongId,
         quality: qualityKey,
       );
       if (!_generationKeys.containsKey(gen)) {
@@ -300,7 +301,7 @@ class PlaybackUrlResolver<T> {
         'requestedQuality': preferredQuality,
         'platform': result.platform,
         'cacheKey': key,
-        'songId': songId,
+        'songId': resolvedSongId,
       };
       if (lease != null) {
         qualityExtras['url'] = lease.playableUri;

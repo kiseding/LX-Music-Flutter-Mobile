@@ -8,11 +8,15 @@ class PlayUrlResult {
   final String actualQuality;
   final String platform;
 
+  /// 命中歌曲的源侧 ID；跨平台兜底时可能与原始 MusicItem 不同。
+  final String songId;
+
   const PlayUrlResult({
     required this.url,
     required this.requestedQuality,
     required this.actualQuality,
     required this.platform,
+    this.songId = '',
   });
 }
 

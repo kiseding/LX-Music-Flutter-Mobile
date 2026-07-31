@@ -22,11 +22,13 @@ class _QualityAttempt {
   final PlayUrlResult result;
   final int sourceIndex;
   final int candidateIndex;
+  final String songId;
 
   const _QualityAttempt({
     required this.result,
     required this.sourceIndex,
     required this.candidateIndex,
+    this.songId = '',
   });
 }
 
@@ -263,6 +265,7 @@ class MusicSourceService {
         requestedQuality: resolvedQuality,
         actualQuality: attempt.result.actualQuality,
         platform: attempt.result.platform,
+        songId: attempt.songId.isNotEmpty ? attempt.songId : songId,
       );
       final normalizedAttempt = _QualityAttempt(
         result: normalized,
@@ -281,6 +284,16 @@ class MusicSourceService {
           '[getPlayUrl] 使用偏低但可播结果 actual=${bestBelow.result.actualQuality}');
       return bestBelow.result;
     }
+    final fallback = await _resolveCrossPlatformFallback(
+      music,
+      resolvedQuality,
+      cancelToken,
+    );
+    if (fallback != null) {
+      debugPrint(
+          '[getPlayUrl] 跨平台兜底成功: platform=${fallback.platform}, songId=${fallback.songId}');
+      return fallback;
+    }
     debugPrint('[getPlayUrl] 所有源均失败');
     return null;
   }
@@ -297,6 +310,7 @@ class MusicSourceService {
               result: result,
               sourceIndex: 0,
               candidateIndex: candidateIndex,
+              songId: result.songId,
             );
     }
     final platform = resolvePlatform(music);
@@ -324,6 +338,7 @@ class MusicSourceService {
               result: normalized,
               sourceIndex: sourceIndex,
               candidateIndex: candidateIndex,
+              songId: normalized.songId,
             );
           }
           bestBelow = _betterProvisional(
@@ -332,6 +347,7 @@ class MusicSourceService {
               result: normalized,
               sourceIndex: sourceIndex,
               candidateIndex: candidateIndex,
+              songId: normalized.songId,
             ),
           );
           continue;
@@ -355,6 +371,7 @@ class MusicSourceService {
             result: result,
             sourceIndex: sourceIndex,
             candidateIndex: candidateIndex,
+            songId: result.songId,
           );
         }
         bestBelow = _betterProvisional(
@@ -363,6 +380,7 @@ class MusicSourceService {
             result: result,
             sourceIndex: sourceIndex,
             candidateIndex: candidateIndex,
+            songId: result.songId,
           ),
         );
       } catch (error) {
@@ -384,6 +402,7 @@ class MusicSourceService {
               result: result,
               sourceIndex: 0,
               candidateIndex: candidateIndex,
+              songId: result.songId,
             );
     }
     final platform = resolvePlatform(music);
@@ -401,6 +420,7 @@ class MusicSourceService {
           requestedQuality: quality,
           actualQuality: detailed!.actualQuality,
           platform: platform,
+          songId: songIdOf(music),
         ),
         sourceIndex: 0,
         candidateIndex: candidateIndex,
@@ -409,6 +429,75 @@ class MusicSourceService {
       if (error is DioException && CancelToken.isCancel(error)) rethrow;
       return null;
     }
+  }
+
+  String songIdOf(MusicItem music) {
+    if (music.songmid?.isNotEmpty == true) return music.songmid!;
+    if (music.hash?.isNotEmpty == true) return music.hash!;
+    return music.id;
+  }
+
+  /// 兜底：按 tx → kw → wy 顺序搜索歌名+歌手完全匹配的歌曲并尝试播放。
+  Future<PlayUrlResult?> _resolveCrossPlatformFallback(
+    MusicItem music,
+    String preferredQuality,
+    CancelToken? cancelToken,
+  ) async {
+    const fallbackOrder = ['tx', 'kw', 'wy'];
+    final originalPlatform = resolvePlatform(music);
+    final targetName = music.name.trim().toLowerCase();
+    final targetSinger = music.singer.trim().toLowerCase();
+    if (targetName.isEmpty || targetSinger.isEmpty) return null;
+
+    for (final platformId in fallbackOrder) {
+      if (platformId == originalPlatform) continue;
+      _throwIfCancelled(cancelToken);
+      try {
+        final results = await _builtInSources
+            .search(platformId, music.name, page: 1, limit: 20)
+            .timeout(const Duration(seconds: 12));
+        _throwIfCancelled(cancelToken);
+        MusicItem? matched;
+        for (final candidate in results) {
+          if (candidate.name.trim().toLowerCase() == targetName &&
+              candidate.singer.trim().toLowerCase() == targetSinger) {
+            matched = candidate;
+            break;
+          }
+        }
+        if (matched == null) continue;
+
+        final fallbackMusic = music.copyWith(
+          id: matched.id,
+          source: platformId,
+          platform: platformId,
+          songmid: matched.songmid,
+          hash: matched.hash,
+          meta: matched.meta,
+        );
+        for (final quality in qualityChain(preferredQuality)) {
+          _throwIfCancelled(cancelToken);
+          final detailed = await _builtInSources
+              .getMusicUrlExactDetailed(platformId, fallbackMusic,
+                  quality: quality)
+              .timeout(const Duration(seconds: 8));
+          _throwIfCancelled(cancelToken);
+          final url = detailed == null ? null : normalizeOutboundUrl(detailed.url);
+          if (!isPlayableMediaUrl(url)) continue;
+          return PlayUrlResult(
+            url: url!,
+            requestedQuality: preferredQuality,
+            actualQuality: detailed!.actualQuality,
+            platform: platformId,
+            songId: songIdOf(matched),
+          );
+        }
+      } catch (error) {
+        if (error is DioException && CancelToken.isCancel(error)) rethrow;
+        debugPrint('[getPlayUrl] 平台 $platformId 兜底失败: $error');
+      }
+    }
+    return null;
   }
 
   void _throwIfCancelled(CancelToken? cancelToken) {

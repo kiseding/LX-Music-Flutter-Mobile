@@ -13,8 +13,15 @@ class PlayerService {
 
   final ArtworkDiskCache _artworkCache;
 
+  /// 当前惰性分页歌单 ID；播放列表弹窗据此展示完整分页列表。
+  String? currentLazyPlaylistId;
+
+  /// 当前惰性分页歌单的总歌曲数。
+  int currentLazyPlaylistSongCount = 0;
+
   PlaybackState get playbackState => audioHandler.playbackState.value;
   bool get isPlaying => audioHandler.playbackState.value.playing;
+  MediaItem? get mediaItem => audioHandler.mediaItem.value;
 
   Future<void> setQueue(List<MusicItem> songs, {int startIndex = 0}) async {
     await playPlaylist(songs, index: startIndex);
@@ -22,6 +29,8 @@ class PlayerService {
 
   /// Instant start: no await on artwork download.
   Future<void> playPlaylist(List<MusicItem> songs, {int index = 0}) async {
+    currentLazyPlaylistId = null;
+    currentLazyPlaylistSongCount = 0;
     final items = songs.map(_convertToMediaItemSync).toList();
     if (audioHandler is LxAudioHandler) {
       final handler = audioHandler as LxAudioHandler;
@@ -37,7 +46,10 @@ class PlayerService {
     required int songCount,
     required int startIndex,
     required Future<List<MusicItem>> Function(int offset, int limit) loadPage,
+    String? playlistId,
   }) async {
+    currentLazyPlaylistId = playlistId;
+    currentLazyPlaylistSongCount = songCount;
     if (songCount <= 0 || audioHandler is! LxAudioHandler) return;
     final handler = audioHandler as LxAudioHandler;
     final shuffle =

@@ -19,7 +19,7 @@ class PageNavigationBar extends StatelessWidget {
     return SafeArea(
       top: false,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
+        padding: const EdgeInsets.fromLTRB(6, 2, 6, 2),
         child: Row(
           children: [
             IconButton(
@@ -27,9 +27,9 @@ class PageNavigationBar extends StatelessWidget {
               onPressed: pageIndex == 0
                   ? null
                   : () => onPageChanged(pageIndex - 1),
-              icon: const Icon(Icons.chevron_left, size: 20),
+              icon: const Icon(Icons.chevron_left, size: 18),
               padding: EdgeInsets.zero,
-              constraints: const BoxConstraints.tightFor(width: 32, height: 28),
+              constraints: const BoxConstraints.tightFor(width: 30, height: 20),
               visualDensity: VisualDensity.compact,
             ),
             Expanded(
@@ -41,12 +41,12 @@ class PageNavigationBar extends StatelessWidget {
                       horizontal: 10,
                       vertical: 2,
                     ),
-                    minimumSize: const Size(0, 24),
+                    minimumSize: const Size(0, 20),
                     tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   ),
                   child: Text(
                     '第 ${pageIndex + 1} / $pageCount 页',
-                    style: const TextStyle(fontSize: 14),
+                    style: const TextStyle(fontSize: 13),
                   ),
                 ),
               ),
@@ -56,9 +56,9 @@ class PageNavigationBar extends StatelessWidget {
               onPressed: pageIndex + 1 >= pageCount
                   ? null
                   : () => onPageChanged(pageIndex + 1),
-              icon: const Icon(Icons.chevron_right, size: 20),
+              icon: const Icon(Icons.chevron_right, size: 18),
               padding: EdgeInsets.zero,
-              constraints: const BoxConstraints.tightFor(width: 32, height: 28),
+              constraints: const BoxConstraints.tightFor(width: 30, height: 20),
               visualDensity: VisualDensity.compact,
             ),
           ],
