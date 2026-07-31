@@ -14,6 +14,7 @@ private struct LXNowPlayingEntry: TimelineEntry {
   let title: String
   let artist: String
   let album: String
+  let lyric: String
   let artworkPath: String?
   let isPlaying: Bool
   let positionMs: Double
@@ -31,11 +32,13 @@ private func loadNowPlayingEntry(date: Date = Date()) -> LXNowPlayingEntry {
   let positionMs = defaults?.double(forKey: "positionMs") ?? 0
   let durationMs = defaults?.double(forKey: "durationMs") ?? 0
   let positionSyncedAtMs = defaults?.double(forKey: "positionSyncedAtMs") ?? 0
+  let lyric = defaults?.string(forKey: "lyric") ?? ""
   return LXNowPlayingEntry(
     date: date,
     title: title,
     artist: artist,
     album: album,
+    lyric: lyric,
     artworkPath: artworkPath,
     isPlaying: isPlaying,
     positionMs: positionMs,
@@ -139,6 +142,8 @@ private extension View {
 private struct LXNowPlayingWidgetView: View {
   let entry: LXNowPlayingEntry
 
+  @Environment(\.widgetFamily) private var family
+
   private var displayPositionMs: Double {
     min(
       lxPlaybackPositionMs(
@@ -151,38 +156,77 @@ private struct LXNowPlayingWidgetView: View {
     )
   }
 
+  @ViewBuilder
+  private var progressBar: some View {
+    if entry.durationMs > 0 {
+      ProgressView(value: displayPositionMs, total: entry.durationMs)
+        .tint(entry.isPlaying ? Color.accentColor : Color.white.opacity(0.35))
+        .scaleEffect(x: 1, y: 0.6, anchor: .center)
+    }
+  }
+
   var body: some View {
     ZStack {
       Color(red: 0.07, green: 0.08, blue: 0.11)
-      VStack(alignment: .leading, spacing: 8) {
-        HStack(spacing: 10) {
+      if family == .systemMedium {
+        HStack(spacing: 14) {
           LXArtworkView(path: entry.artworkPath)
-            .frame(width: 56, height: 56)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-          VStack(alignment: .leading, spacing: 2) {
+            .frame(width: 96, height: 96)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+          VStack(alignment: .leading, spacing: 3) {
             Text(entry.title)
               .font(.headline)
               .foregroundStyle(.white)
               .lineLimit(2)
             Text(entry.artist)
-              .font(.caption)
+              .font(.subheadline)
               .foregroundStyle(.white.opacity(0.72))
               .lineLimit(1)
             if !entry.album.isEmpty {
               Text(entry.album)
-                .font(.caption2)
+                .font(.caption)
                 .foregroundStyle(.white.opacity(0.45))
                 .lineLimit(1)
             }
+            if !entry.lyric.isEmpty {
+              Text(entry.lyric)
+                .font(.caption2)
+                .foregroundStyle(.white.opacity(0.6))
+                .lineLimit(2)
+            }
+            Spacer(minLength: 0)
+            progressBar
           }
         }
-        if entry.durationMs > 0 {
-          ProgressView(value: displayPositionMs, total: entry.durationMs)
-            .tint(entry.isPlaying ? Color.accentColor : Color.white.opacity(0.35))
-            .scaleEffect(x: 1, y: 0.6, anchor: .center)
+        .padding(16)
+      } else {
+        VStack(alignment: .leading, spacing: 8) {
+          HStack(spacing: 11) {
+            LXArtworkView(path: entry.artworkPath)
+              .frame(width: 52, height: 52)
+              .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+            VStack(alignment: .leading, spacing: 2) {
+              Text(entry.title)
+                .font(.headline)
+                .foregroundStyle(.white)
+                .lineLimit(2)
+              Text(entry.artist)
+                .font(.caption)
+                .foregroundStyle(.white.opacity(0.72))
+                .lineLimit(1)
+            }
+          }
+          if entry.durationMs > 0 && !entry.album.isEmpty {
+            Text(entry.album)
+              .font(.caption2)
+              .foregroundStyle(.white.opacity(0.45))
+              .lineLimit(1)
+          }
+          Spacer(minLength: 0)
+          progressBar
         }
+        .padding(14)
       }
-      .padding(14)
     }
     .widgetURL(URL(string: "lxmusic://nowplaying"))
   }
@@ -268,6 +312,7 @@ private struct LXLiveActivityContentView: View {
 
   private var title: String { value("title") ?? "LX Music" }
   private var artist: String { value("artist") ?? "" }
+  private var album: String { value("album") ?? "" }
   private var artworkPath: String? { value("artworkPath") }
   private var isPlaying: Bool { defaults?.bool(forKey: context.attributes.prefixedKey("playing")) ?? false }
   private var positionMs: Double { defaults?.double(forKey: context.attributes.prefixedKey("positionMs")) ?? 0 }
@@ -309,6 +354,12 @@ private struct LXLiveActivityContentView: View {
             .font(.subheadline)
             .foregroundStyle(.white.opacity(0.72))
             .lineLimit(1)
+          if !album.isEmpty {
+            Text(album)
+              .font(.caption2)
+              .foregroundStyle(.white.opacity(0.45))
+              .lineLimit(1)
+          }
           if !lyric.isEmpty {
             Text(lyric)
               .font(.caption2)
@@ -326,7 +377,7 @@ private struct LXLiveActivityContentView: View {
           }
         }
         Spacer(minLength: 0)
-        Image(systemName: isPlaying ? "play.fill" : "pause.fill")
+        Image(systemName: isPlaying ? "pause.fill" : "play.fill")
           .font(.title3)
           .foregroundStyle(.white)
       }
@@ -345,6 +396,7 @@ private func lxDynamicIsland(context: ActivityViewContext<LiveActivitiesAppAttri
 
   let title = value("title") ?? "LX Music"
   let artist = value("artist") ?? ""
+  let album = value("album") ?? ""
   let artworkPath = value("artworkPath")
   let isPlaying = defaults?.bool(forKey: context.attributes.prefixedKey("playing")) ?? false
   let positionMs = defaults?.double(forKey: context.attributes.prefixedKey("positionMs")) ?? 0
@@ -363,6 +415,10 @@ private func lxDynamicIsland(context: ActivityViewContext<LiveActivitiesAppAttri
     syncedAtMs: positionSyncedAtMs,
     isPlaying: isPlaying
   )
+  let remainingLabel = lxRemainingLabel(
+    currentPositionMs: currentPositionMs,
+    durationMs: durationMs
+  )
 
   return DynamicIsland {
     DynamicIslandExpandedRegion(.leading) {
@@ -379,11 +435,23 @@ private func lxDynamicIsland(context: ActivityViewContext<LiveActivitiesAppAttri
           .font(.caption)
           .foregroundStyle(.secondary)
           .lineLimit(1)
+        if !album.isEmpty {
+          Text(album)
+            .font(.caption2)
+            .foregroundStyle(.tertiary)
+            .lineLimit(1)
+        }
       }
     }
     DynamicIslandExpandedRegion(.trailing) {
-      Image(systemName: isPlaying ? "play.fill" : "pause.fill")
-        .font(.title3)
+      VStack(spacing: 2) {
+        Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
+          .font(.title3)
+        Text(remainingLabel)
+          .font(.caption2)
+          .monospacedDigit()
+          .foregroundStyle(.secondary)
+      }
     }
     DynamicIslandExpandedRegion(.bottom) {
       VStack(alignment: .leading, spacing: 4) {
@@ -408,13 +476,20 @@ private func lxDynamicIsland(context: ActivityViewContext<LiveActivitiesAppAttri
       .frame(width: 24, height: 24)
       .clipShape(Circle())
   } compactTrailing: {
-    Image(systemName: isPlaying ? "play.fill" : "pause.fill")
+    Image(systemName: isPlaying ? "pause.fill" : "play.fill")
       .font(.footnote)
   } minimal: {
     LXArtworkView(path: artworkPath)
       .frame(width: 24, height: 24)
       .clipShape(Circle())
   }
+}
+
+private func lxRemainingLabel(currentPositionMs: Double, durationMs: Double) -> String {
+  let remaining = max(0, (durationMs - currentPositionMs) / 1000)
+  let minutes = Int(remaining) / 60
+  let seconds = Int(remaining) % 60
+  return String(format: "%d:%02d", minutes, seconds)
 }
 
 @available(iOSApplicationExtension 16.1, *)

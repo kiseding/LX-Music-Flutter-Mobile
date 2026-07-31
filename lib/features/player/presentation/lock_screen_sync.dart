@@ -131,40 +131,41 @@ class LockScreenSyncService {
   Future<void> _syncTick() async {
     if (_disposed || _handler.mediaItem.value == null) return;
     try {
+      final item = _handler.mediaItem.value!;
       final lyric = _currentLyricLine?.call() ?? '';
       final positionMs = _positionMs().toDouble();
+      final durationMs =
+          _durationMs(_musicFromItem(item)).toDouble();
       final positionSyncedAtMs =
           DateTime.now().millisecondsSinceEpoch.toDouble();
       final lyricChanged = lyric != _lastLyric;
       if (lyricChanged) {
         _lastLyric = lyric;
-        await HomeWidget.saveWidgetData<String>('lyric', lyric);
-        await HomeWidget.saveWidgetData<double>(
-          'positionSyncedAtMs',
-          positionSyncedAtMs,
-        );
-        await HomeWidget.saveWidgetData<double>('positionMs', positionMs);
-        await HomeWidget.updateWidget(iOSName: _widgetKind);
-        if (Platform.isIOS) {
-          await _liveActivities.createOrUpdateActivity(
-            _activityId,
-            {
-              'positionMs': positionMs,
-              'positionSyncedAtMs': positionSyncedAtMs,
-              'lyric': lyric,
-            },
-            iOSEnableRemoteUpdates: false,
-          );
-        }
-      } else if (_positionTick % 10 == 0) {
-        await HomeWidget.saveWidgetData<double>('positionMs', positionMs);
-        await HomeWidget.saveWidgetData<double>(
-          'positionSyncedAtMs',
-          positionSyncedAtMs,
-        );
-        await HomeWidget.updateWidget(iOSName: _widgetKind);
+      } else if (_positionTick % 10 != 0) {
+        _positionTick++;
+        return;
       }
       _positionTick++;
+      await HomeWidget.saveWidgetData<String>('lyric', lyric);
+      await HomeWidget.saveWidgetData<double>(
+        'positionSyncedAtMs',
+        positionSyncedAtMs,
+      );
+      await HomeWidget.saveWidgetData<double>('positionMs', positionMs);
+      await HomeWidget.saveWidgetData<double>('durationMs', durationMs);
+      await HomeWidget.updateWidget(iOSName: _widgetKind);
+      if (Platform.isIOS) {
+        await _liveActivities.createOrUpdateActivity(
+          _activityId,
+          {
+            'positionMs': positionMs,
+            'positionSyncedAtMs': positionSyncedAtMs,
+            'durationMs': durationMs,
+            'lyric': lyric,
+          },
+          iOSEnableRemoteUpdates: false,
+        );
+      }
     } catch (e) {
       debugPrint('[LockScreenSync] position sync failed: $e');
     }
