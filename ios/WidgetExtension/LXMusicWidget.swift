@@ -131,15 +131,8 @@ private extension View {
     }
   }
 
-  @ViewBuilder
   func lxLiveActivityBackground() -> some View {
-    if #available(iOSApplicationExtension 17.0, *) {
-      containerBackground(for: .activity) {
-        Color(red: 0.07, green: 0.08, blue: 0.11)
-      }
-    } else {
-      activityBackgroundTint(Color.black.opacity(0.35))
-    }
+    activityBackgroundTint(Color.black.opacity(0.35))
   }
 }
 
