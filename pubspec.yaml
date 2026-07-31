@@ -44,7 +44,8 @@ dependencies:
   charset: ^2.0.1
 
   # iOS home widget and live activity
-  home_widget: ^0.9.3
+  home_widget: ^0.6.0
+  flutter_app_group_directory: ^1.1.0
   live_activities: ^2.5.1
 
 dev_dependencies:

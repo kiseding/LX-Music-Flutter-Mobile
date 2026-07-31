@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter_app_group_directory/flutter_app_group_directory.dart';
 import 'package:home_widget/home_widget.dart';
 import 'package:live_activities/live_activities.dart';
 
@@ -188,12 +189,15 @@ class LockScreenSyncService {
       final file = await ArtworkDiskCache.instance.ensureLocalFile(url);
       if (file == null || !await file.exists()) return;
       final bytes = await file.readAsBytes();
-      _artworkPath = await HomeWidget.saveFile(
-        'artwork',
-        bytes,
-        extension: 'img',
-        appGroupId: _appGroupId,
+      final directory = await FlutterAppGroupDirectory.getAppGroupDirectory(
+        _appGroupId,
       );
+      if (directory == null) return;
+      final artworkFile = File('${directory.path}/home_widget/artwork.img');
+      await artworkFile.parent.create(recursive: true);
+      await artworkFile.writeAsBytes(bytes, flush: true);
+      _artworkPath = artworkFile.path;
+      await HomeWidget.saveWidgetData<String>('artworkPath', _artworkPath);
     } catch (e) {
       debugPrint('[LockScreenSync] artwork save failed: $e');
     }
