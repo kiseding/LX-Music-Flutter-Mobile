@@ -1564,12 +1564,11 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     int currentOccurrence,
     bool enabled,
   ) async {
-    final List<MediaItem> following;
+    List<MediaItem> following = const [];
     try {
       following = await rebuild(current, enabled, _lazyQueueAhead);
     } catch (error) {
       debugPrint('[AudioHandler] lazy queue shuffle rebuild failed: $error');
-      following = const [];
     }
     if (_disposed ||
         !identical(rebuild, _lazyQueueShuffleRebuilder) ||

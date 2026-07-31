@@ -184,7 +184,8 @@ class PlaylistService {
 
     final repository = _repository;
     if (repository is PlaylistSongPageRepository) {
-      return repository.loadSongsPage(playlistId, offset: offset, limit: limit);
+      final paged = repository as PlaylistSongPageRepository;
+      return paged.loadSongsPage(playlistId, offset: offset, limit: limit);
     }
     throw StateError('Playlist $playlistId does not support paged song loading');
   }
@@ -200,7 +201,8 @@ class PlaylistService {
 
     final repository = _repository;
     if (repository is PlaylistSongPageRepository) {
-      return repository.loadAllSongs(playlist.id);
+      final paged = repository as PlaylistSongPageRepository;
+      return paged.loadAllSongs(playlist.id);
     }
     throw StateError('Playlist ${playlist.id} does not support song loading');
   }
