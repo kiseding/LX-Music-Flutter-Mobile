@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 class PageNavigationBar extends StatelessWidget {
   const PageNavigationBar({
@@ -20,7 +19,7 @@ class PageNavigationBar extends StatelessWidget {
     return SafeArea(
       top: false,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+        padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
         child: Row(
           children: [
             IconButton(
@@ -28,23 +27,39 @@ class PageNavigationBar extends StatelessWidget {
               onPressed: pageIndex == 0
                   ? null
                   : () => onPageChanged(pageIndex - 1),
-              icon: const Icon(Icons.chevron_left),
+              icon: const Icon(Icons.chevron_left, size: 20),
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints.tightFor(width: 32, height: 28),
+              visualDensity: VisualDensity.compact,
             ),
             Expanded(
               child: Center(
-                child: Text('第 ${pageIndex + 1} / $pageCount 页'),
+                child: TextButton(
+                  onPressed: () => _showPagePickerDialog(context),
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 2,
+                    ),
+                    minimumSize: const Size(0, 24),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  child: Text(
+                    '第 ${pageIndex + 1} / $pageCount 页',
+                    style: const TextStyle(fontSize: 14),
+                  ),
+                ),
               ),
-            ),
-            TextButton(
-              onPressed: () => _showJumpDialog(context),
-              child: const Text('跳转'),
             ),
             IconButton(
               tooltip: '下一页',
               onPressed: pageIndex + 1 >= pageCount
                   ? null
                   : () => onPageChanged(pageIndex + 1),
-              icon: const Icon(Icons.chevron_right),
+              icon: const Icon(Icons.chevron_right, size: 20),
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints.tightFor(width: 32, height: 28),
+              visualDensity: VisualDensity.compact,
             ),
           ],
         ),
@@ -52,36 +67,61 @@ class PageNavigationBar extends StatelessWidget {
     );
   }
 
-  Future<void> _showJumpDialog(BuildContext context) async {
-    final controller = TextEditingController(text: '${pageIndex + 1}');
-    final selectedPage = await showDialog<int>(
+  Future<void> _showPagePickerDialog(BuildContext context) async {
+    final selected = await showDialog<int>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('跳转到页码'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          keyboardType: TextInputType.number,
-          inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-          decoration: InputDecoration(hintText: '1 - $pageCount'),
-          onSubmitted: (value) => Navigator.pop(context, int.tryParse(value)),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('取消'),
+      builder: (context) {
+        final scheme = Theme.of(context).colorScheme;
+        return AlertDialog(
+          title: const Text('选择页码'),
+          content: ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 320, minWidth: 300),
+            child: GridView.builder(
+              shrinkWrap: true,
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 5,
+                mainAxisSpacing: 8,
+                crossAxisSpacing: 8,
+                childAspectRatio: 1.5,
+              ),
+              itemCount: pageCount,
+              itemBuilder: (context, index) {
+                final page = index + 1;
+                final isCurrent = index == pageIndex;
+                return Material(
+                  color: isCurrent
+                      ? scheme.primaryContainer
+                      : scheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(8),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(8),
+                    onTap: () => Navigator.pop(context, page),
+                    child: Center(
+                      child: Text(
+                        '$page',
+                        style: TextStyle(
+                          color: isCurrent
+                              ? scheme.onPrimaryContainer
+                              : scheme.onSurface,
+                          fontWeight: isCurrent ? FontWeight.w600 : null,
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
           ),
-          TextButton(
-            onPressed: () =>
-                Navigator.pop(context, int.tryParse(controller.text)),
-            child: const Text('跳转'),
-          ),
-        ],
-      ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('取消'),
+            ),
+          ],
+        );
+      },
     );
-    controller.dispose();
-
-    if (selectedPage == null) return;
-    onPageChanged((selectedPage - 1).clamp(0, pageCount - 1).toInt());
+    if (selected == null) return;
+    onPageChanged((selected - 1).clamp(0, pageCount - 1).toInt());
   }
 }
