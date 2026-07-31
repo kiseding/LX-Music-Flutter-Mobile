@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../theme/app_colors.dart';
 
 class PageNavigationBar extends StatelessWidget {
   const PageNavigationBar({
@@ -20,48 +21,63 @@ class PageNavigationBar extends StatelessWidget {
       top: false,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(6, 2, 6, 2),
-        child: Row(
-          children: [
-            IconButton(
-              tooltip: '上一页',
-              onPressed: pageIndex == 0
-                  ? null
-                  : () => onPageChanged(pageIndex - 1),
-              icon: const Icon(Icons.chevron_left, size: 18),
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints.tightFor(width: 30, height: 20),
-              visualDensity: VisualDensity.compact,
-            ),
-            Expanded(
-              child: Center(
-                child: TextButton(
-                  onPressed: () => _showPagePickerDialog(context),
-                  style: TextButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 2,
-                    ),
-                    minimumSize: const Size(0, 20),
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  ),
-                  child: Text(
-                    '第 ${pageIndex + 1} / $pageCount 页',
-                    style: const TextStyle(fontSize: 13),
-                  ),
-                ),
-              ),
-            ),
-            IconButton(
-              tooltip: '下一页',
-              onPressed: pageIndex + 1 >= pageCount
-                  ? null
-                  : () => onPageChanged(pageIndex + 1),
-              icon: const Icon(Icons.chevron_right, size: 18),
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints.tightFor(width: 30, height: 20),
-              visualDensity: VisualDensity.compact,
-            ),
-          ],
+        child: Center(
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _buildArrowButton(context, isPrevious: true),
+              _buildPageTextButton(context),
+              _buildArrowButton(context, isPrevious: false),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPageTextButton(BuildContext context) {
+    return TextButton(
+      onPressed: () => _showPagePickerDialog(context),
+      style: TextButton.styleFrom(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+        minimumSize: const Size(0, 20),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
+      child: Text(
+        '第 ${pageIndex + 1} / $pageCount 页',
+        style: const TextStyle(fontSize: 13),
+      ),
+    );
+  }
+
+  Widget _buildArrowButton(BuildContext context, {required bool isPrevious}) {
+    final enabled = isPrevious ? pageIndex > 0 : pageIndex + 1 < pageCount;
+    final background = AppColors.fill2(context);
+    final foreground = enabled
+        ? AppColors.secondaryText(context)
+        : AppColors.mutedText(context).withValues(alpha: 0.5);
+    return Center(
+      child: Container(
+        width: 24,
+        height: 24,
+        decoration: BoxDecoration(
+          color: background,
+          shape: BoxShape.circle,
+          border: Border.all(color: AppColors.cardBorder(context)),
+        ),
+        child: IconButton(
+          tooltip: isPrevious ? '上一页' : '下一页',
+          onPressed: enabled
+              ? () => onPageChanged(pageIndex + (isPrevious ? -1 : 1))
+              : null,
+          icon: Icon(
+            isPrevious ? Icons.chevron_left : Icons.chevron_right,
+            size: 16,
+            color: foreground,
+          ),
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints.tightFor(width: 24, height: 24),
+          visualDensity: VisualDensity.compact,
         ),
       ),
     );

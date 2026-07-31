@@ -439,7 +439,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   }
 
   Widget _buildSourceQualityBar(MusicItem music) {
-    final media = ref.watch(currentMediaItemProvider).value;
+    final media = widget.playerService.mediaItem;
     final extras = media?.extras ?? music.toJson();
     final platform = (extras['platform'] ?? music.platform).toString();
     // 只展示实际播放音质，不用 requestedQuality 冒充
@@ -454,17 +454,22 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
               )
             : null);
     final qualityText = actual != null ? qualityLabel(actual) : '解析中…';
-    // 纯透明底，整体下移 10px
+    // 纯透明底，整体下移 10px；点击收起全屏播放器
     return Padding(
-      padding: EdgeInsets.only(top: 14, bottom: 4),
-      child: Text(
-        '${platformLabel(platform)} · $qualityText',
-        textAlign: TextAlign.center,
-        style: TextStyle(
-          color: AppColors.mutedText(context),
-          fontSize: 12,
-          letterSpacing: 0.5,
-          height: 1.5,
+      padding: const EdgeInsets.only(top: 14, bottom: 4),
+      child: Pressable(
+        semanticLabel: '收起播放器',
+        scale: 0.94,
+        onTap: () => Navigator.pop(context),
+        child: Text(
+          '${platformLabel(platform)} · $qualityText',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: AppColors.mutedText(context),
+            fontSize: 12,
+            letterSpacing: 0.5,
+            height: 1.5,
+          ),
         ),
       ),
     );
@@ -541,58 +546,63 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         final side = (constraints.maxWidth - 64).clamp(240.0, 420.0);
         final box = side.clamp(0.0, constraints.maxHeight - 8);
         return Center(
-          child: Container(
-            width: box,
-            height: box,
-            margin: const EdgeInsets.symmetric(horizontal: 32),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(22),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withAlpha(40),
-                  blurRadius: 20,
-                  offset: const Offset(0, 10),
-                ),
-              ],
-            ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(22),
-              child: AnimatedSwitcher(
-                duration: const Duration(milliseconds: 420),
-                reverseDuration: const Duration(milliseconds: 280),
-                switchInCurve: Curves.easeOutCubic,
-                switchOutCurve: Curves.easeInCubic,
-                layoutBuilder: (currentChild, previousChildren) {
-                  return Stack(
-                    fit: StackFit.expand,
-                    alignment: Alignment.center,
-                    children: <Widget>[
-                      ...previousChildren,
-                      if (currentChild != null) currentChild,
-                    ],
-                  );
-                },
-                transitionBuilder: (child, animation) {
-                  final scale = Tween<double>(begin: 0.92, end: 1.0).animate(
-                    CurvedAnimation(
-                      parent: animation,
-                      curve: Curves.easeOutCubic,
-                    ),
-                  );
-                  return FadeTransition(
-                    opacity: animation,
-                    child: ScaleTransition(scale: scale, child: child),
-                  );
-                },
-                child: KeyedSubtree(
-                  key: ValueKey<String>(songId ?? artwork ?? 'empty'),
-                  child: artwork != null && artwork.isNotEmpty
-                      ? ArtworkImage(
-                          artwork,
-                          fit: BoxFit.cover,
-                          errorBuilder: (_, __, ___) => _defaultArtwork(),
-                        )
-                      : _defaultArtwork(),
+          child: Pressable(
+            semanticLabel: '打开歌词',
+            borderRadius: BorderRadius.circular(22),
+            onTap: _openLyricsPage,
+            child: Container(
+              width: box,
+              height: box,
+              margin: const EdgeInsets.symmetric(horizontal: 32),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(22),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withAlpha(40),
+                    blurRadius: 20,
+                    offset: const Offset(0, 10),
+                  ),
+                ],
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(22),
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 420),
+                  reverseDuration: const Duration(milliseconds: 280),
+                  switchInCurve: Curves.easeOutCubic,
+                  switchOutCurve: Curves.easeInCubic,
+                  layoutBuilder: (currentChild, previousChildren) {
+                    return Stack(
+                      fit: StackFit.expand,
+                      alignment: Alignment.center,
+                      children: <Widget>[
+                        ...previousChildren,
+                        if (currentChild != null) currentChild,
+                      ],
+                    );
+                  },
+                  transitionBuilder: (child, animation) {
+                    final scale = Tween<double>(begin: 0.92, end: 1.0).animate(
+                      CurvedAnimation(
+                        parent: animation,
+                        curve: Curves.easeOutCubic,
+                      ),
+                    );
+                    return FadeTransition(
+                      opacity: animation,
+                      child: ScaleTransition(scale: scale, child: child),
+                    );
+                  },
+                  child: KeyedSubtree(
+                    key: ValueKey<String>(songId ?? artwork ?? 'empty'),
+                    child: artwork != null && artwork.isNotEmpty
+                        ? ArtworkImage(
+                            artwork,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, __, ___) => _defaultArtwork(),
+                          )
+                        : _defaultArtwork(),
+                  ),
                 ),
               ),
             ),
@@ -674,26 +684,53 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     );
   }
 
-  /// 全屏歌词页底部简约栏：歌名-歌手 | 播放键（下移 10px，字号加大）
+  /// 点击封面切换到全屏歌词页。
+  void _openLyricsPage() {
+    _pageController.animateToPage(
+      1,
+      duration: const Duration(milliseconds: 360),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  /// 全屏歌词页底部简约栏：歌名/歌手两行 | 播放键（整体下移 10px）
   Widget _buildLyricMiniBar(
       MusicItem music, PlayerService playerService, bool isPlaying) {
     return SafeArea(
       top: false,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(24, 12, 20, 30), // bottom +10
+        padding: const EdgeInsets.fromLTRB(24, 12, 20, 20), // 整体下移 10px
         child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             Expanded(
-              child: Text(
-                '${music.name} - ${music.singer}',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: AppColors.onScaffold(context),
-                  fontSize: 17,
-                  fontWeight: FontWeight.w600,
-                  height: 1.3,
-                ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    music.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: AppColors.onScaffold(context),
+                      fontSize: 20,
+                      fontWeight: FontWeight.w600,
+                      height: 1.2,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    music.singer,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: AppColors.secondaryText(context),
+                      fontSize: 15,
+                      height: 1.2,
+                    ),
+                  ),
+                ],
               ),
             ),
             const SizedBox(width: 20),
