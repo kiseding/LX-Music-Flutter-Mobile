@@ -816,11 +816,10 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
             !_userWantsPlay) {
           return;
         }
-        await _loadQueueItem(
-          target,
+        await _skipToNextInternal(
           seamless: true,
-          preserveUserIntent: true,
           provenance: provenance,
+          targetIndex: target,
         );
       } catch (e) {
         debugPrint('[AudioHandler] auto-next failed: $e');
@@ -1264,6 +1263,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   Future<void> _skipToNextInternal({
     bool seamless = false,
     PlaybackStartProvenance? provenance,
+    int? targetIndex,
   }) async {
     if (_queue.isEmpty) return;
 
@@ -1272,13 +1272,15 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     final loop = shuffle ||
         playbackState.value.repeatMode == AudioServiceRepeatMode.all ||
         playbackState.value.repeatMode == AudioServiceRepeatMode.one;
-    final nextIndex = nextQueueIndex(
-      currentIndex: _currentIndex,
-      queueLength: _queue.length,
-      shuffle: shuffle,
-      loop: loop,
-    );
+    final nextIndex = targetIndex ??
+        nextQueueIndex(
+          currentIndex: _currentIndex,
+          queueLength: _queue.length,
+          shuffle: shuffle,
+          loop: loop,
+        );
     if (nextIndex < 0) return;
+    if (nextIndex >= _queue.length) return;
     final nextOccurrence = _occurrenceIdAt(nextIndex);
     final nextItem = _queue[nextIndex];
     _bumpGeneration();

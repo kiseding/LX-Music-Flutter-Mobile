@@ -165,6 +165,21 @@ void main() {
       );
     });
 
+    test('decoder accepts duplicate playlist names when ids differ', () {
+      final first = playlistJson('first')..['name'] = 'Same name';
+      final second = playlistJson('second')..['name'] = 'Same name';
+
+      final snapshot = codec.decode(jsonEncode({
+        'schemaVersion': 1,
+        'playlists': [first, second],
+      }));
+
+      expect(snapshot.playlists.map((playlist) => playlist.id),
+          ['first', 'second']);
+      expect(snapshot.playlists.map((playlist) => playlist.name),
+          ['Same name', 'Same name']);
+    });
+
     test('decoder rejects empty playlist names at playlists[0].name', () {
       final playlist = playlistJson('one')..['name'] = '';
 

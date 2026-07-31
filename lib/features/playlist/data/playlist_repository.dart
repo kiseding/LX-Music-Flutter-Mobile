@@ -99,12 +99,11 @@ final class PlaylistSnapshotCodec {
     }
 
     final ids = <String>{};
-    final names = <String>{};
     return jsonEncode({
       'schemaVersion': 1,
       'playlists': List.unmodifiable([
         for (var index = 0; index < snapshot.playlists.length; index++)
-          _encodePlaylist(snapshot.playlists[index], index, ids, names),
+          _encodePlaylist(snapshot.playlists[index], index, ids),
       ]),
     });
   }
@@ -124,11 +123,9 @@ final class PlaylistSnapshotCodec {
 
     final values = _list(root['playlists'], 'playlists');
     final ids = <String>{};
-    final names = <String>{};
     final playlists = <Playlist>[];
     for (var index = 0; index < values.length; index++) {
-      playlists
-          .add(_decodePlaylist(values[index], 'playlists[$index]', ids, names));
+      playlists.add(_decodePlaylist(values[index], 'playlists[$index]', ids));
     }
     return PlaylistSnapshot(schemaVersion: 1, playlists: playlists);
   }
@@ -137,11 +134,10 @@ final class PlaylistSnapshotCodec {
     Playlist playlist,
     int index,
     Set<String> ids,
-    Set<String> names,
   ) {
     final path = 'playlists[$index]';
     _uniqueNonEmpty(playlist.id, '$path.id', ids);
-    _uniqueNonEmpty(playlist.name, '$path.name', names);
+    _nonEmpty(playlist.name, '$path.name');
     _timestamp(playlist.createdAt, '$path.createdAt');
     _timestamp(playlist.updatedAt, '$path.updatedAt');
     return {
@@ -173,14 +169,13 @@ final class PlaylistSnapshotCodec {
     dynamic value,
     String path,
     Set<String> ids,
-    Set<String> names,
   ) {
     final json = _object(value, path);
     _onlyKeys(json, _playlistKeys, path);
     final id = _nonEmpty(_string(json['id'], '$path.id'), '$path.id');
     final name = _nonEmpty(_string(json['name'], '$path.name'), '$path.name');
     _unique(id, '$path.id', ids);
-    _unique(name, '$path.name', names);
+    _nonEmpty(name, '$path.name');
     final songs = _list(json['songs'], '$path.songs');
 
     return Playlist(

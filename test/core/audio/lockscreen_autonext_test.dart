@@ -87,6 +87,48 @@ void main() {
     expect(player.playing, isFalse);
   });
 
+  test('completion keeps a tagged native source alive while resolving next',
+      () async {
+    final resolverStarted = Completer<void>();
+    final releaseResolver = Completer<void>();
+    final next = MediaItem(id: 'B', title: 'B');
+    handler.urlResolver = (id, [extras]) async {
+      if (id == 'B') {
+        resolverStarted.complete();
+        await releaseResolver.future;
+      }
+      return 'file:///tmp/$id.mp3';
+    };
+    await handler.setPlaylist([item('A'), next]);
+
+    handler.debugEmitTrackCompleted();
+    await resolverStarted.future;
+
+    expect(handler.currentQueueIndex, 1);
+    expect(handler.mediaItem.value?.id, 'B');
+    expect(player.playing, isTrue);
+    expect(player.loadedSource, isA<SilenceAudioSource>());
+    expect((player.loadedSource as SilenceAudioSource).tag.id, 'B');
+
+    releaseResolver.complete();
+    await pumpEventQueue();
+
+    expect((player.loadedSource as ProgressiveAudioSource).tag.id, 'B');
+    expect(player.playing, isTrue);
+  });
+
+  test('repeat one completion reloads the current item', () async {
+    await handler.setPlaylist([item('A'), item('B')]);
+    await handler.setRepeatMode(AudioServiceRepeatMode.one);
+
+    handler.debugEmitTrackCompleted();
+    await pumpEventQueue();
+
+    expect(handler.currentQueueIndex, 0);
+    expect(handler.mediaItem.value?.id, 'A');
+    expect((player.loadedSource as ProgressiveAudioSource).tag.id, 'A');
+  });
+
   test('pending quality source request makes old completion inert', () async {
     await handler.setPlaylist([item('A'), item('B')]);
     handler.urlResolver = (id, [extras]) async =>
