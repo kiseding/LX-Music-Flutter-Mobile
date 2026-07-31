@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/app_colors.dart';
+import '../../../core/widgets/app_notification.dart';
 import '../../player/domain/music_item.dart';
 import 'playlist_provider.dart';
 
@@ -46,13 +47,16 @@ class _PlaylistPickerContentState
       await ref.read(addSongToPlaylistProvider)(playlistId, widget.song);
       if (!mounted) return;
       Navigator.pop(context);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('已添加到歌单'), duration: Duration(seconds: 1)),
+      showAppNotification(
+        '已添加到歌单',
+        type: AppNotificationType.success,
+        duration: const Duration(seconds: 1),
       );
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('添加失败: $error')),
+      showAppNotification(
+        '添加失败: $error',
+        type: AppNotificationType.error,
       );
     }
   }
@@ -67,14 +71,16 @@ class _PlaylistPickerContentState
       );
       if (!mounted) return;
       Navigator.pop(context);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text('已创建歌单并添加'), duration: Duration(seconds: 1)),
+      showAppNotification(
+        '已创建歌单并添加',
+        type: AppNotificationType.success,
+        duration: const Duration(seconds: 1),
       );
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('创建失败: $error')),
+      showAppNotification(
+        '创建失败: $error',
+        type: AppNotificationType.error,
       );
     }
   }

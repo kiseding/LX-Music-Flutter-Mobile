@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:file_picker/file_picker.dart';
 import '../../../core/io/bounded_input.dart';
 import '../../../core/theme/app_colors.dart';
+import '../../../core/widgets/app_notification.dart';
 import '../../../core/storage/storage_service.dart';
 import 'settings_provider.dart';
 import '../../equalizer/presentation/equalizer_provider.dart';
@@ -507,20 +508,18 @@ class SettingsScreen extends ConsumerWidget {
       await file.writeAsString(jsonStr);
 
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('备份已保存到 ${file.path}'),
-            duration: const Duration(seconds: 3),
-          ),
+        showAppNotification(
+          '备份已保存到 ${file.path}',
+          type: AppNotificationType.success,
+          duration: const Duration(seconds: 3),
         );
       }
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('备份失败: $e'),
-            duration: const Duration(seconds: 3),
-          ),
+        showAppNotification(
+          '备份失败: $e',
+          type: AppNotificationType.error,
+          duration: const Duration(seconds: 3),
         );
       }
     }
@@ -561,20 +560,18 @@ class SettingsScreen extends ConsumerWidget {
       ).restore(data);
 
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('数据恢复成功'),
-            duration: Duration(seconds: 3),
-          ),
+        showAppNotification(
+          '数据恢复成功',
+          type: AppNotificationType.success,
+          duration: const Duration(seconds: 3),
         );
       }
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('恢复失败: $e'),
-            duration: const Duration(seconds: 3),
-          ),
+        showAppNotification(
+          '恢复失败: $e',
+          type: AppNotificationType.error,
+          duration: const Duration(seconds: 3),
         );
       }
     }
@@ -621,17 +618,18 @@ class SettingsScreen extends ConsumerWidget {
           cacheDir.createSync();
         }
         if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('缓存已清除'),
-              duration: Duration(seconds: 2),
-            ),
+          showAppNotification(
+            '缓存已清除',
+            type: AppNotificationType.success,
+            duration: const Duration(seconds: 2),
           );
         }
       } catch (e) {
         if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('清除失败: $e'), duration: Duration(seconds: 2)),
+          showAppNotification(
+            '清除失败: $e',
+            type: AppNotificationType.error,
+            duration: const Duration(seconds: 2),
           );
         }
       }

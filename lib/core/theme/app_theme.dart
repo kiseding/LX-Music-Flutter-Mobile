@@ -81,10 +81,6 @@ abstract final class AppTheme {
         backgroundColor: AppColors.surfaceDark,
         surfaceTintColor: Colors.transparent,
       ),
-      snackBarTheme: const SnackBarThemeData(
-        backgroundColor: AppColors.surfaceVariant,
-        contentTextStyle: TextStyle(color: AppColors.textPrimary),
-      ),
       tabBarTheme: const TabBarThemeData(
         labelColor: AppColors.amber,
         unselectedLabelColor: AppColors.textSecondary,
@@ -204,10 +200,6 @@ abstract final class AppTheme {
       bottomSheetTheme: const BottomSheetThemeData(
         backgroundColor: AppColors.lightSurface,
         surfaceTintColor: Colors.transparent,
-      ),
-      snackBarTheme: const SnackBarThemeData(
-        backgroundColor: Color(0xFF3A3A3C),
-        contentTextStyle: TextStyle(color: Colors.white),
       ),
       tabBarTheme: const TabBarThemeData(
         labelColor: AppColors.lightAccent,

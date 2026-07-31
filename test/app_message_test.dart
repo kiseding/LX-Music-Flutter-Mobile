@@ -2,10 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lx_music_flutter/app.dart';
+import 'package:lx_music_flutter/core/widgets/app_notification.dart';
 import 'package:lx_music_flutter/features/player/presentation/player_provider.dart';
 
 void main() {
-  testWidgets('root messenger consumes one playback message exactly once',
+  testWidgets('top notification consumes one playback message exactly once',
       (tester) async {
     final container = ProviderContainer();
     addTearDown(container.dispose);
@@ -14,9 +15,10 @@ void main() {
       UncontrolledProviderScope(
         container: container,
         child: MaterialApp(
-          scaffoldMessengerKey: rootScaffoldMessengerKey,
-          home: const PlayerMessageListener(
-            child: Scaffold(body: SizedBox.expand()),
+          home: AppNotificationHost(
+            child: const PlayerMessageListener(
+              child: Scaffold(body: SizedBox.expand()),
+            ),
           ),
         ),
       ),
@@ -29,10 +31,11 @@ void main() {
     expect(container.read(playerMessageProvider), isNull);
 
     await tester.pump(const Duration(seconds: 4));
+    await tester.pumpAndSettle();
     expect(find.text('播放失败'), findsNothing);
   });
 
-  testWidgets('message remains pending until a messenger exists',
+  testWidgets('message remains pending until a notification host exists',
       (tester) async {
     final container = ProviderContainer();
     addTearDown(container.dispose);

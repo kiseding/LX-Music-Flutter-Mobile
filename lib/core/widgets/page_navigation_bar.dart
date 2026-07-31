@@ -17,19 +17,19 @@ class PageNavigationBar extends StatelessWidget {
   Widget build(BuildContext context) {
     if (pageCount <= 1) return const SizedBox.shrink();
 
-    return SafeArea(
-      top: false,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(6, 2, 6, 2),
-        child: Center(
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              _buildArrowButton(context, isPrevious: true),
-              _buildPageTextButton(context),
-              _buildArrowButton(context, isPrevious: false),
-            ],
-          ),
+    final bottomInset = MediaQuery.paddingOf(context).bottom;
+    return SizedBox(
+      height: 32 + bottomInset,
+      child: Center(
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _buildArrowButton(context, isPrevious: true),
+            const SizedBox(width: 14),
+            _buildPageTextButton(context),
+            const SizedBox(width: 14),
+            _buildArrowButton(context, isPrevious: false),
+          ],
         ),
       ),
     );
@@ -39,13 +39,17 @@ class PageNavigationBar extends StatelessWidget {
     return TextButton(
       onPressed: () => _showPagePickerDialog(context),
       style: TextButton.styleFrom(
-        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-        minimumSize: const Size(0, 20),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
+        minimumSize: const Size(0, 30),
         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
       ),
       child: Text(
         '第 ${pageIndex + 1} / $pageCount 页',
-        style: const TextStyle(fontSize: 13),
+        style: TextStyle(
+          fontSize: 15,
+          color: AppColors.secondaryText(context),
+          fontWeight: FontWeight.w600,
+        ),
       ),
     );
   }
@@ -56,29 +60,27 @@ class PageNavigationBar extends StatelessWidget {
     final foreground = enabled
         ? AppColors.secondaryText(context)
         : AppColors.mutedText(context).withValues(alpha: 0.5);
-    return Center(
-      child: Container(
-        width: 24,
-        height: 24,
-        decoration: BoxDecoration(
-          color: background,
-          shape: BoxShape.circle,
-          border: Border.all(color: AppColors.cardBorder(context)),
+    return Container(
+      width: 32,
+      height: 32,
+      decoration: BoxDecoration(
+        color: background,
+        shape: BoxShape.circle,
+        border: Border.all(color: AppColors.cardBorder(context)),
+      ),
+      child: IconButton(
+        tooltip: isPrevious ? '上一页' : '下一页',
+        onPressed: enabled
+            ? () => onPageChanged(pageIndex + (isPrevious ? -1 : 1))
+            : null,
+        icon: Icon(
+          isPrevious ? Icons.chevron_left : Icons.chevron_right,
+          size: 19,
+          color: foreground,
         ),
-        child: IconButton(
-          tooltip: isPrevious ? '上一页' : '下一页',
-          onPressed: enabled
-              ? () => onPageChanged(pageIndex + (isPrevious ? -1 : 1))
-              : null,
-          icon: Icon(
-            isPrevious ? Icons.chevron_left : Icons.chevron_right,
-            size: 16,
-            color: foreground,
-          ),
-          padding: EdgeInsets.zero,
-          constraints: const BoxConstraints.tightFor(width: 24, height: 24),
-          visualDensity: VisualDensity.compact,
-        ),
+        padding: EdgeInsets.zero,
+        constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+        visualDensity: VisualDensity.compact,
       ),
     );
   }

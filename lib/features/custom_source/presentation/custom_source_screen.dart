@@ -6,6 +6,7 @@ import 'package:file_picker/file_picker.dart';
 import 'dart:io';
 import '../../../core/io/bounded_input.dart';
 import '../../../core/theme/app_colors.dart';
+import '../../../core/widgets/app_notification.dart';
 import '../domain/custom_source.dart';
 import '../domain/custom_source_service.dart';
 import 'custom_source_provider.dart';
@@ -194,18 +195,19 @@ class CustomSourceScreen extends ConsumerWidget {
             .importLxMusicScript(content);
 
         if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(success ? '导入脚本成功' : '导入失败，脚本格式错误'),
-              backgroundColor: success ? Colors.green : Colors.red,
-            ),
+          showAppNotification(
+            success ? '导入脚本成功' : '导入失败，脚本格式错误',
+            type: success
+                ? AppNotificationType.success
+                : AppNotificationType.error,
           );
         }
       }
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('读取文件失败: $e'), backgroundColor: Colors.red),
+        showAppNotification(
+          '读取文件失败: $e',
+          type: AppNotificationType.error,
         );
       }
     }
@@ -387,8 +389,9 @@ class CustomSourceScreen extends ConsumerWidget {
                   : () async {
                       final url = controller.text.trim();
                       if (url.isEmpty || !url.startsWith('https://')) {
-                        ScaffoldMessenger.of(dialogContext).showSnackBar(
-                          const SnackBar(content: Text('请输入有效的 HTTPS 链接')),
+                        showAppNotification(
+                          '请输入有效的 HTTPS 链接',
+                          type: AppNotificationType.error,
                         );
                         return;
                       }
@@ -401,11 +404,11 @@ class CustomSourceScreen extends ConsumerWidget {
                       }
                       setState(() => isLoading = false);
                       Navigator.pop(dialogContext);
-                      ScaffoldMessenger.of(pageContext).showSnackBar(
-                        SnackBar(
-                          content: Text(success ? '导入成功' : '导入失败，请检查链接或脚本格式'),
-                          backgroundColor: success ? Colors.green : Colors.red,
-                        ),
+                      showAppNotification(
+                        success ? '导入成功' : '导入失败，请检查链接或脚本格式',
+                        type: success
+                            ? AppNotificationType.success
+                            : AppNotificationType.error,
                       );
                     },
               child: Text('导入',
@@ -501,11 +504,11 @@ class CustomSourceScreen extends ConsumerWidget {
                       }
                       setState(() => isLoading = false);
                       Navigator.pop(dialogContext);
-                      ScaffoldMessenger.of(pageContext).showSnackBar(
-                        SnackBar(
-                          content: Text(success ? '导入成功' : '导入失败，请检查脚本格式'),
-                          backgroundColor: success ? Colors.green : Colors.red,
-                        ),
+                      showAppNotification(
+                        success ? '导入成功' : '导入失败，请检查脚本格式',
+                        type: success
+                            ? AppNotificationType.success
+                            : AppNotificationType.error,
                       );
                     },
               child: Text('导入',

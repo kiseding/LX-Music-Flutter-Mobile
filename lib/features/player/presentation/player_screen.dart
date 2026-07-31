@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/pagination/page_range.dart';
 import '../../../core/theme/app_colors.dart';
+import '../../../core/widgets/app_notification.dart';
 import '../../../core/widgets/artwork_image.dart';
 import '../../../core/widgets/page_navigation_bar.dart';
 import '../../../core/widgets/pressable.dart';
@@ -654,9 +655,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                 color: AppColors.secondaryText(context), size: 24),
             onPressed: () {
               ref.read(downloadSongProvider)(music);
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                    content: Text('已添加到下载队列'), duration: Duration(seconds: 1)),
+              showAppNotification(
+                '已添加到下载队列',
+                type: AppNotificationType.success,
+                duration: const Duration(seconds: 1),
               );
             },
           ),
@@ -673,8 +675,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                 await ref.read(toggleFavoriteProvider)(music);
               } catch (error) {
                 if (!mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('收藏失败: $error')),
+                showAppNotification(
+                  '收藏失败: $error',
+                  type: AppNotificationType.error,
                 );
               }
             },
@@ -976,8 +979,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                     await ref.read(toggleFavoriteProvider)(music);
                   } catch (error) {
                     if (!mounted) return;
-                    ScaffoldMessenger.of(this.context).showSnackBar(
-                      SnackBar(content: Text('收藏失败: $error')),
+                    showAppNotification(
+                      '收藏失败: $error',
+                      type: AppNotificationType.error,
                     );
                   }
                 }),
@@ -998,9 +1002,11 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                 onTap: () {
                   Navigator.pop(context);
                   ref.read(downloadSongProvider)(music);
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                      content: Text('已添加到下载队列'),
-                      duration: Duration(seconds: 1)));
+                  showAppNotification(
+                    '已添加到下载队列',
+                    type: AppNotificationType.success,
+                    duration: const Duration(seconds: 1),
+                  );
                 }),
           ],
         ),

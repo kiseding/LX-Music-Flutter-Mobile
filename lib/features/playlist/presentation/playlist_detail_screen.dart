@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/pagination/page_range.dart';
 import '../../../core/theme/app_colors.dart';
+import '../../../core/widgets/app_notification.dart';
 import '../../../core/widgets/artwork_image.dart';
 import '../../../core/widgets/page_navigation_bar.dart';
 import '../domain/playlist.dart';
@@ -674,8 +675,9 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
 
   void _showMutationError(String action, Object error) {
     if (!mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text('$action: $error')));
+    showAppNotification(
+      '$action: $error',
+      type: AppNotificationType.error,
+    );
   }
 }

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/app_colors.dart';
+import '../../../core/widgets/app_notification.dart';
 import '../../../core/widgets/artwork_image.dart';
 import '../../player/presentation/player_provider.dart';
 import '../../playlist/presentation/playlist_provider.dart';
@@ -492,8 +493,9 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                   await ref.read(toggleFavoriteProvider)(item);
                 } catch (error) {
                   if (!mounted) return;
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('收藏失败: $error')),
+                  showAppNotification(
+                    '收藏失败: $error',
+                    type: AppNotificationType.error,
                   );
                 }
               },

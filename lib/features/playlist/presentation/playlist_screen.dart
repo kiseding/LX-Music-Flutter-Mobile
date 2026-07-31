@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/theme/app_colors.dart';
+import '../../../core/widgets/app_notification.dart';
 import '../../../core/widgets/artwork_image.dart';
 import '../domain/playlist.dart';
 import '../domain/playlist_import_service.dart';
@@ -304,9 +305,10 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
       );
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('加载歌曲失败: $error')));
+      showAppNotification(
+        '加载歌曲失败: $error',
+        type: AppNotificationType.error,
+      );
     }
   }
 
@@ -710,9 +712,10 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
                   if (context.mounted) Navigator.pop(context);
                 } catch (error) {
                   if (!context.mounted) return;
-                  ScaffoldMessenger.of(
-                    context,
-                  ).showSnackBar(SnackBar(content: Text('创建失败: $error')));
+                  showAppNotification(
+                    '创建失败: $error',
+                    type: AppNotificationType.error,
+                  );
                 }
               }
             },
@@ -799,9 +802,10 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
                   if (ctx.mounted) Navigator.pop(ctx);
                 } catch (error) {
                   if (!ctx.mounted) return;
-                  ScaffoldMessenger.of(
-                    ctx,
-                  ).showSnackBar(SnackBar(content: Text('保存失败: $error')));
+                  showAppNotification(
+                    '保存失败: $error',
+                    type: AppNotificationType.error,
+                  );
                 }
               }
             },
@@ -1155,14 +1159,9 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
                                         );
                                     if (ctx.mounted) Navigator.pop(ctx);
                                     if (context.mounted) {
-                                      ScaffoldMessenger.of(
-                                        context,
-                                      ).showSnackBar(
-                                        SnackBar(
-                                          content: Text(
-                                            '已导入「${imported.name}」${imported.songs.length} 首',
-                                          ),
-                                        ),
+                                      showAppNotification(
+                                        '已导入「${imported.name}」${imported.songs.length} 首',
+                                        type: AppNotificationType.success,
                                       );
                                     }
                                   } else {
@@ -1326,22 +1325,22 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
                                       .addAllSongsToFavorites(playlist.id);
                                 } catch (error) {
                                   if (!context.mounted) return;
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(content: Text('添加失败: $error')),
+                                  showAppNotification(
+                                    '添加失败: $error',
+                                    type: AppNotificationType.error,
                                   );
                                   return;
                                 }
                                 if (!dialogCtx.mounted) return;
                                 Navigator.pop(dialogCtx);
                                 if (!context.mounted) return;
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text(
-                                      added == 0
-                                          ? '所有歌曲已在我喜欢的音乐中'
-                                          : '已添加 $added 首到我喜欢的音乐',
-                                    ),
-                                  ),
+                                showAppNotification(
+                                  added == 0
+                                      ? '所有歌曲已在我喜欢的音乐中'
+                                      : '已添加 $added 首到我喜欢的音乐',
+                                  type: added == 0
+                                      ? AppNotificationType.info
+                                      : AppNotificationType.success,
                                 );
                               },
                             ),
@@ -1358,8 +1357,9 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
                                       .deletePlaylist(playlist.id);
                                 } catch (error) {
                                   if (!context.mounted) return;
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(content: Text('删除失败: $error')),
+                                  showAppNotification(
+                                    '删除失败: $error',
+                                    type: AppNotificationType.error,
                                   );
                                   return;
                                 }
