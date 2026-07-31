@@ -6,13 +6,20 @@ import 'package:just_audio/just_audio.dart';
 
 import '../../../core/audio/audio_handler.dart';
 import '../../../core/audio/playback_command_coordinator.dart';
+import '../../../core/storage/storage_service.dart';
 import '../../playlist/presentation/playlist_provider.dart';
 import '../domain/music_item.dart';
+import '../domain/playback_session.dart';
+import '../domain/playback_session_store.dart';
 import '../domain/player_service.dart';
 import 'fire_and_forget_observer.dart';
 
 final playerServiceProvider = Provider<PlayerService>((ref) {
   return PlayerService();
+});
+
+final playbackSessionStoreProvider = Provider<PlaybackSessionStore>((ref) {
+  return PlaybackSessionStore(() => StorageService.instance);
 });
 
 // 监听当前的 MediaItem (来自 audio_service)
@@ -177,6 +184,102 @@ class PositionNotifier extends StateNotifier<Duration>
     _posSub?.cancel();
     _discSub?.cancel();
     super.dispose();
+  }
+}
+
+// 监听当前歌曲变化，保存可恢复的播放会话（歌单/队列 + 歌曲，不含进度）
+final playbackSessionRecorderProvider = Provider<void>((ref) {
+  final music = ref.watch(currentMusicProvider);
+  if (music == null) return;
+  final playerService = ref.read(playerServiceProvider);
+  final store = ref.read(playbackSessionStoreProvider);
+  final mediaItem = audioHandler.mediaItem.value;
+  final lazyIndex = mediaItem?.extras?['_lazyPlaylistIndex'];
+  final playlistId = playerService.currentLazyPlaylistId;
+  final currentIndex = lazyIndex is int
+      ? lazyIndex
+      : playerService.currentIndex >= 0
+          ? playerService.currentIndex
+          : 0;
+  final fullQueue = <MusicItem>[];
+  if (playlistId == null) {
+    for (final item in playerService.queue) {
+      final extras = item.extras;
+      if (extras == null) continue;
+      fullQueue.add(MusicItem.fromJson(extras));
+    }
+  }
+  final queue = <MusicItem>[];
+  var startIndex = currentIndex;
+  if (fullQueue.length > 300) {
+    final windowStart = (currentIndex - 150).clamp(0, fullQueue.length - 300).toInt();
+    queue.addAll(fullQueue.sublist(windowStart, windowStart + 300));
+    startIndex = currentIndex - windowStart;
+  } else {
+    queue.addAll(fullQueue);
+  }
+  final session = PlaybackSession(
+    playlistId: playlistId,
+    startIndex: startIndex,
+    song: music,
+    queue: List.unmodifiable(queue),
+  );
+  unawaited(store.save(session));
+});
+
+/// 启动时恢复上次播放会话：默认只加载队列并暂停，autoplay 由设置控制。
+Future<void> restorePlaybackSession(
+  ProviderContainer container, {
+  required bool autoplay,
+}) async {
+  final store = container.read(playbackSessionStoreProvider);
+  final session = await store.load();
+  if (session == null) return;
+  final playerService = container.read(playerServiceProvider);
+  final playlistService = container.read(playlistServiceProvider);
+  try {
+    final playlistId = session.playlistId;
+    if (playlistId != null) {
+      final songCount =
+          playlistService.getPlaylist(playlistId)?.songCount ?? 0;
+      if (songCount <= 0) {
+        await store.clear();
+        return;
+      }
+      final startIndex = session.startIndex.clamp(0, songCount - 1).toInt();
+      await playerService.playPagedPlaylist(
+        songCount: songCount,
+        startIndex: startIndex,
+        playlistId: playlistId,
+        autoplay: autoplay,
+        loadPage: (offset, limit) async {
+          final page = await playlistService.getSongsPage(
+            playlistId,
+            offset: offset,
+            limit: limit,
+          );
+          return page.songs;
+        },
+      );
+      return;
+    }
+    final queue = session.queue;
+    if (queue.isEmpty) {
+      await playerService.playPlaylist(
+        [session.song],
+        index: 0,
+        autoplay: autoplay,
+      );
+    } else {
+      final startIndex = session.startIndex.clamp(0, queue.length - 1).toInt();
+      await playerService.playPlaylist(
+        queue,
+        index: startIndex,
+        autoplay: autoplay,
+      );
+    }
+  } catch (_) {
+    await store.clear();
   }
 }
 

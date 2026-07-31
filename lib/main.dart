@@ -191,6 +191,12 @@ void main() async {
       };
     }
 
+    // 恢复上次播放会话：默认只加载队列并暂停，自动恢复由设置控制
+    await restorePlaybackSession(
+      container: container,
+      autoplay: preferences.getBool('auto_resume_playback') ?? false,
+    );
+
     runApp(
       OwnedProviderScope(
         lifecycle: lifecycle,

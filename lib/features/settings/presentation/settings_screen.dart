@@ -92,6 +92,18 @@ class SettingsScreen extends ConsumerWidget {
                 _getQualityName(audioQuality),
                 () => _showAudioQualityDialog(context, ref),
               ),
+              _buildSwitchTile(
+                context,
+                ref,
+                '自动恢复播放',
+                '打开 App 时自动继续播放上次的歌曲',
+                ref.watch(autoResumePlaybackProvider),
+                (value) {
+                  ref
+                      .read(autoResumePlaybackProvider.notifier)
+                      .setAutoResume(value);
+                },
+              ),
               _buildNavTile(
                 context,
                 ref,

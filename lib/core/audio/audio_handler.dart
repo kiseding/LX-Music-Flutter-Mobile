@@ -2238,21 +2238,34 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     );
   }
 
-  // 设置播放列表并开始播放
-  Future<void> setPlaylist(List<MediaItem> items, {int initialIndex = 0}) =>
+  // 设置播放列表；playWhenReady=false 时只加载队列，保持暂停
+  Future<void> setPlaylist(
+    List<MediaItem> items, {
+    int initialIndex = 0,
+    bool playWhenReady = true,
+  }) =>
       _runPublicOperation<void>(
-        () => _setPlaylist(items, initialIndex: initialIndex),
+        () => _setPlaylist(
+          items,
+          initialIndex: initialIndex,
+          playWhenReady: playWhenReady,
+        ),
         disposedValue: null,
       );
 
   Future<void> _setPlaylist(
     List<MediaItem> items, {
     int initialIndex = 0,
+    bool playWhenReady = true,
   }) async {
     if (_disposed) return;
     final provenance = _captureStartProvenance();
-    _recordExplicitPlayIntent();
-    unawaited(_commands.recordExplicitPlayIntent());
+    _recordExplicitPlaybackIntent(playWhenReady);
+    unawaited(
+      playWhenReady
+          ? _commands.recordExplicitPlayIntent()
+          : _commands.setDesiredPlayingPreservingIntent(false),
+    );
     _bumpGeneration();
     _queue
       ..clear()

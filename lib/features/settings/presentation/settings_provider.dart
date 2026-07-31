@@ -37,6 +37,11 @@ final wifiOnlyDownloadProvider =
   return WifiOnlyDownloadNotifier();
 });
 
+final autoResumePlaybackProvider =
+    StateNotifierProvider<AutoResumePlaybackNotifier, bool>((ref) {
+  return AutoResumePlaybackNotifier();
+});
+
 final syncServerUrlProvider =
     StateNotifierProvider<SyncServerUrlNotifier, String?>((ref) {
   return SyncServerUrlNotifier();
@@ -208,6 +213,24 @@ class WifiOnlyDownloadNotifier extends _PersistedSettingNotifier<bool> {
     await _persist(
       value,
       (storage) => storage.setBool('wifi_only_download', value),
+    );
+  }
+
+  void applyCommitted(bool value) {
+    applyCommittedValue(value);
+  }
+}
+
+class AutoResumePlaybackNotifier extends _PersistedSettingNotifier<bool> {
+  AutoResumePlaybackNotifier({StorageLoader? storage})
+      : super(false, storage: storage) {
+    _load((storage) => storage.getBool('auto_resume_playback'));
+  }
+
+  Future<void> setAutoResume(bool value) async {
+    await _persist(
+      value,
+      (storage) => storage.setBool('auto_resume_playback', value),
     );
   }
 

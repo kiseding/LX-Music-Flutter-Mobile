@@ -28,14 +28,18 @@ class PlayerService {
   }
 
   /// Instant start: no await on artwork download.
-  Future<void> playPlaylist(List<MusicItem> songs, {int index = 0}) async {
+  Future<void> playPlaylist(
+    List<MusicItem> songs, {
+    int index = 0,
+    bool autoplay = true,
+  }) async {
     currentLazyPlaylistId = null;
     currentLazyPlaylistSongCount = 0;
     final items = songs.map(_convertToMediaItemSync).toList();
     if (audioHandler is LxAudioHandler) {
       final handler = audioHandler as LxAudioHandler;
       handler.clearLazyQueue();
-      await handler.setPlaylist(items, initialIndex: index);
+      await handler.setPlaylist(items, initialIndex: index, playWhenReady: autoplay);
       unawaited(_warmArtForQueue(songs, preferIndex: index));
     }
   }
@@ -47,6 +51,7 @@ class PlayerService {
     required int startIndex,
     required Future<List<MusicItem>> Function(int offset, int limit) loadPage,
     String? playlistId,
+    bool autoplay = true,
   }) async {
     currentLazyPlaylistId = playlistId;
     currentLazyPlaylistSongCount = songCount;
@@ -97,7 +102,10 @@ class PlayerService {
         );
       },
     );
-    await handler.setPlaylist(mediaItems(initialEntries));
+    await handler.setPlaylist(
+      mediaItems(initialEntries),
+      playWhenReady: autoplay,
+    );
     unawaited(
       _warmArtForQueue(
         initialEntries.map((entry) => entry.song).toList(growable: false),

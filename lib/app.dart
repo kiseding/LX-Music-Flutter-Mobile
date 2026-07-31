@@ -60,6 +60,7 @@ class LxMusicApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final themeMode = ref.watch(themeModeProvider);
+    ref.watch(playbackSessionRecorderProvider);
     ref.watch(recentPlayRecorderProvider);
 
     return MaterialApp.router(
