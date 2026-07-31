@@ -1035,6 +1035,8 @@ class _PlaybackQueueSheet extends ConsumerStatefulWidget {
 }
 
 class _PlaybackQueueSheetState extends ConsumerState<_PlaybackQueueSheet> {
+  static const double _queueTileHeight = 56.0;
+
   late int _pageIndex;
   final ScrollController _queueScrollController = ScrollController();
   int? _focusedPageForScroll;
@@ -1072,8 +1074,8 @@ class _PlaybackQueueSheetState extends ConsumerState<_PlaybackQueueSheet> {
           if (!mounted) return;
           if (!_queueScrollController.hasClients) return;
           final position = _queueScrollController.position;
-          final target = (offsetInPage * 72.0 -
-                  (position.viewportDimension - 72.0) / 2)
+          final target = (offsetInPage * _queueTileHeight -
+                  (position.viewportDimension - _queueTileHeight) / 2)
               .clamp(0.0, position.maxScrollExtent);
           _queueScrollController.animateTo(
             target,
@@ -1084,7 +1086,8 @@ class _PlaybackQueueSheetState extends ConsumerState<_PlaybackQueueSheet> {
         return;
       }
       final position = _queueScrollController.position;
-      final target = (offsetInPage * 72.0 - (position.viewportDimension - 72.0) / 2)
+      final target = (offsetInPage * _queueTileHeight -
+          (position.viewportDimension - _queueTileHeight) / 2)
           .clamp(0.0, position.maxScrollExtent);
       _queueScrollController.animateTo(
         target,
@@ -1187,7 +1190,7 @@ class _PlaybackQueueSheetState extends ConsumerState<_PlaybackQueueSheet> {
                 }
                 final queueItems = page.songs;
                 _scrollToCurrentIfNeeded(range.pageIndex, currentIndex, range.start);
-                final contentHeight = (queueItems.length * 72.0)
+                final contentHeight = (queueItems.length * _queueTileHeight)
                     .clamp(0.0, screenHeight * 2 / 3)
                     .toDouble();
                 return SizedBox(
@@ -1197,11 +1200,14 @@ class _PlaybackQueueSheetState extends ConsumerState<_PlaybackQueueSheet> {
                       Expanded(
                         child: ListView.builder(
                           itemCount: queueItems.length,
+                          itemExtent: _queueTileHeight,
                           itemBuilder: (context, index) {
                             final item = queueItems[index];
                             final globalIndex = range.start + index;
                             final isPlaying = globalIndex == currentIndex;
                             return ListTile(
+                              dense: true,
+                              minTileHeight: _queueTileHeight,
                               leading: isPlaying
                                   ? Icon(Icons.play_arrow, color: AppColors.accentOf(context))
                                   : Text(
@@ -1274,7 +1280,7 @@ class _PlaybackQueueSheetState extends ConsumerState<_PlaybackQueueSheet> {
     final queue = pageSlice(widget.queue, range);
     _scrollToCurrentIfNeeded(range.pageIndex, currentIndex, range.start);
     final hasMultiplePages = range.pageCount > 1;
-    final contentHeight = (queue.length * 72.0 + (hasMultiplePages ? 24.0 : 0.0))
+    final contentHeight = (queue.length * _queueTileHeight + (hasMultiplePages ? 24.0 : 0.0))
         .clamp(0.0, screenHeight * 2 / 3)
         .toDouble();
 
@@ -1326,11 +1332,14 @@ class _PlaybackQueueSheetState extends ConsumerState<_PlaybackQueueSheet> {
                   Expanded(
                     child: ListView.builder(
                       itemCount: queue.length,
+                      itemExtent: _queueTileHeight,
                       itemBuilder: (context, index) {
                         final item = queue[index];
                         final queueIndex = range.start + index;
                         final isPlaying = queueIndex == currentIndex;
                         return ListTile(
+                          dense: true,
+                          minTileHeight: _queueTileHeight,
                           leading: isPlaying
                               ? Icon(Icons.play_arrow, color: AppColors.accentOf(context))
                               : Text(
