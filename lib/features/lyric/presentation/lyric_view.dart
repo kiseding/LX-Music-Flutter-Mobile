@@ -227,7 +227,7 @@ class _LyricViewState extends ConsumerState<LyricView> {
                     line: line,
                     lineIndex: index,
                     lyrics: lyrics,
-                    activeColor: lineColor,
+                    activeColor: accent,
                     dimColor: dimColor,
                     fontSize: fontSize,
                     fontWeight: weight,

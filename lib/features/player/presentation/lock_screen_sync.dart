@@ -17,14 +17,20 @@ const String _activityId = 'lx_music_now_playing';
 
 /// Syncs the current song to the iOS home widget and Live Activity.
 class LockScreenSyncService {
-  LockScreenSyncService(this._handler);
+  LockScreenSyncService(
+    this._handler, {
+    String Function()? currentLyricLine,
+  }) : _currentLyricLine = currentLyricLine;
 
   final LxAudioHandler _handler;
   final LiveActivities _liveActivities = LiveActivities();
   final List<StreamSubscription<dynamic>> _subscriptions = [];
+  final String Function()? _currentLyricLine;
   Timer? _positionTimer;
   String? _lastMusicKey;
   String? _artworkPath;
+  String? _lastLyric;
+  int _positionTick = 0;
   bool _disposed = false;
 
   Future<void> init() async {
@@ -36,9 +42,12 @@ class LockScreenSyncService {
       );
       _subscriptions.add(_handler.mediaItem.listen((_) => _syncNow()));
       _subscriptions.add(_handler.playbackState.listen((_) => _syncNow()));
+      _subscriptions.add(
+        _handler.player.positionDiscontinuityStream.listen((_) => _syncNow()),
+      );
       _positionTimer = Timer.periodic(
-        const Duration(seconds: 10),
-        (_) => _syncPosition(),
+        const Duration(seconds: 1),
+        (_) => _syncTick(),
       );
       await _syncNow();
     } catch (e) {
@@ -73,6 +82,10 @@ class LockScreenSyncService {
       await _saveArtwork(music);
       final positionMs = _positionMs();
       final durationMs = _durationMs(music);
+      final lyric = _currentLyricLine?.call() ?? '';
+      final positionSyncedAtMs =
+          DateTime.now().millisecondsSinceEpoch.toDouble();
+      _lastLyric = lyric;
       await HomeWidget.saveWidgetData<String>('title', music.name);
       await HomeWidget.saveWidgetData<String>('artist', music.singer);
       await HomeWidget.saveWidgetData<String>('album', music.album);
@@ -86,6 +99,11 @@ class LockScreenSyncService {
         'durationMs',
         durationMs.toDouble(),
       );
+      await HomeWidget.saveWidgetData<double>(
+        'positionSyncedAtMs',
+        positionSyncedAtMs,
+      );
+      await HomeWidget.saveWidgetData<String>('lyric', lyric);
       await HomeWidget.updateWidget(iOSName: _widgetKind);
 
       if (Platform.isIOS) {
@@ -98,7 +116,9 @@ class LockScreenSyncService {
             'artworkPath': _artworkPath ?? '',
             'playing': playing,
             'positionMs': positionMs.toDouble(),
+            'positionSyncedAtMs': positionSyncedAtMs,
             'durationMs': durationMs.toDouble(),
+            'lyric': lyric,
           },
           iOSEnableRemoteUpdates: false,
         );
@@ -108,14 +128,43 @@ class LockScreenSyncService {
     }
   }
 
-  Future<void> _syncPosition() async {
+  Future<void> _syncTick() async {
     if (_disposed || _handler.mediaItem.value == null) return;
     try {
-      await HomeWidget.saveWidgetData<double>(
-        'positionMs',
-        _positionMs().toDouble(),
-      );
-      await HomeWidget.updateWidget(iOSName: _widgetKind);
+      final lyric = _currentLyricLine?.call() ?? '';
+      final positionMs = _positionMs().toDouble();
+      final positionSyncedAtMs =
+          DateTime.now().millisecondsSinceEpoch.toDouble();
+      final lyricChanged = lyric != _lastLyric;
+      if (lyricChanged) {
+        _lastLyric = lyric;
+        await HomeWidget.saveWidgetData<String>('lyric', lyric);
+        await HomeWidget.saveWidgetData<double>(
+          'positionSyncedAtMs',
+          positionSyncedAtMs,
+        );
+        await HomeWidget.saveWidgetData<double>('positionMs', positionMs);
+        await HomeWidget.updateWidget(iOSName: _widgetKind);
+        if (Platform.isIOS) {
+          await _liveActivities.createOrUpdateActivity(
+            _activityId,
+            {
+              'positionMs': positionMs,
+              'positionSyncedAtMs': positionSyncedAtMs,
+              'lyric': lyric,
+            },
+            iOSEnableRemoteUpdates: false,
+          );
+        }
+      } else if (_positionTick % 10 == 0) {
+        await HomeWidget.saveWidgetData<double>('positionMs', positionMs);
+        await HomeWidget.saveWidgetData<double>(
+          'positionSyncedAtMs',
+          positionSyncedAtMs,
+        );
+        await HomeWidget.updateWidget(iOSName: _widgetKind);
+      }
+      _positionTick++;
     } catch (e) {
       debugPrint('[LockScreenSync] position sync failed: $e');
     }
@@ -124,11 +173,13 @@ class LockScreenSyncService {
   Future<void> _clearNowPlaying() async {
     _lastMusicKey = null;
     _artworkPath = null;
-    for (final key in ['title', 'artist', 'album', 'artworkPath']) {
+    _lastLyric = null;
+    for (final key in ['title', 'artist', 'album', 'artworkPath', 'lyric']) {
       await HomeWidget.saveWidgetData<String>(key, null);
     }
     await HomeWidget.saveWidgetData<bool>('playing', false);
     await HomeWidget.saveWidgetData<double>('positionMs', 0);
+    await HomeWidget.saveWidgetData<double>('positionSyncedAtMs', 0);
     await HomeWidget.saveWidgetData<double>('durationMs', 0);
     await HomeWidget.updateWidget(iOSName: _widgetKind);
     if (Platform.isIOS) {

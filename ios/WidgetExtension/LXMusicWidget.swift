@@ -17,6 +17,7 @@ private struct LXNowPlayingEntry: TimelineEntry {
   let artworkPath: String?
   let isPlaying: Bool
   let positionMs: Double
+  let positionSyncedAtMs: Double
   let durationMs: Double
 }
 
@@ -29,6 +30,7 @@ private func loadNowPlayingEntry(date: Date = Date()) -> LXNowPlayingEntry {
   let isPlaying = defaults?.bool(forKey: "playing") ?? false
   let positionMs = defaults?.double(forKey: "positionMs") ?? 0
   let durationMs = defaults?.double(forKey: "durationMs") ?? 0
+  let positionSyncedAtMs = defaults?.double(forKey: "positionSyncedAtMs") ?? 0
   return LXNowPlayingEntry(
     date: date,
     title: title,
@@ -37,8 +39,43 @@ private func loadNowPlayingEntry(date: Date = Date()) -> LXNowPlayingEntry {
     artworkPath: artworkPath,
     isPlaying: isPlaying,
     positionMs: positionMs,
+    positionSyncedAtMs: positionSyncedAtMs,
     durationMs: durationMs
   )
+}
+
+private func lxPlaybackPositionMs(
+  positionMs: Double,
+  durationMs: Double,
+  syncedAtMs: Double,
+  isPlaying: Bool,
+  now: Date = Date()
+) -> Double {
+  guard isPlaying, syncedAtMs > 0 else { return positionMs }
+  let elapsedMs = max(0, now.timeIntervalSince1970 * 1000 - syncedAtMs)
+  let duration = max(positionMs, durationMs)
+  return min(max(0, positionMs + elapsedMs), max(duration, 1))
+}
+
+private func lxProgressRange(
+  positionMs: Double,
+  durationMs: Double,
+  syncedAtMs: Double,
+  isPlaying: Bool,
+  now: Date = Date()
+) -> ClosedRange<Date>? {
+  guard durationMs > 0 else { return nil }
+  let currentPositionMs = lxPlaybackPositionMs(
+    positionMs: positionMs,
+    durationMs: durationMs,
+    syncedAtMs: syncedAtMs,
+    isPlaying: isPlaying,
+    now: now
+  )
+  let position = max(0, currentPositionMs / 1000)
+  let duration = max(position + 1, durationMs / 1000)
+  let start = now.addingTimeInterval(-position)
+  return start...(start.addingTimeInterval(duration))
 }
 
 private struct LXNowPlayingProvider: TimelineProvider {
@@ -82,8 +119,44 @@ private struct LXArtworkView: View {
   }
 }
 
+private extension View {
+  @ViewBuilder
+  func lxWidgetBackground() -> some View {
+    if #available(iOSApplicationExtension 17.0, *) {
+      containerBackground(for: .widget) {
+        Color(red: 0.07, green: 0.08, blue: 0.11)
+      }
+    } else {
+      self
+    }
+  }
+
+  @ViewBuilder
+  func lxLiveActivityBackground() -> some View {
+    if #available(iOSApplicationExtension 17.0, *) {
+      containerBackground(for: .activity) {
+        Color(red: 0.07, green: 0.08, blue: 0.11)
+      }
+    } else {
+      activityBackgroundTint(Color.black.opacity(0.35))
+    }
+  }
+}
+
 private struct LXNowPlayingWidgetView: View {
   let entry: LXNowPlayingEntry
+
+  private var displayPositionMs: Double {
+    min(
+      lxPlaybackPositionMs(
+        positionMs: entry.positionMs,
+        durationMs: entry.durationMs,
+        syncedAtMs: entry.positionSyncedAtMs,
+        isPlaying: entry.isPlaying
+      ),
+      entry.durationMs
+    )
+  }
 
   var body: some View {
     ZStack {
@@ -111,7 +184,7 @@ private struct LXNowPlayingWidgetView: View {
           }
         }
         if entry.durationMs > 0 {
-          ProgressView(value: min(entry.positionMs, entry.durationMs), total: entry.durationMs)
+          ProgressView(value: displayPositionMs, total: entry.durationMs)
             .tint(entry.isPlaying ? Color.accentColor : Color.white.opacity(0.35))
             .scaleEffect(x: 1, y: 0.6, anchor: .center)
         }
@@ -128,6 +201,7 @@ struct LXMusicHomeWidget: Widget {
   var body: some WidgetConfiguration {
     StaticConfiguration(kind: kind, provider: LXNowPlayingProvider()) { entry in
       LXNowPlayingWidgetView(entry: entry)
+        .lxWidgetBackground()
     }
     .configurationDisplayName("正在播放")
     .description("LX Music 当前播放的歌曲")
@@ -204,14 +278,26 @@ private struct LXLiveActivityContentView: View {
   private var artworkPath: String? { value("artworkPath") }
   private var isPlaying: Bool { defaults?.bool(forKey: context.attributes.prefixedKey("playing")) ?? false }
   private var positionMs: Double { defaults?.double(forKey: context.attributes.prefixedKey("positionMs")) ?? 0 }
+  private var positionSyncedAtMs: Double { defaults?.double(forKey: context.attributes.prefixedKey("positionSyncedAtMs")) ?? 0 }
   private var durationMs: Double { defaults?.double(forKey: context.attributes.prefixedKey("durationMs")) ?? 0 }
+  private var lyric: String { value("lyric") ?? "" }
 
-  private var progressRange: ClosedRange<Date> {
-    let now = Date()
-    let position = max(0, positionMs / 1000)
-    let duration = max(position + 60, durationMs / 1000)
-    let start = now.addingTimeInterval(-position)
-    return start...(start.addingTimeInterval(duration))
+  private var currentPositionMs: Double {
+    lxPlaybackPositionMs(
+      positionMs: positionMs,
+      durationMs: durationMs,
+      syncedAtMs: positionSyncedAtMs,
+      isPlaying: isPlaying
+    )
+  }
+
+  private var progressRange: ClosedRange<Date>? {
+    lxProgressRange(
+      positionMs: positionMs,
+      durationMs: durationMs,
+      syncedAtMs: positionSyncedAtMs,
+      isPlaying: isPlaying
+    )
   }
 
   var body: some View {
@@ -230,9 +316,20 @@ private struct LXLiveActivityContentView: View {
             .font(.subheadline)
             .foregroundStyle(.white.opacity(0.72))
             .lineLimit(1)
-          if durationMs > 0 {
-            ProgressView(timerInterval: progressRange, countsDown: false)
-              .tint(.white)
+          if !lyric.isEmpty {
+            Text(lyric)
+              .font(.caption2)
+              .foregroundStyle(.white.opacity(0.78))
+              .lineLimit(1)
+          }
+          if let range = progressRange {
+            if isPlaying {
+              ProgressView(timerInterval: range, countsDown: false)
+                .tint(.white)
+            } else {
+              ProgressView(value: min(currentPositionMs, durationMs), total: durationMs)
+                .tint(.white.opacity(0.6))
+            }
           }
         }
         Spacer(minLength: 0)
@@ -242,7 +339,6 @@ private struct LXLiveActivityContentView: View {
       }
       .padding(14)
     }
-    .activityBackgroundTint(Color.black.opacity(0.35))
   }
 }
 
@@ -259,13 +355,21 @@ private func lxDynamicIsland(context: ActivityViewContext<LiveActivitiesAppAttri
   let artworkPath = value("artworkPath")
   let isPlaying = defaults?.bool(forKey: context.attributes.prefixedKey("playing")) ?? false
   let positionMs = defaults?.double(forKey: context.attributes.prefixedKey("positionMs")) ?? 0
+  let positionSyncedAtMs = defaults?.double(forKey: context.attributes.prefixedKey("positionSyncedAtMs")) ?? 0
   let durationMs = defaults?.double(forKey: context.attributes.prefixedKey("durationMs")) ?? 0
-
-  let now = Date()
-  let position = max(0, positionMs / 1000)
-  let duration = max(position + 60, durationMs / 1000)
-  let start = now.addingTimeInterval(-position)
-  let progressRange = start...(start.addingTimeInterval(duration))
+  let lyric = value("lyric") ?? ""
+  let currentPositionMs = lxPlaybackPositionMs(
+    positionMs: positionMs,
+    durationMs: durationMs,
+    syncedAtMs: positionSyncedAtMs,
+    isPlaying: isPlaying
+  )
+  let progressRange = lxProgressRange(
+    positionMs: positionMs,
+    durationMs: durationMs,
+    syncedAtMs: positionSyncedAtMs,
+    isPlaying: isPlaying
+  )
 
   return DynamicIsland {
     DynamicIslandExpandedRegion(.leading) {
@@ -289,10 +393,22 @@ private func lxDynamicIsland(context: ActivityViewContext<LiveActivitiesAppAttri
         .font(.title3)
     }
     DynamicIslandExpandedRegion(.bottom) {
-      if durationMs > 0 {
-        ProgressView(timerInterval: progressRange, countsDown: false)
-          .padding(.horizontal, 8)
+      VStack(alignment: .leading, spacing: 4) {
+        if !lyric.isEmpty {
+          Text(lyric)
+            .font(.caption2)
+            .foregroundStyle(.white.opacity(0.78))
+            .lineLimit(1)
+        }
+        if let range = progressRange {
+          if isPlaying {
+            ProgressView(timerInterval: range, countsDown: false)
+          } else {
+            ProgressView(value: min(currentPositionMs, durationMs), total: durationMs)
+          }
+        }
       }
+      .padding(.horizontal, 8)
     }
   } compactLeading: {
     LXArtworkView(path: artworkPath)
@@ -313,6 +429,7 @@ struct LXMusicLiveActivity: Widget {
   var body: some WidgetConfiguration {
     ActivityConfiguration(for: LiveActivitiesAppAttributes.self) { context in
       LXLiveActivityContentView(context: context)
+        .lxLiveActivityBackground()
     } dynamicIsland: { context in
       lxDynamicIsland(context: context)
     }

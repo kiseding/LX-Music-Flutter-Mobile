@@ -14,6 +14,7 @@ import 'package:lx_music_flutter/features/player/domain/music_item.dart';
 import 'package:lx_music_flutter/features/settings/presentation/settings_provider.dart';
 import 'package:lx_music_flutter/features/player/presentation/player_provider.dart';
 import 'package:lx_music_flutter/features/player/presentation/lock_screen_sync.dart';
+import 'package:lx_music_flutter/features/lyric/presentation/lyric_provider.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -199,7 +200,13 @@ void main() async {
       autoplay: preferences.getBool('auto_resume_playback') ?? false,
     );
 
-    final lockScreenSync = LockScreenSyncService(lxHandler);
+    final lockScreenSync = LockScreenSyncService(
+      lxHandler,
+      currentLyricLine: () {
+        final lyrics = container.read(currentLyricLoadProvider).lyrics;
+        return lyrics.getCurrentLine(lxHandler.player.position)?.text ?? '';
+      },
+    );
     unawaited(lockScreenSync.init());
 
     runApp(
