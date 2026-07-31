@@ -543,9 +543,12 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
       await playerService.playPagedPlaylist(
         songCount: playlist.songCount,
         startIndex: index,
-        loadPage: (offset, limit) => ref
-            .read(playlistServiceProvider)
-            .getSongsPage(playlist.id, offset: offset, limit: limit),
+        loadPage: (offset, limit) async {
+          final page = await ref
+              .read(playlistServiceProvider)
+              .getSongsPage(playlist.id, offset: offset, limit: limit);
+          return page.songs;
+        },
       );
     } catch (error) {
       _showMutationError('加载歌曲失败', error);

@@ -294,9 +294,12 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
       await playerService.playPagedPlaylist(
         songCount: playlist.songCount,
         startIndex: startIndex,
-        loadPage: (offset, limit) => ref
-            .read(playlistServiceProvider)
-            .getSongsPage(playlist.id, offset: offset, limit: limit),
+        loadPage: (offset, limit) async {
+          final page = await ref
+              .read(playlistServiceProvider)
+              .getSongsPage(playlist.id, offset: offset, limit: limit);
+          return page.songs;
+        },
       );
     } catch (error) {
       if (!mounted) return;
