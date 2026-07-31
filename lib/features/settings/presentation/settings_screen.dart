@@ -10,7 +10,6 @@ import '../../../core/theme/app_colors.dart';
 import '../../../core/widgets/app_notification.dart';
 import '../../../core/storage/storage_service.dart';
 import 'settings_provider.dart';
-import '../../equalizer/presentation/equalizer_provider.dart';
 import '../../download/presentation/download_provider.dart';
 import '../../search/presentation/search_provider.dart';
 import '../../playlist/data/playlist_repository.dart';
@@ -111,13 +110,6 @@ class SettingsScreen extends ConsumerWidget {
                 '默认搜索平台',
                 _platformName(ref.watch(defaultSearchPlatformProvider)),
                 () => _showDefaultPlatformDialog(context, ref),
-              ),
-              _buildNavTile(
-                context,
-                ref,
-                '均衡器',
-                ref.watch(equalizerProvider).preset.label,
-                () => context.push('/equalizer'),
               ),
             ]),
             _buildSection(context, '下载', [

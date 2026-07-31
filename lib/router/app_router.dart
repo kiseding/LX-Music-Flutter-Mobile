@@ -10,7 +10,6 @@ import '../features/settings/presentation/settings_screen.dart';
 import '../features/download/presentation/download_screen.dart';
 import '../features/custom_source/presentation/custom_source_screen.dart';
 import '../features/leaderboard/presentation/leaderboard_screen.dart';
-import '../features/equalizer/presentation/equalizer_screen.dart';
 import '../features/sync/presentation/sync_screen.dart';
 
 final GlobalKey<NavigatorState> _rootNavigatorKey = GlobalKey<NavigatorState>();
@@ -125,11 +124,6 @@ final appRouter = GoRouter(
         final name = state.uri.queryParameters['name'] ?? '';
         return LeaderboardDetailScreenById(id: id, name: name);
       },
-    ),
-    GoRoute(
-      path: '/equalizer',
-      parentNavigatorKey: _rootNavigatorKey,
-      builder: (context, state) => const EqualizerScreen(),
     ),
     GoRoute(
       path: '/sync',
