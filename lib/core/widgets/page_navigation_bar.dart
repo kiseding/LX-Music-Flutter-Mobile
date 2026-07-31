@@ -15,9 +15,8 @@ class PageNavigationBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (pageCount <= 1) return const SizedBox.shrink();
-
     final bottomInset = MediaQuery.paddingOf(context).bottom;
+    if (pageCount <= 1) return SizedBox(height: bottomInset);
     return SizedBox(
       height: 32 + bottomInset,
       child: Center(

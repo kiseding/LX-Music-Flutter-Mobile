@@ -1138,6 +1138,7 @@ class _PlaybackQueueSheetState extends ConsumerState<_PlaybackQueueSheet> {
       );
 
       return SafeArea(
+        bottom: false,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -1278,6 +1279,7 @@ class _PlaybackQueueSheetState extends ConsumerState<_PlaybackQueueSheet> {
         .toDouble();
 
     return SafeArea(
+      bottom: false,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
