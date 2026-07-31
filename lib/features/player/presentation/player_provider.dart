@@ -228,8 +228,8 @@ final playbackSessionRecorderProvider = Provider<void>((ref) {
 });
 
 /// 启动时恢复上次播放会话：默认只加载队列并暂停，autoplay 由设置控制。
-Future<void> restorePlaybackSession(
-  ProviderContainer container, {
+Future<void> restorePlaybackSession({
+  required ProviderContainer container,
   required bool autoplay,
 }) async {
   final store = container.read(playbackSessionStoreProvider);
