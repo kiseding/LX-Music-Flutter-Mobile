@@ -80,4 +80,54 @@ void main() {
     expect(LyricParser.hasWordTiming(r'[00:01.00]<0,100>a'), isTrue);
     expect(LyricParser.hasWordTiming(r'<00:01.00>a'), isTrue);
   });
+
+  test('parseQrc Tencent word tags with XML wrapper', () {
+    const raw = r'''<?xml version="1.0"?><QrcInfos><LyricInfo LyricContent="[0,5890]A(0,368)B(368,368)C(736,368)D(1104,368)"/>''';
+    final lyrics = LyricParser.parseQrc(raw);
+    expect(lyrics.lines.length, 1);
+    final line = lyrics.lines.first;
+    expect(line.time, Duration.zero);
+    expect(line.text, 'ABCD');
+    expect(line.hasWordTiming, isTrue);
+    expect(line.words!.length, 4);
+    expect(line.words![1].time, const Duration(milliseconds: 368));
+    expect(line.words![1].duration, const Duration(milliseconds: 368));
+  });
+
+  test('parseQrc Tencent raw timed lines', () {
+    const raw = r'''[0,5890]A(0,368)B(368,368)
+[5890,10000]C(0,400)D(400,300)''';
+    final lyrics = LyricParser.parseQrc(raw);
+    expect(lyrics.lines.length, 2);
+    expect(lyrics.lines[0].text, 'AB');
+    expect(lyrics.lines[0].hasWordTiming, isTrue);
+    expect(lyrics.lines[1].time, const Duration(seconds: 5, milliseconds: 890));
+    expect(lyrics.lines[1].words![1].time, const Duration(milliseconds: 6290));
+  });
+
+  test('hasWordTiming detects Tencent word tags', () {
+    expect(LyricParser.hasWordTiming('[0,5890]A(0,368)B(368,368)'), isTrue);
+    expect(LyricParser.hasWordTiming('[00:12.00]plain'), isFalse);
+  });
+
+
+  test('parseQrc real Tencent XML with metadata and punctuation', () {
+    const raw = r'''<?xml version="1.0" encoding="utf-8"?>
+<QrcInfos>
+<QrcHeadInfo SaveTime="215" Version="100"/>
+<LyricInfo LyricCount="1">
+<Lyric_1 LyricType="1" LyricContent="[ti:Test Song]
+[ar:Artist]
+[offset:0]
+[0,5890]AB(0,368)C(368,368)D(736,368)
+[5890,5900]EF(5890,1180)G(7070,1180)
+"/>''';
+    final lyrics = LyricParser.parseQrc(raw);
+    expect(lyrics.lines.length, 2);
+    expect(lyrics.lines[0].text, 'ABCD');
+    expect(lyrics.lines[0].hasWordTiming, isTrue);
+    expect(lyrics.lines[0].words![1].time, const Duration(milliseconds: 368));
+    expect(lyrics.lines[1].words![1].time, const Duration(milliseconds: 7070));
+    expect(lyrics.lines[1].words![1].text, 'G');
+  });
 }

@@ -16,6 +16,8 @@ class LyricParser {
     if (RegExp(r'<-?\d+,-?\d+(?:,-?\d+)?>').hasMatch(raw)) return true;
     // QRC: <mm:ss.xx>字 或 <mm:ss.xxx,ddd>
     if (RegExp(r'<\d{2}:\d{2}\.\d{2,3}(?:,\d+)?>').hasMatch(raw)) return true;
+    // Tencent QRC / Migu MRC: [1234,5678]text(0,180)...
+    if (RegExp(r'\[\d+,\d+\][^\n]*\(\d+,\d+\)').hasMatch(raw)) return true;
     return false;
   }
 
@@ -247,9 +249,10 @@ class LyricParser {
   }
 
   static Lyrics parseQrc(String qrc) {
+    final content = _extractQrcContent(qrc);
     final lines = <LyricLine>[];
-    final List<String> lineList = qrc.split('\n');
-    final offset = _parseOffset(qrc);
+    final List<String> lineList = content.split('\n');
+    final offset = _parseOffset(content);
 
     for (final line in lineList) {
       final parsed = _parseQrcLine(line, offset: offset);
@@ -262,7 +265,44 @@ class LyricParser {
     return Lyrics(raw: qrc, lines: lines);
   }
 
+  static String _extractQrcContent(String raw) {
+    const marker = 'LyricContent="';
+    final start = raw.indexOf(marker);
+    if (start < 0) return raw;
+    final contentStart = start + marker.length;
+    final end = raw.indexOf('"', contentStart);
+    if (end < 0) return raw.substring(contentStart);
+    return raw.substring(contentStart, end);
+  }
+
   static LyricLine? _parseQrcLine(String line, {Duration offset = Duration.zero}) {
+    final tencentMatch =
+        RegExp(r'^\[\s*(\d+)\s*,\s*(\d+)\s*\]').firstMatch(line);
+    if (tencentMatch != null) {
+      final startMs = int.parse(tencentMatch.group(1)!);
+      var time = Duration(milliseconds: startMs) + offset;
+      if (time < Duration.zero) time = Duration.zero;
+      final textPart = line.substring(tencentMatch.end);
+      final wordsRaw = _parseTencentWordTags(textPart);
+      if (wordsRaw != null && wordsRaw.isNotEmpty) {
+        final words = [
+          for (final w in wordsRaw)
+            LyricWord(
+              time: w.time + offset,
+              text: w.text,
+              duration: w.duration,
+            ),
+        ];
+        final text = words.map((w) => w.text).join();
+        if (text.isNotEmpty) {
+          return LyricLine(time: time, text: text, words: words);
+        }
+      }
+      final plain = textPart.replaceAll(RegExp(r'\(\d+,\d+\)'), '').trim();
+      if (plain.isEmpty) return null;
+      return LyricLine(time: time, text: plain);
+    }
+
     final RegExp timeRegExp = RegExp(r'\[(\d{2}):(\d{2})\.(\d{2,3})\]');
     final match = timeRegExp.firstMatch(line);
     if (match == null) return null;
@@ -299,6 +339,28 @@ class LyricParser {
     }
     final text = words.map((w) => w.text).join();
     return LyricLine(time: time, text: text, words: words);
+  }
+
+  /// Parses Tencent QRC / Migu MRC word tags: text(start,dur)text2(start2,dur2).
+  /// start is absolute milliseconds from the beginning of the song.
+  static List<LyricWord>? _parseTencentWordTags(String body) {
+    final reg = RegExp(r'([^()]*?)\((\d+),(\d+)\)');
+    final matches = reg.allMatches(body).toList();
+    if (matches.isEmpty) return null;
+
+    final words = <LyricWord>[];
+    for (final m in matches) {
+      final text = m.group(1) ?? '';
+      if (text.isEmpty) continue;
+      final startMs = int.parse(m.group(2)!);
+      final durMs = int.parse(m.group(3)!);
+      words.add(LyricWord(
+        time: Duration(milliseconds: startMs),
+        text: text,
+        duration: durMs > 0 ? Duration(milliseconds: durMs) : null,
+      ));
+    }
+    return words.isEmpty ? null : words;
   }
 
 }

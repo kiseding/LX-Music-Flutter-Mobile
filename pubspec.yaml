@@ -43,6 +43,10 @@ dependencies:
   pointycastle: ^3.9.1
   charset: ^2.0.1
 
+  # iOS home widget and live activity
+  home_widget: ^0.9.3
+  live_activities: ^2.5.1
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

@@ -3,6 +3,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import '../../../features/player/domain/music_item.dart';
 import 'music_platform.dart';
+import 'qrc_decoder.dart';
 
 class TxSource extends MusicPlatform {
   @override
@@ -264,6 +265,105 @@ class TxSource extends MusicPlatform {
 
   @override
   Future<String?> getLyric(MusicItem music) async {
+    try {
+      final qrc = await _getQrcLyric(music);
+      if (qrc != null && qrc.isNotEmpty) return qrc;
+    } catch (e) {
+      debugPrint('[TX] QRC lyric failed: $e');
+    }
+    return _getLegacyLyric(music);
+  }
+
+  Future<String?> _getQrcLyric(MusicItem music) async {
+    final songmid = music.songmid ?? music.id;
+    if (songmid.isEmpty) return null;
+
+    final songId = await _getSongId(songmid);
+    if (songId == null) return null;
+
+    final lyricDio = createDioForService(
+      headers: {'Referer': 'https://y.qq.com'},
+    );
+    final resp = await lyricDio.post(
+      'https://u.y.qq.com/cgi-bin/musicu.fcg',
+      data: {
+        'comm': {
+          'ct': '19',
+          'cv': '1859',
+          'uin': '0',
+        },
+        'req': {
+          'method': 'GetPlayLyricInfo',
+          'module': 'music.musichallSong.PlayLyricInfo',
+          'param': {
+            'format': 'json',
+            'crypt': 1,
+            'ct': 19,
+            'cv': 1873,
+            'interval': 0,
+            'lrc_t': 0,
+            'qrc': 1,
+            'qrc_t': 0,
+            'roma': 1,
+            'roma_t': 0,
+            'songID': songId,
+            'trans': 1,
+            'trans_t': 0,
+            'type': -1,
+          },
+        },
+      },
+    );
+
+    final rawData = resp.data;
+    final body = rawData is String ? jsonDecode(rawData) : rawData;
+    if (body is! Map) return null;
+    if (body['code'] != 0) return null;
+
+    final req = body['req'];
+    if (req is! Map || req['code'] != 0) return null;
+    final data = req['data'];
+    if (data is! Map) return null;
+
+    final hex = data['lyric']?.toString();
+    if (hex == null || hex.isEmpty) return null;
+    return decryptQrc(hex);
+  }
+
+  Future<int?> _getSongId(String songmid) async {
+    final dio = createDioForService(
+      headers: {'User-Agent': 'Mozilla/5.0 (compatible; MSIE 9.0; Windows NT 6.1; WOW64; Trident/5.0)'},
+    );
+    final resp = await dio.post(
+      'https://u.y.qq.com/cgi-bin/musicu.fcg',
+      data: {
+        'comm': {
+          'ct': '19',
+          'cv': '1859',
+          'uin': '0',
+        },
+        'req': {
+          'module': 'music.pf_song_detail_svr',
+          'method': 'get_song_detail_yqq',
+          'param': {
+            'song_type': 0,
+            'song_mid': songmid,
+          },
+        },
+      },
+    );
+
+    final rawData = resp.data;
+    final body = rawData is String ? jsonDecode(rawData) : rawData;
+    if (body is! Map) return null;
+    final trackInfo = body['req']?['data']?['track_info'];
+    if (trackInfo is! Map) return null;
+    final id = trackInfo['id'];
+    if (id is int) return id;
+    return int.tryParse(id?.toString() ?? '');
+  }
+
+  Future<String?> _getLegacyLyric(MusicItem music) async {
     try {
       final songmid = music.songmid ?? music.id;
       if (songmid.isEmpty) return null;

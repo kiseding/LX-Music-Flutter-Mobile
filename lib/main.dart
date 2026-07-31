@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:audio_service/audio_service.dart';
+import 'dart:async';
 import 'package:lx_music_flutter/app.dart';
 import 'package:lx_music_flutter/core/audio/audio_handler.dart';
 import 'package:lx_music_flutter/core/audio/audio_runtime.dart';
@@ -12,6 +13,7 @@ import 'package:lx_music_flutter/features/download/presentation/download_provide
 import 'package:lx_music_flutter/features/player/domain/music_item.dart';
 import 'package:lx_music_flutter/features/settings/presentation/settings_provider.dart';
 import 'package:lx_music_flutter/features/player/presentation/player_provider.dart';
+import 'package:lx_music_flutter/features/player/presentation/lock_screen_sync.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -196,6 +198,9 @@ void main() async {
       container: container,
       autoplay: preferences.getBool('auto_resume_playback') ?? false,
     );
+
+    final lockScreenSync = LockScreenSyncService(lxHandler);
+    unawaited(lockScreenSync.init());
 
     runApp(
       OwnedProviderScope(

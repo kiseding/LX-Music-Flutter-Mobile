@@ -19,6 +19,10 @@
 		97C146FE1CF9000F007C117D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FD1CF9000F007C117D /* Assets.xcassets */; };
 		97C147011CF9000F007C117D /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FF1CF9000F007C117D /* LaunchScreen.storyboard */; };
 		A7D4291133A1000100000001 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = A7D4291033A1000100000001; };
+	AA0000000000000000000001 /* LXMusicWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000011 /* LXMusicWidget.swift */; };
+	AA0000000000000000000002 /* WidgetExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000012 /* WidgetExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+	AA0000000000000000000003 /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000013 /* WidgetKit.framework */; };
+	AA0000000000000000000004 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000014 /* SwiftUI.framework */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -29,6 +33,13 @@
 			remoteGlobalIDString = 97C146ED1CF9000F007C117D;
 			remoteInfo = Runner;
 		};
+	AA0000000000000000000005 /* PBXContainerItemProxy */ = {
+	isa = PBXContainerItemProxy;
+	containerPortal = 97C146E61CF9000F007C117D /* Project object */;
+	proxyType = 1;
+	remoteGlobalIDString = AA0000000000000000000009;
+	remoteInfo = WidgetExtension;
+	};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -42,6 +53,17 @@
 			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+	AA0000000000000000000006 /* Embed Foundation Extensions */ = {
+	isa = PBXCopyFilesBuildPhase;
+	buildActionMask = 2147483647;
+	dstPath = "";
+	dstSubfolderSpec = 13;
+	files = (
+	AA0000000000000000000002 /* WidgetExtension.appex in Embed Foundation Extensions */,
+	);
+	name = "Embed Foundation Extensions";
+	runOnlyForDeploymentPostprocessing = 0;
+	};
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
@@ -71,6 +93,13 @@
 		B18C017C46702CEC5CC7AD55 /* Pods-Runner.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Runner.debug.xcconfig"; path = "Target Support Files/Pods-Runner/Pods-Runner.debug.xcconfig"; sourceTree = "<group>"; };
 		B73472DE60E6C1B2DD71E1B5 /* Pods_Runner.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Runner.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		A7D4291033A1000100000001 = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+	AA0000000000000000000011 /* LXMusicWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LXMusicWidget.swift; sourceTree = "<group>"; };
+	AA0000000000000000000012 /* WidgetExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = WidgetExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+	AA0000000000000000000013 /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WidgetKit.framework; path = System/Library/Frameworks/WidgetKit.framework; sourceTree = SDKROOT; };
+	AA0000000000000000000014 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
+	AA0000000000000000000015 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+	AA0000000000000000000016 /* WidgetExtension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = WidgetExtension.entitlements; sourceTree = "<group>"; };
+	AA0000000000000000000017 /* Runner.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Runner.entitlements; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -91,6 +120,15 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+	AA0000000000000000000007 /* Frameworks */ = {
+	isa = PBXFrameworksBuildPhase;
+	buildActionMask = 2147483647;
+	files = (
+	AA0000000000000000000004 /* SwiftUI.framework in Frameworks */,
+	AA0000000000000000000003 /* WidgetKit.framework in Frameworks */,
+	);
+	runOnlyForDeploymentPostprocessing = 0;
+	};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -132,6 +170,7 @@
 			children = (
 				9740EEB11CF90186004384FC /* Flutter */,
 				97C146F01CF9000F007C117D /* Runner */,
+				AA0000000000000000000008 /* WidgetExtension */,
 				97C146EF1CF9000F007C117D /* Products */,
 				331C8082294A63A400263BE5 /* RunnerTests */,
 				0DD4C7DC5D736A52169C2847 /* Pods */,
@@ -143,6 +182,7 @@
 			isa = PBXGroup;
 			children = (
 				97C146EE1CF9000F007C117D /* Runner.app */,
+				AA0000000000000000000012 /* WidgetExtension.appex */,
 				331C8081294A63A400263BE5 /* RunnerTests.xctest */,
 			);
 			name = Products;
@@ -161,6 +201,7 @@
 				74858FAE1ED2DC5600515810 /* AppDelegate.swift */,
 				7884E8672EC3CC0400C636F2 /* SceneDelegate.swift */,
 				74858FAD1ED2DC5600515810 /* Runner-Bridging-Header.h */,
+				AA0000000000000000000017 /* Runner.entitlements */,
 			);
 			path = Runner;
 			sourceTree = "<group>";
@@ -174,6 +215,16 @@
 			name = Frameworks;
 			sourceTree = "<group>";
 		};
+	AA0000000000000000000008 /* WidgetExtension */ = {
+	isa = PBXGroup;
+	children = (
+	AA0000000000000000000011 /* LXMusicWidget.swift */,
+	AA0000000000000000000015 /* Info.plist */,
+	AA0000000000000000000016 /* WidgetExtension.entitlements */,
+	);
+	path = WidgetExtension;
+	sourceTree = "<group>";
+	};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -205,6 +256,7 @@
 				97C146EA1CF9000F007C117D /* Sources */,
 				97C146EB1CF9000F007C117D /* Frameworks */,
 				97C146EC1CF9000F007C117D /* Resources */,
+				AA0000000000000000000006 /* Embed Foundation Extensions */,
 				9705A1C41CF9048500538489 /* Embed Frameworks */,
 				3B06AD1E1E4923F5004D2608 /* Thin Binary */,
 				ABFA99674450BC9A93B07FF8 /* [CP] Embed Pods Frameworks */,
@@ -212,6 +264,7 @@
 			buildRules = (
 			);
 			dependencies = (
+				AA000000000000000000000C /* PBXTargetDependency */,
 			);
 			name = Runner;
 			packageProductDependencies = (
@@ -221,6 +274,23 @@
 			productReference = 97C146EE1CF9000F007C117D /* Runner.app */;
 			productType = "com.apple.product-type.application";
 		};
+	AA0000000000000000000009 /* WidgetExtension */ = {
+	isa = PBXNativeTarget;
+	buildConfigurationList = AA0000000000000000000010 /* Build configuration list for PBXNativeTarget "WidgetExtension" */;
+	buildPhases = (
+	AA000000000000000000000B /* Sources */,
+	AA0000000000000000000007 /* Frameworks */,
+	AA000000000000000000000A /* Resources */,
+	);
+	buildRules = (
+	);
+	dependencies = (
+	);
+	name = WidgetExtension;
+	productName = WidgetExtension;
+	productReference = AA0000000000000000000012 /* WidgetExtension.appex */;
+	productType = "com.apple.product-type.app-extension";
+	};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -234,6 +304,9 @@
 					331C8080294A63A400263BE5 = {
 						CreatedOnToolsVersion = 14.0;
 						TestTargetID = 97C146ED1CF9000F007C117D;
+					};
+					AA0000000000000000000009 = {
+						CreatedOnToolsVersion = 16.2;
 					};
 					97C146ED1CF9000F007C117D = {
 						CreatedOnToolsVersion = 7.3.1;
@@ -258,6 +331,7 @@
 			projectRoot = "";
 			targets = (
 				97C146ED1CF9000F007C117D /* Runner */,
+				AA0000000000000000000009 /* WidgetExtension */,
 				331C8080294A63A400263BE5 /* RunnerTests */,
 			);
 		};
@@ -283,6 +357,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+	AA000000000000000000000A /* Resources */ = {
+	isa = PBXResourcesBuildPhase;
+	buildActionMask = 2147483647;
+	files = (
+	);
+	runOnlyForDeploymentPostprocessing = 0;
+	};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
@@ -399,6 +480,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+	AA000000000000000000000B /* Sources */ = {
+	isa = PBXSourcesBuildPhase;
+	buildActionMask = 2147483647;
+	files = (
+	AA0000000000000000000001 /* LXMusicWidget.swift in Sources */,
+	);
+	runOnlyForDeploymentPostprocessing = 0;
+	};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -407,6 +496,11 @@
 			target = 97C146ED1CF9000F007C117D /* Runner */;
 			targetProxy = 331C8085294A63A400263BE5 /* PBXContainerItemProxy */;
 		};
+	AA000000000000000000000C /* PBXTargetDependency */ = {
+	isa = PBXTargetDependency;
+	target = AA0000000000000000000009 /* WidgetExtension */;
+	targetProxy = AA0000000000000000000005 /* PBXContainerItemProxy */;
+	};
 /* End PBXTargetDependency section */
 
 /* Begin PBXVariantGroup section */
@@ -491,6 +585,7 @@
 				CURRENT_PROJECT_VERSION = "$(FLUTTER_BUILD_NUMBER)";
 				DEVELOPMENT_TEAM = CG877JB88Q;
 				ENABLE_BITCODE = NO;
+				CODE_SIGN_ENTITLEMENTS = Runner/Runner.entitlements;
 				INFOPLIST_FILE = Runner/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -678,6 +773,7 @@
 				CURRENT_PROJECT_VERSION = "$(FLUTTER_BUILD_NUMBER)";
 				DEVELOPMENT_TEAM = CG877JB88Q;
 				ENABLE_BITCODE = NO;
+				CODE_SIGN_ENTITLEMENTS = Runner/Runner.entitlements;
 				INFOPLIST_FILE = Runner/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -701,6 +797,7 @@
 				CURRENT_PROJECT_VERSION = "$(FLUTTER_BUILD_NUMBER)";
 				DEVELOPMENT_TEAM = CG877JB88Q;
 				ENABLE_BITCODE = NO;
+				CODE_SIGN_ENTITLEMENTS = Runner/Runner.entitlements;
 				INFOPLIST_FILE = Runner/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -714,6 +811,85 @@
 			};
 			name = Release;
 		};
+	AA000000000000000000000D /* Debug */ = {
+	isa = XCBuildConfiguration;
+	buildSettings = {
+	APPLICATION_EXTENSION_API_ONLY = YES;
+	CLANG_ENABLE_MODULES = YES;
+	CODE_SIGN_ENTITLEMENTS = WidgetExtension/WidgetExtension.entitlements;
+	CODE_SIGN_STYLE = Automatic;
+	CURRENT_PROJECT_VERSION = 1;
+	DEVELOPMENT_TEAM = CG877JB88Q;
+	INFOPLIST_FILE = WidgetExtension/Info.plist;
+	INFOPLIST_KEY_CFBundleDisplayName = "LX Music";
+	IPHONEOS_DEPLOYMENT_TARGET = 16.1;
+	MARKETING_VERSION = 1.0;
+	LD_RUNPATH_SEARCH_PATHS = (
+	"$(inherited)",
+	"@executable_path/Frameworks",
+	"@executable_path/../../Frameworks",
+	);
+	PRODUCT_BUNDLE_IDENTIFIER = com.lxmusic.lxMusicFlutter.WidgetExtension;
+	PRODUCT_NAME = "$(TARGET_NAME)";
+	SKIP_INSTALL = YES;
+	SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+	SWIFT_VERSION = 5.0;
+	TARGETED_DEVICE_FAMILY = "1,2";
+	};
+	name = Debug;
+	};
+	AA000000000000000000000E /* Release */ = {
+	isa = XCBuildConfiguration;
+	buildSettings = {
+	APPLICATION_EXTENSION_API_ONLY = YES;
+	CLANG_ENABLE_MODULES = YES;
+	CODE_SIGN_ENTITLEMENTS = WidgetExtension/WidgetExtension.entitlements;
+	CODE_SIGN_STYLE = Automatic;
+	CURRENT_PROJECT_VERSION = 1;
+	DEVELOPMENT_TEAM = CG877JB88Q;
+	INFOPLIST_FILE = WidgetExtension/Info.plist;
+	INFOPLIST_KEY_CFBundleDisplayName = "LX Music";
+	IPHONEOS_DEPLOYMENT_TARGET = 16.1;
+	MARKETING_VERSION = 1.0;
+	LD_RUNPATH_SEARCH_PATHS = (
+	"$(inherited)",
+	"@executable_path/Frameworks",
+	"@executable_path/../../Frameworks",
+	);
+	PRODUCT_BUNDLE_IDENTIFIER = com.lxmusic.lxMusicFlutter.WidgetExtension;
+	PRODUCT_NAME = "$(TARGET_NAME)";
+	SKIP_INSTALL = YES;
+	SWIFT_VERSION = 5.0;
+	TARGETED_DEVICE_FAMILY = "1,2";
+	};
+	name = Release;
+	};
+	AA000000000000000000000F /* Profile */ = {
+	isa = XCBuildConfiguration;
+	buildSettings = {
+	APPLICATION_EXTENSION_API_ONLY = YES;
+	CLANG_ENABLE_MODULES = YES;
+	CODE_SIGN_ENTITLEMENTS = WidgetExtension/WidgetExtension.entitlements;
+	CODE_SIGN_STYLE = Automatic;
+	CURRENT_PROJECT_VERSION = 1;
+	DEVELOPMENT_TEAM = CG877JB88Q;
+	INFOPLIST_FILE = WidgetExtension/Info.plist;
+	INFOPLIST_KEY_CFBundleDisplayName = "LX Music";
+	IPHONEOS_DEPLOYMENT_TARGET = 16.1;
+	MARKETING_VERSION = 1.0;
+	LD_RUNPATH_SEARCH_PATHS = (
+	"$(inherited)",
+	"@executable_path/Frameworks",
+	"@executable_path/../../Frameworks",
+	);
+	PRODUCT_BUNDLE_IDENTIFIER = com.lxmusic.lxMusicFlutter.WidgetExtension;
+	PRODUCT_NAME = "$(TARGET_NAME)";
+	SKIP_INSTALL = YES;
+	SWIFT_VERSION = 5.0;
+	TARGETED_DEVICE_FAMILY = "1,2";
+	};
+	name = Profile;
+	};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -747,6 +923,16 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Profile;
 		};
+	AA0000000000000000000010 /* Build configuration list for PBXNativeTarget "WidgetExtension" */ = {
+	isa = XCConfigurationList;
+	buildConfigurations = (
+	AA000000000000000000000D /* Debug */,
+	AA000000000000000000000E /* Release */,
+	AA000000000000000000000F /* Profile */,
+	);
+	defaultConfigurationIsVisible = 0;
+	defaultConfigurationName = Profile;
+	};
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
