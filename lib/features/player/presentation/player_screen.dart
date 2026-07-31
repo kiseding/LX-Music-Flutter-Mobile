@@ -439,7 +439,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   }
 
   Widget _buildSourceQualityBar(MusicItem music) {
-    final media = widget.playerService.mediaItem;
+    final media = ref.watch(currentMediaItemProvider).value;
     final extras = media?.extras ?? music.toJson();
     final platform = (extras['platform'] ?? music.platform).toString();
     // 只展示实际播放音质，不用 requestedQuality 冒充
@@ -1030,6 +1030,8 @@ class _PlaybackQueueSheet extends ConsumerStatefulWidget {
 
 class _PlaybackQueueSheetState extends ConsumerState<_PlaybackQueueSheet> {
   late int _pageIndex;
+  final ScrollController _queueScrollController = ScrollController();
+  int? _focusedPageForScroll;
 
   @override
   void initState() {
@@ -1039,11 +1041,34 @@ class _PlaybackQueueSheetState extends ConsumerState<_PlaybackQueueSheet> {
         : PageRange.pageForItem(index: widget.currentIndex >= 0 ? widget.currentIndex : 0);
   }
 
+  @override
+  void dispose() {
+    _queueScrollController.dispose();
+    super.dispose();
+  }
+
   int _lazyCurrentIndex() {
     final current = widget.playerService.mediaItem?.extras;
     final lazyIndex = current?['_lazyPlaylistIndex'];
     if (lazyIndex is int) return lazyIndex;
     return widget.currentIndex >= 0 ? widget.currentIndex : 0;
+  }
+
+  void _scrollToCurrentIfNeeded(int pageIndex, int currentIndex, int pageStart) {
+    if (currentIndex < pageStart || _focusedPageForScroll == pageIndex) return;
+    _focusedPageForScroll = pageIndex;
+    final offsetInPage = currentIndex - pageStart;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_queueScrollController.hasClients) return;
+      final position = _queueScrollController.position;
+      final target = (offsetInPage * 72.0 - (position.viewportDimension - 72.0) / 2)
+          .clamp(0.0, position.maxScrollExtent);
+      _queueScrollController.animateTo(
+        target,
+        duration: const Duration(milliseconds: 280),
+        curve: Curves.easeOutCubic,
+      );
+    });
   }
 
   Future<void> _playAt(int globalIndex) async {
@@ -1121,6 +1146,7 @@ class _PlaybackQueueSheetState extends ConsumerState<_PlaybackQueueSheet> {
             ),
             Divider(color: AppColors.cardBorder(context), height: 1),
             songsPage.when(
+              skipLoadingOnRefresh: true,
               loading: () => const SizedBox(
                 height: 160,
                 child: Center(child: CircularProgressIndicator()),
@@ -1136,6 +1162,7 @@ class _PlaybackQueueSheetState extends ConsumerState<_PlaybackQueueSheet> {
                   return _buildShortQueue(context, currentIndex, screenHeight);
                 }
                 final queueItems = page.songs;
+                _scrollToCurrentIfNeeded(range.pageIndex, currentIndex, range.start);
                 final contentHeight = (queueItems.length * 72.0)
                     .clamp(0.0, screenHeight * 2 / 3)
                     .toDouble();
@@ -1193,6 +1220,7 @@ class _PlaybackQueueSheetState extends ConsumerState<_PlaybackQueueSheet> {
                         pageIndex: range.pageIndex,
                         pageCount: range.pageCount,
                         onPageChanged: (pageIndex) {
+                          _focusedPageForScroll = null;
                           setState(() => _pageIndex = pageIndex);
                         },
                       ),
@@ -1220,6 +1248,7 @@ class _PlaybackQueueSheetState extends ConsumerState<_PlaybackQueueSheet> {
       pageIndex: _pageIndex,
     );
     final queue = pageSlice(widget.queue, range);
+    _scrollToCurrentIfNeeded(range.pageIndex, currentIndex, range.start);
     final hasMultiplePages = range.pageCount > 1;
     final contentHeight = (queue.length * 72.0 + (hasMultiplePages ? 24.0 : 0.0))
         .clamp(0.0, screenHeight * 2 / 3)
@@ -1319,6 +1348,7 @@ class _PlaybackQueueSheetState extends ConsumerState<_PlaybackQueueSheet> {
                     pageIndex: range.pageIndex,
                     pageCount: range.pageCount,
                     onPageChanged: (pageIndex) {
+                      _focusedPageForScroll = null;
                       setState(() => _pageIndex = pageIndex);
                     },
                   ),

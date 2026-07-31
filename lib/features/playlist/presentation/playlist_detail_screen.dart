@@ -355,6 +355,7 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
             : _isEditing
             ? _buildEditableList(playlist)
             : songsPage!.when(
+                skipLoadingOnRefresh: true,
                 data: (page) => _buildNormalList(
                   playerService,
                   playlist,
