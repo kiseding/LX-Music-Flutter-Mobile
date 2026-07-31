@@ -71,7 +71,8 @@ void main() {
       fireImmediately: true,
     );
     addTearDown(subscription.close);
-    expect(subscription.read(), isTrue);
+    await Future<void>.delayed(Duration.zero);
+    expect(subscription.read().valueOrNull, isTrue);
 
     await service.replaceAll([
       favorite.copyWith(songs: const []),
@@ -79,7 +80,7 @@ void main() {
     ]);
     await Future<void>.delayed(Duration.zero);
 
-    expect(subscription.read(), isFalse);
+    expect(subscription.read().valueOrNull, isFalse);
   });
 }
 

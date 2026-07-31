@@ -32,6 +32,29 @@ class PlaylistService {
   int get revision => _revision;
   Stream<int> get revisions => _revisionController.stream;
 
+  Future<List<Playlist>> getAllPlaylists() => _hydrateAll(_playlists);
+
+  Future<List<PlaylistSongMatch>> searchSongs(String query) async {
+    final normalized = query.trim().toLowerCase();
+    if (normalized.isEmpty) return const [];
+    final matches = <PlaylistSongMatch>[];
+    for (final playlist in await getAllPlaylists()) {
+      for (var index = 0; index < playlist.songs.length; index++) {
+        final song = playlist.songs[index];
+        if (song.name.toLowerCase().contains(normalized) ||
+            song.singer.toLowerCase().contains(normalized) ||
+            song.album.toLowerCase().contains(normalized)) {
+          matches.add(PlaylistSongMatch(
+            playlist: playlist,
+            song: song,
+            index: index,
+          ));
+        }
+      }
+    }
+    return List.unmodifiable(matches);
+  }
+
   Future<void> init() {
     if (_disposing) {
       return Future.error(StateError('PlaylistService is disposed'));
@@ -56,7 +79,7 @@ class PlaylistService {
     if (needsRepair) {
       await _repository.save(PlaylistSnapshot(
         schemaVersion: 1,
-        playlists: repaired,
+        playlists: await _hydrateAll(repaired),
       ));
     }
     _playlists
@@ -139,6 +162,49 @@ class PlaylistService {
     return index < 0 ? null : _playlists[index];
   }
 
+  Future<PlaylistSongPage> getSongsPage(
+    String playlistId, {
+    required int offset,
+    required int limit,
+  }) async {
+    if (offset < 0 || limit <= 0) {
+      throw ArgumentError('offset must be non-negative and limit must be positive');
+    }
+    final playlist = getPlaylist(playlistId);
+    if (playlist == null) throw StateError('Playlist $playlistId does not exist');
+    if (playlist.songs.length == playlist.songCount) {
+      final start = offset.clamp(0, playlist.songCount).toInt();
+      final end = (start + limit).clamp(0, playlist.songCount).toInt();
+      return PlaylistSongPage(
+        total: playlist.songCount,
+        offset: start,
+        songs: playlist.songs.sublist(start, end),
+      );
+    }
+
+    final repository = _repository;
+    if (repository is PlaylistSongPageRepository) {
+      return repository.loadSongsPage(playlistId, offset: offset, limit: limit);
+    }
+    throw StateError('Playlist $playlistId does not support paged song loading');
+  }
+
+  Future<List<MusicItem>> getAllSongs(String playlistId) async {
+    final playlist = getPlaylist(playlistId);
+    if (playlist == null) throw StateError('Playlist $playlistId does not exist');
+    return _loadAllSongsFor(playlist);
+  }
+
+  Future<List<MusicItem>> _loadAllSongsFor(Playlist playlist) async {
+    if (playlist.songs.length == playlist.songCount) return playlist.songs;
+
+    final repository = _repository;
+    if (repository is PlaylistSongPageRepository) {
+      return repository.loadAllSongs(playlist.id);
+    }
+    throw StateError('Playlist ${playlist.id} does not support song loading');
+  }
+
   Future<bool> addSongToPlaylist(String playlistId, MusicItem song) {
     return _mutate((current) {
       final index = _indexOf(current, playlistId);
@@ -173,9 +239,8 @@ class PlaylistService {
     });
   }
 
-  bool isSongInPlaylist(String playlistId, String songId) {
-    return getPlaylist(playlistId)?.songs.any((song) => song.id == songId) ??
-        false;
+  Future<bool> isSongInPlaylist(String playlistId, String songId) async {
+    return (await getAllSongs(playlistId)).any((song) => song.id == songId);
   }
 
   Future<bool> sortSongsInPlaylist(
@@ -298,12 +363,15 @@ class PlaylistService {
       _validatePlaylistIds(snapshot.playlists);
       final repaired = PlaylistSnapshot(
         schemaVersion: 1,
-        playlists: _withSystemPlaylists(snapshot.playlists),
+        playlists: await _hydrateAll(_withSystemPlaylists(snapshot.playlists)),
       );
       await _repository.save(repaired);
+      final persisted = _repository is PlaylistSongPageRepository
+          ? await _repository.load()
+          : repaired;
       _playlists
         ..clear()
-        ..addAll(repaired.playlists);
+        ..addAll(persisted.playlists);
       _revisionController.add(++_revision);
     });
   }
@@ -357,7 +425,8 @@ class PlaylistService {
       if (!_initialized) {
         throw StateError('PlaylistService is not initialized');
       }
-      final mutation = await operation(List<Playlist>.unmodifiable(_playlists));
+      final current = await _hydrateAll(_playlists);
+      final mutation = await operation(List<Playlist>.unmodifiable(current));
       if (!mutation.changed) return mutation.result;
 
       final snapshot = PlaylistSnapshot(
@@ -365,12 +434,25 @@ class PlaylistService {
         playlists: _withSystemPlaylists(mutation.next),
       );
       await _repository.save(snapshot);
+      final persisted = _repository is PlaylistSongPageRepository
+          ? await _repository.load()
+          : snapshot;
       _playlists
         ..clear()
-        ..addAll(snapshot.playlists);
+        ..addAll(persisted.playlists);
       _revisionController.add(++_revision);
       return mutation.result;
     });
+  }
+
+  Future<List<Playlist>> _hydrateAll(List<Playlist> playlists) async {
+    return [
+      for (final playlist in playlists)
+        if (playlist.songs.length == playlist.songCount)
+          playlist
+        else
+          playlist.copyWith(songs: await _loadAllSongsFor(playlist)),
+    ];
   }
 
   Future<T> _enqueue<T>(FutureOr<T> Function() operation) {
@@ -441,10 +523,11 @@ class PlaylistService {
       if (a.id != b.id ||
           a.name != b.name ||
           a.description != b.description ||
-          a.coverUrl != b.coverUrl ||
-          a.createdAt != b.createdAt ||
-          a.updatedAt != b.updatedAt ||
-          !_sameSongs(a.songs, b.songs)) {
+           a.coverUrl != b.coverUrl ||
+           a.createdAt != b.createdAt ||
+           a.updatedAt != b.updatedAt ||
+           a.songCount != b.songCount ||
+           !_sameSongs(a.songs, b.songs)) {
         return false;
       }
     }
@@ -519,4 +602,16 @@ class PlaylistService {
   }
 
   bool _isSystemPlaylist(String id) => id == 'favorites' || id == 'recent';
+}
+
+final class PlaylistSongMatch {
+  const PlaylistSongMatch({
+    required this.playlist,
+    required this.song,
+    required this.index,
+  });
+
+  final Playlist playlist;
+  final MusicItem song;
+  final int index;
 }

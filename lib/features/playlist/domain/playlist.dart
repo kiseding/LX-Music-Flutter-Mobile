@@ -6,6 +6,7 @@ class Playlist {
   final String? description;
   final String? coverUrl;
   final List<MusicItem> songs;
+  final int songCount;
   final DateTime createdAt;
   final DateTime updatedAt;
 
@@ -15,9 +16,10 @@ class Playlist {
     this.description,
     this.coverUrl,
     this.songs = const [],
+    int? songCount,
     required this.createdAt,
     required this.updatedAt,
-  });
+  }) : songCount = songCount ?? songs.length;
 
   Playlist copyWith({
     String? id,
@@ -25,6 +27,7 @@ class Playlist {
     String? description,
     String? coverUrl,
     List<MusicItem>? songs,
+    int? songCount,
     DateTime? createdAt,
     DateTime? updatedAt,
   }) {
@@ -34,12 +37,12 @@ class Playlist {
       description: description ?? this.description,
       coverUrl: coverUrl ?? this.coverUrl,
       songs: songs ?? this.songs,
+      songCount: songCount ?? (songs == null ? this.songCount : songs.length),
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
     );
   }
 
-  int get songCount => songs.length;
   Duration get totalDuration => songs.fold(
         Duration.zero,
         (total, song) => total + song.duration,

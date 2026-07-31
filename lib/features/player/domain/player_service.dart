@@ -5,10 +5,11 @@ import '../domain/music_item.dart';
 import '../../../core/audio/audio_handler.dart';
 import '../../../core/network/outbound_url.dart';
 import '../../../core/widgets/artwork_disk_cache.dart';
+import 'lazy_playlist_order.dart';
 
 class PlayerService {
   PlayerService({ArtworkDiskCache? artworkCache})
-      : _artworkCache = artworkCache ?? ArtworkDiskCache.instance;
+    : _artworkCache = artworkCache ?? ArtworkDiskCache.instance;
 
   final ArtworkDiskCache _artworkCache;
 
@@ -24,9 +25,73 @@ class PlayerService {
     final items = songs.map(_convertToMediaItemSync).toList();
     if (audioHandler is LxAudioHandler) {
       final handler = audioHandler as LxAudioHandler;
+      handler.clearLazyQueue();
       await handler.setPlaylist(items, initialIndex: index);
       unawaited(_warmArtForQueue(songs, preferIndex: index));
     }
+  }
+
+  /// Starts a large playlist without converting every saved song into a native
+  /// media queue. The shuffled order covers every global index exactly once.
+  Future<void> playPagedPlaylist({
+    required int songCount,
+    required int startIndex,
+    required Future<List<MusicItem>> Function(int offset, int limit) loadPage,
+  }) async {
+    if (songCount <= 0 || audioHandler is! LxAudioHandler) return;
+    final handler = audioHandler as LxAudioHandler;
+    final shuffle =
+        handler.playbackState.value.shuffleMode == AudioServiceShuffleMode.all;
+    var shuffleEnabled = shuffle;
+    final window = LazyPlaylistWindow(
+      length: songCount,
+      initialIndex: startIndex,
+      shuffle: shuffle,
+      loadPage: loadPage,
+    );
+
+    List<MediaItem> mediaItems(List<LazyPlaylistEntry> entries) => [
+      for (final entry in entries)
+        _convertToMediaItemSync(entry.song, lazyPlaylistIndex: entry.index),
+    ];
+
+    final initialEntries = await window.takeEntries(9);
+    if (initialEntries.isEmpty) return;
+    handler.configureLazyQueue(
+      loadMore: (minimumItems) async {
+        var entries = await window.takeEntries(minimumItems);
+        if (entries.isEmpty &&
+            handler.playbackState.value.repeatMode !=
+                AudioServiceRepeatMode.none &&
+            handler.playbackState.value.repeatMode !=
+                AudioServiceRepeatMode.one) {
+          entries = await window.restartFromBeginning(
+            shuffle: shuffleEnabled,
+            count: minimumItems,
+          );
+        }
+        return mediaItems(entries);
+      },
+      rebuildForShuffle: (current, enabled, minimumItems) async {
+        shuffleEnabled = enabled;
+        final index = current.extras?['_lazyPlaylistIndex'];
+        if (index is! int) return const [];
+        return mediaItems(
+          await window.restartEntriesAfterCurrent(
+            currentIndex: index,
+            shuffle: enabled,
+            count: minimumItems,
+          ),
+        );
+      },
+    );
+    await handler.setPlaylist(mediaItems(initialEntries));
+    unawaited(
+      _warmArtForQueue(
+        initialEntries.map((entry) => entry.song).toList(growable: false),
+        preferIndex: 0,
+      ),
+    );
   }
 
   Future<void> togglePlay() async {
@@ -38,7 +103,7 @@ class PlayerService {
     }
   }
 
-  MediaItem _convertToMediaItemSync(MusicItem song) {
+  MediaItem _convertToMediaItemSync(MusicItem song, {int? lazyPlaylistIndex}) {
     final art = song.artwork;
     return MediaItem(
       id: song.id,
@@ -49,7 +114,10 @@ class PlayerService {
       artUri: (art != null && art.isNotEmpty)
           ? Uri.tryParse(normalizeOutboundUrl(art))
           : null,
-      extras: song.toJson(),
+      extras: {
+        ...song.toJson(),
+        if (lazyPlaylistIndex != null) '_lazyPlaylistIndex': lazyPlaylistIndex,
+      },
     );
   }
 
@@ -68,10 +136,6 @@ class PlayerService {
     add(preferIndex);
     add(preferIndex + 1);
     add(preferIndex - 1);
-    for (var i = 0; i < songs.length; i++) {
-      add(i);
-    }
-
     for (final i in order) {
       final song = songs[i];
       final remote = song.artwork;
@@ -101,14 +165,16 @@ class PlayerService {
       final handler = audioHandler as LxAudioHandler;
       final items = List<MediaItem>.from(handler.queueItems);
       if (items.isEmpty) {
+        handler.clearLazyQueue();
         await handler.setPlaylist([item]);
         unawaited(_warmArtForQueue([song], preferIndex: 0));
         return;
       }
       final currentId = handler.mediaItem.value?.id;
       items.removeWhere((queueItem) => queueItem.id == item.id);
-      final currentIndex =
-          items.indexWhere((queueItem) => queueItem.id == currentId);
+      final currentIndex = items.indexWhere(
+        (queueItem) => queueItem.id == currentId,
+      );
       final insertIndex = (currentIndex + 1).clamp(0, items.length);
       items.insert(insertIndex, item);
       await handler.updateQueue(items);
@@ -127,6 +193,7 @@ class PlayerService {
 
   Future<void> setShuffleMode(bool enabled) async {
     await audioHandler.setShuffleMode(
-        enabled ? AudioServiceShuffleMode.all : AudioServiceShuffleMode.none);
+      enabled ? AudioServiceShuffleMode.all : AudioServiceShuffleMode.none,
+    );
   }
 }

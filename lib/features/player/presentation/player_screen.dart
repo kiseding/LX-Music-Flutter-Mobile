@@ -1,8 +1,10 @@
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/pagination/page_range.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/widgets/artwork_image.dart';
+import '../../../core/widgets/page_navigation_bar.dart';
 import '../../../core/widgets/pressable.dart';
 import '../../../core/widgets/play_pulse_button.dart';
 import '../../../core/network/play_url_result.dart';
@@ -321,7 +323,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
 
     final isPlaying = playbackState?.playing ?? false;
     final duration = ref.watch(durationProvider).value ?? currentMusic.duration;
-    final isFavorite = ref.watch(isSongFavoriteProvider(currentMusic.id));
+    final isFavorite =
+        ref.watch(isSongFavoriteProvider(currentMusic.id)).valueOrNull ?? false;
 
     final screenH = MediaQuery.of(context).size.height;
     final dismissThreshold = screenH * 0.4; // 超过 2/5 关闭
@@ -862,93 +865,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       backgroundColor: AppColors.dialogBg(context),
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (context) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-                width: 32,
-                height: 4,
-                margin: EdgeInsets.symmetric(vertical: 12),
-                decoration: BoxDecoration(
-                    color: AppColors.mutedText(context),
-                    borderRadius: BorderRadius.circular(2))),
-            Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: Row(
-                children: [
-                  Icon(Icons.queue_music,
-                      color: AppColors.accentOf(context), size: 20),
-                  const SizedBox(width: 8),
-                  Text('播放列表 (${queue.length})',
-                      style: TextStyle(
-                          color: AppColors.onScaffold(context),
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600)),
-                ],
-              ),
-            ),
-            Divider(color: AppColors.cardBorder(context), height: 1),
-            if (queue.isEmpty)
-              Padding(
-                padding: EdgeInsets.all(32),
-                child: Text('播放列表为空',
-                    style: TextStyle(
-                        color: AppColors.mutedText(context), fontSize: 14)),
-              )
-            else
-              ConstrainedBox(
-                constraints: BoxConstraints(
-                    maxHeight: MediaQuery.of(context).size.height * 0.6),
-                child: ListView.builder(
-                  shrinkWrap: true,
-                  itemCount: queue.length,
-                  itemBuilder: (context, index) {
-                    final item = queue[index];
-                    final isPlaying = index == currentIndex;
-
-                    return ListTile(
-                      leading: isPlaying
-                          ? Icon(Icons.play_arrow,
-                              color: AppColors.accentOf(context))
-                          : Text('${index + 1}',
-                              style: TextStyle(
-                                  color: AppColors.mutedText(context),
-                                  fontSize: 14)),
-                      title: Text(
-                        item.title,
-                        style: TextStyle(
-                          color: isPlaying
-                              ? AppColors.accentOf(context)
-                              : AppColors.onScaffold(context),
-                          fontSize: 14,
-                          fontWeight:
-                              isPlaying ? FontWeight.w600 : FontWeight.normal,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      subtitle: Text(
-                        item.artist ?? '',
-                        style: TextStyle(
-                            color: AppColors.mutedText(context), fontSize: 12),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      onTap: () {
-                        playerService.setQueue(
-                            queue
-                                .map((e) => MusicItem.fromJson(e.extras ?? {}))
-                                .toList(),
-                            startIndex: index);
-                        Navigator.pop(context);
-                      },
-                    );
-                  },
-                ),
-              ),
-          ],
-        ),
+      builder: (context) => _PlaybackQueueSheet(
+        queue: queue,
+        currentIndex: currentIndex,
+        playerService: playerService,
       ),
     );
   }
@@ -1045,6 +965,154 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                 }),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _PlaybackQueueSheet extends StatefulWidget {
+  const _PlaybackQueueSheet({
+    required this.queue,
+    required this.currentIndex,
+    required this.playerService,
+  });
+
+  final List<MediaItem> queue;
+  final int currentIndex;
+  final PlayerService playerService;
+
+  @override
+  State<_PlaybackQueueSheet> createState() => _PlaybackQueueSheetState();
+}
+
+class _PlaybackQueueSheetState extends State<_PlaybackQueueSheet> {
+  late int _pageIndex;
+
+  @override
+  void initState() {
+    super.initState();
+    _pageIndex = widget.currentIndex >= 0
+        ? PageRange.pageForItem(index: widget.currentIndex)
+        : 0;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final range = PageRange(
+      itemCount: widget.queue.length,
+      pageIndex: _pageIndex,
+    );
+    final queue = pageSlice(widget.queue, range);
+    final hasMultiplePages = range.pageCount > 1;
+    final contentHeight =
+        (queue.length * 72.0 + (hasMultiplePages ? 60.0 : 0.0))
+            .clamp(0.0, MediaQuery.of(context).size.height * 0.6)
+            .toDouble();
+
+    return SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 32,
+            height: 4,
+            margin: const EdgeInsets.symmetric(vertical: 12),
+            decoration: BoxDecoration(
+              color: AppColors.mutedText(context),
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Row(
+              children: [
+                Icon(Icons.queue_music,
+                    color: AppColors.accentOf(context), size: 20),
+                const SizedBox(width: 8),
+                Text('播放列表 (${widget.queue.length})',
+                    style: TextStyle(
+                        color: AppColors.onScaffold(context),
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600)),
+              ],
+            ),
+          ),
+          Divider(color: AppColors.cardBorder(context), height: 1),
+          if (widget.queue.isEmpty)
+            Padding(
+              padding: const EdgeInsets.all(32),
+              child: Text('播放列表为空',
+                  style: TextStyle(
+                      color: AppColors.mutedText(context), fontSize: 14)),
+            )
+          else
+            SizedBox(
+              height: contentHeight,
+              child: Column(
+                children: [
+                  Expanded(
+                    child: ListView.builder(
+                      itemCount: queue.length,
+                      itemBuilder: (context, index) {
+                        final item = queue[index];
+                        final queueIndex = range.start + index;
+                        final isPlaying = queueIndex == widget.currentIndex;
+
+                        return ListTile(
+                          leading: isPlaying
+                              ? Icon(Icons.play_arrow,
+                                  color: AppColors.accentOf(context))
+                              : Text('${queueIndex + 1}',
+                                  style: TextStyle(
+                                      color: AppColors.mutedText(context),
+                                      fontSize: 14)),
+                          title: Text(
+                            item.title,
+                            style: TextStyle(
+                              color: isPlaying
+                                  ? AppColors.accentOf(context)
+                                  : AppColors.onScaffold(context),
+                              fontSize: 14,
+                              fontWeight: isPlaying
+                                  ? FontWeight.w600
+                                  : FontWeight.normal,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          subtitle: Text(
+                            item.artist ?? '',
+                            style: TextStyle(
+                                color: AppColors.mutedText(context),
+                                fontSize: 12),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          onTap: () {
+                            widget.playerService.setQueue(
+                              widget.queue
+                                  .map((e) =>
+                                      MusicItem.fromJson(e.extras ?? {}))
+                                  .toList(),
+                              startIndex: queueIndex,
+                            );
+                            Navigator.pop(context);
+                          },
+                        );
+                      },
+                    ),
+                  ),
+                  PageNavigationBar(
+                    pageIndex: range.pageIndex,
+                    pageCount: range.pageCount,
+                    onPageChanged: (pageIndex) {
+                      setState(() => _pageIndex = pageIndex);
+                    },
+                  ),
+                ],
+              ),
+            ),
+        ],
       ),
     );
   }

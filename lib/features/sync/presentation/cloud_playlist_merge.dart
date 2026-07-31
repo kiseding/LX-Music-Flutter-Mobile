@@ -113,7 +113,7 @@ Future<CloudPlaylistMergeResult> mergeAndPersistCloudPlaylists({
 
   final now = clock ?? DateTime.now;
   final playlists = {
-    for (final playlist in service.playlists) playlist.id: playlist
+    for (final playlist in await service.getAllPlaylists()) playlist.id: playlist
   };
   final favorites = playlists['favorites'];
   if (favorites != null) {

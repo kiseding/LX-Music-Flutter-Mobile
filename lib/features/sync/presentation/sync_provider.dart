@@ -60,8 +60,11 @@ class SyncConnectionNotifier extends StateNotifier<bool> {
     if (!syncService.isConnected) return false;
 
     final playlistService = _ref.read(playlistServiceProvider);
-    final playlists = playlistService.playlists;
-    final history = playlistService.recent?.songs ?? [];
+    final playlists = await playlistService.getAllPlaylists();
+    final history = playlists
+        .where((playlist) => playlist.id == 'recent')
+        .expand((playlist) => playlist.songs)
+        .toList();
 
     final ok =
         await syncService.push(playlists: playlists, history: history);

@@ -471,7 +471,8 @@ class SettingsScreen extends ConsumerWidget {
   Future<void> _backupData(BuildContext context, WidgetRef ref) async {
     try {
       final storage = await StorageService.instance;
-      final playlists = ref.read(playlistServiceProvider).playlists;
+      final playlists =
+          await ref.read(playlistServiceProvider).getAllPlaylists();
       final playlistSnapshot = const PlaylistSnapshotCodec().encode(
         PlaylistSnapshot(schemaVersion: 1, playlists: playlists),
       );

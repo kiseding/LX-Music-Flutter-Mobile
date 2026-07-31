@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lx_music_flutter/features/playlist/data/file_playlist_repository.dart';
 import 'package:lx_music_flutter/features/playlist/data/playlist_repository.dart';
+import 'package:lx_music_flutter/features/player/domain/music_item.dart';
 import 'package:lx_music_flutter/features/playlist/domain/playlist.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -15,6 +16,43 @@ void main() {
         await Directory.systemTemp.createTemp('playlist_repository_test_');
   });
   tearDown(() => tempDir.delete(recursive: true));
+
+  test('loads a summary and decodes only the requested songs page', () async {
+    final time = DateTime.utc(2026, 7, 29);
+    final songs = List.generate(
+      250,
+      (index) => MusicItem(
+        id: '$index',
+        name: 'Song $index',
+        singer: 'Singer',
+        source: 'test',
+      ),
+    );
+    final snapshot = PlaylistSnapshot(
+      schemaVersion: 1,
+      playlists: [
+        Playlist(
+          id: 'large',
+          name: 'Large',
+          songs: songs,
+          createdAt: time,
+          updatedAt: time,
+        ),
+      ],
+    );
+    await File('${tempDir.path}/playlists.v1.json')
+        .writeAsString(const PlaylistSnapshotCodec().encode(snapshot));
+    final repository = repositoryFor(tempDir, await preferences({}));
+
+    final loaded = await repository.load();
+    final page = await repository.loadSongsPage('large', offset: 100, limit: 100);
+
+    expect(loaded.playlists.single.songCount, 250);
+    expect(loaded.playlists.single.songs, isEmpty);
+    expect(page.total, 250);
+    expect(page.songs.map((song) => song.id),
+        List.generate(100, (index) => '${index + 100}'));
+  });
 
   test('legacy migration keeps fallback until new file loads successfully',
       () async {

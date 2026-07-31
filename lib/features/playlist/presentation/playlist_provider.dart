@@ -4,6 +4,7 @@ import '../domain/playlist_service.dart';
 import '../domain/playlist.dart';
 import '../../player/domain/music_item.dart';
 import '../../../startup_lifecycle.dart';
+import '../../../core/pagination/page_range.dart';
 
 final playlistRepositoryProvider = Provider<PlaylistRepository>((ref) {
   throw StateError('playlistRepositoryProvider must be overridden at startup');
@@ -28,7 +29,44 @@ final playlistsProvider = Provider<List<Playlist>>((ref) {
   return playlistService.playlists;
 });
 
-final isSongFavoriteProvider = Provider.family<bool, String>((ref, songId) {
+final class PlaylistSongsPageRequest {
+  const PlaylistSongsPageRequest({
+    required this.playlistId,
+    required this.pageIndex,
+  });
+
+  final String playlistId;
+  final int pageIndex;
+
+  int get offset => pageIndex * PageRange.defaultPageSize;
+
+  @override
+  bool operator ==(Object other) =>
+      other is PlaylistSongsPageRequest &&
+      other.playlistId == playlistId &&
+      other.pageIndex == pageIndex;
+
+  @override
+  int get hashCode => Object.hash(playlistId, pageIndex);
+}
+
+final playlistSongsPageProvider = FutureProvider.autoDispose
+    .family<PlaylistSongPage, PlaylistSongsPageRequest>((ref, request) {
+  ref.watch(playlistRevisionProvider);
+  return ref.read(playlistServiceProvider).getSongsPage(
+        request.playlistId,
+        offset: request.offset,
+        limit: PageRange.defaultPageSize,
+      );
+});
+
+final playlistSongSearchProvider = FutureProvider.autoDispose
+    .family<List<PlaylistSongMatch>, String>((ref, query) {
+  ref.watch(playlistRevisionProvider);
+  return ref.read(playlistServiceProvider).searchSongs(query);
+});
+
+final isSongFavoriteProvider = FutureProvider.family<bool, String>((ref, songId) async {
   ref.watch(playlistRevisionProvider);
   final playlistService = ref.watch(playlistServiceProvider);
   return playlistService.isSongInPlaylist('favorites', songId);
@@ -39,7 +77,8 @@ final toggleFavoriteProvider =
     Provider<Future<void> Function(MusicItem)>((ref) {
   return (MusicItem song) async {
     final playlistService = ref.read(playlistServiceProvider);
-    final isFavorite = playlistService.isSongInPlaylist('favorites', song.id);
+    final isFavorite =
+        await playlistService.isSongInPlaylist('favorites', song.id);
     if (isFavorite) {
       await playlistService.removeSongFromPlaylist('favorites', song.id);
     } else {

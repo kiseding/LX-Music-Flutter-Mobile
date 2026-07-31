@@ -255,7 +255,7 @@ final class BackupRestoreCoordinator {
     final previousPreferences = _storage.snapshot(_preferenceKeys);
     final previousPlaylists = PlaylistSnapshot(
       schemaVersion: 1,
-      playlists: _playlists.playlists,
+      playlists: await _playlists.getAllPlaylists(),
     );
     var playlistWriteAttempted = false;
 

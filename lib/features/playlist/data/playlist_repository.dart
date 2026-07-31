@@ -27,15 +27,18 @@ final class PlaylistSnapshot {
       for (var playlistIndex = 0;
           playlistIndex < playlists.length;
           playlistIndex++)
-        playlists[playlistIndex].copyWith(songs: List.unmodifiable([
-          for (var songIndex = 0;
-              songIndex < playlists[playlistIndex].songs.length;
-              songIndex++)
-            _copySong(
-              playlists[playlistIndex].songs[songIndex],
-              'playlists[$playlistIndex].songs[$songIndex].meta',
-            ),
-        ])),
+        playlists[playlistIndex].copyWith(
+          songs: List.unmodifiable([
+            for (var songIndex = 0;
+                songIndex < playlists[playlistIndex].songs.length;
+                songIndex++)
+              _copySong(
+                playlists[playlistIndex].songs[songIndex],
+                'playlists[$playlistIndex].songs[$songIndex].meta',
+              ),
+          ]),
+          songCount: playlists[playlistIndex].songCount,
+        ),
     ]);
   }
 
@@ -90,6 +93,35 @@ abstract interface class PlaylistRepository {
   Future<void> save(PlaylistSnapshot snapshot);
 }
 
+final class PlaylistSongPage {
+  PlaylistSongPage({
+    required this.total,
+    required this.offset,
+    required List<MusicItem> songs,
+  }) : songs = List.unmodifiable(songs) {
+    if (total < 0 || offset < 0 || offset > total) {
+      throw ArgumentError('Invalid playlist song page range');
+    }
+    if (this.songs.length > total - offset) {
+      throw ArgumentError('Page songs exceed the available range');
+    }
+  }
+
+  final int total;
+  final int offset;
+  final List<MusicItem> songs;
+}
+
+abstract interface class PlaylistSongPageRepository {
+  Future<PlaylistSongPage> loadSongsPage(
+    String playlistId, {
+    required int offset,
+    required int limit,
+  });
+
+  Future<List<MusicItem>> loadAllSongs(String playlistId);
+}
+
 final class PlaylistSnapshotCodec {
   const PlaylistSnapshotCodec();
 
@@ -140,6 +172,9 @@ final class PlaylistSnapshotCodec {
     _nonEmpty(playlist.name, '$path.name');
     _timestamp(playlist.createdAt, '$path.createdAt');
     _timestamp(playlist.updatedAt, '$path.updatedAt');
+    if (playlist.songs.length != playlist.songCount) {
+      throw FormatException('$path songs must be loaded before encoding');
+    }
     return {
       'id': playlist.id,
       'name': playlist.name,
