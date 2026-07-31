@@ -247,72 +247,64 @@ private struct LXLiveActivityContentView: View {
 }
 
 @available(iOSApplicationExtension 16.1, *)
-private struct LXLiveActivityDynamicIsland: View {
-  let context: ActivityViewContext<LiveActivitiesAppAttributes>
+private func lxDynamicIsland(context: ActivityViewContext<LiveActivitiesAppAttributes>) -> DynamicIsland {
+  let defaults = UserDefaults(suiteName: context.state.appGroupId ?? widgetGroupId)
 
-  private var defaults: UserDefaults? {
-    UserDefaults(suiteName: context.state.appGroupId ?? widgetGroupId)
-  }
-
-  private func value(_ key: String) -> String? {
+  func value(_ key: String) -> String? {
     defaults?.string(forKey: context.attributes.prefixedKey(key))
   }
 
-  private var title: String { value("title") ?? "LX Music" }
-  private var artist: String { value("artist") ?? "" }
-  private var artworkPath: String? { value("artworkPath") }
-  private var isPlaying: Bool { defaults?.bool(forKey: context.attributes.prefixedKey("playing")) ?? false }
-  private var positionMs: Double { defaults?.double(forKey: context.attributes.prefixedKey("positionMs")) ?? 0 }
-  private var durationMs: Double { defaults?.double(forKey: context.attributes.prefixedKey("durationMs")) ?? 0 }
+  let title = value("title") ?? "LX Music"
+  let artist = value("artist") ?? ""
+  let artworkPath = value("artworkPath")
+  let isPlaying = defaults?.bool(forKey: context.attributes.prefixedKey("playing")) ?? false
+  let positionMs = defaults?.double(forKey: context.attributes.prefixedKey("positionMs")) ?? 0
+  let durationMs = defaults?.double(forKey: context.attributes.prefixedKey("durationMs")) ?? 0
 
-  private var progressRange: ClosedRange<Date> {
-    let now = Date()
-    let position = max(0, positionMs / 1000)
-    let duration = max(position + 60, durationMs / 1000)
-    let start = now.addingTimeInterval(-position)
-    return start...(start.addingTimeInterval(duration))
-  }
+  let now = Date()
+  let position = max(0, positionMs / 1000)
+  let duration = max(position + 60, durationMs / 1000)
+  let start = now.addingTimeInterval(-position)
+  let progressRange = start...(start.addingTimeInterval(duration))
 
-  var body: some View {
-    DynamicIsland {
-      DynamicIslandExpandedRegion(.leading) {
-        LXArtworkView(path: artworkPath)
-          .frame(width: 56, height: 56)
-          .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-      }
-      DynamicIslandExpandedRegion(.center) {
-        VStack(alignment: .leading, spacing: 2) {
-          Text(title)
-            .font(.headline)
-            .lineLimit(1)
-          Text(artist)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
-        }
-      }
-      DynamicIslandExpandedRegion(.trailing) {
-        Image(systemName: isPlaying ? "play.fill" : "pause.fill")
-          .font(.title3)
-      }
-      DynamicIslandExpandedRegion(.bottom) {
-        if durationMs > 0 {
-          ProgressView(timerInterval: progressRange, countsDown: false)
-            .padding(.horizontal, 8)
-        }
-      }
-    } compactLeading: {
+  return DynamicIsland {
+    DynamicIslandExpandedRegion(.leading) {
       LXArtworkView(path: artworkPath)
-        .frame(width: 24, height: 24)
-        .clipShape(Circle())
-    } compactTrailing: {
-      Image(systemName: isPlaying ? "play.fill" : "pause.fill")
-        .font(.footnote)
-    } minimal: {
-      LXArtworkView(path: artworkPath)
-        .frame(width: 24, height: 24)
-        .clipShape(Circle())
+        .frame(width: 56, height: 56)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
+    DynamicIslandExpandedRegion(.center) {
+      VStack(alignment: .leading, spacing: 2) {
+        Text(title)
+          .font(.headline)
+          .lineLimit(1)
+        Text(artist)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+      }
+    }
+    DynamicIslandExpandedRegion(.trailing) {
+      Image(systemName: isPlaying ? "play.fill" : "pause.fill")
+        .font(.title3)
+    }
+    DynamicIslandExpandedRegion(.bottom) {
+      if durationMs > 0 {
+        ProgressView(timerInterval: progressRange, countsDown: false)
+          .padding(.horizontal, 8)
+      }
+    }
+  } compactLeading: {
+    LXArtworkView(path: artworkPath)
+      .frame(width: 24, height: 24)
+      .clipShape(Circle())
+  } compactTrailing: {
+    Image(systemName: isPlaying ? "play.fill" : "pause.fill")
+      .font(.footnote)
+  } minimal: {
+    LXArtworkView(path: artworkPath)
+      .frame(width: 24, height: 24)
+      .clipShape(Circle())
   }
 }
 
@@ -322,7 +314,7 @@ struct LXMusicLiveActivity: Widget {
     ActivityConfiguration(for: LiveActivitiesAppAttributes.self) { context in
       LXLiveActivityContentView(context: context)
     } dynamicIsland: { context in
-      LXLiveActivityDynamicIsland(context: context)
+      lxDynamicIsland(context: context)
     }
   }
 }
