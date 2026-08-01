@@ -1309,6 +1309,14 @@ class CustomSourceEngine {
         } else {
           await handler(payload);
         }
+      } else if (channel == 'set_timeout') {
+        // 脚本初始化阶段的 setTimeout 会被冻结到 deferred 队列（evaluate
+        // 期间 sendMessage 不能同步回原生）。必须在这里调度，否则依赖
+        // setTimeout 链做初始化（如 sixyin）的源永远无法完成 inited，
+        // 最终 30s 超时。
+        _scheduleDeferredTimeout(payload);
+      } else if (channel == 'clear_timeout') {
+        _clearDeferredTimeout(payload);
       } else {
         _emitError(
             'Source initialization used unsupported deferred channel: $channel.');
@@ -1355,6 +1363,36 @@ class CustomSourceEngine {
       // A malformed source input resolves to the host's empty zlib result.
     }
     return '';
+  }
+
+  /// 初始化阶段被冻结的 setTimeout：在 Dart 侧调度延迟回调。
+  void _scheduleDeferredTimeout(dynamic payload) {
+    try {
+      final data = payload is String ? json.decode(payload) : payload;
+      final id = data['id'];
+      final ms = (data['ms'] as num?)?.toInt() ?? 0;
+      Future<void>.delayed(Duration(milliseconds: ms), () {
+        // 引擎可能已被 dispose（runtime 释放），此时直接忽略延迟回调。
+        if (_runtime == null) return;
+        try {
+          _runtime!.evaluate(
+              'if(globalThis._callbacks && globalThis._callbacks["timeout_$id"]) { globalThis._callbacks["timeout_$id"](); delete globalThis._callbacks["timeout_$id"]; }');
+          _flushMicrotasks(maxIterations: 4);
+          _captureFrozenMessages();
+        } catch (_) {
+          // dispose 竞态：runtime 已释放，忽略。
+        }
+      });
+    } catch (_) {
+      // 消息格式异常时忽略，等待脚本自身的其他初始化路径。
+    }
+  }
+
+  /// 初始化阶段被冻结的 clearTimeout：直接删除 JS 侧回调，防止延迟触发。
+  void _clearDeferredTimeout(dynamic id) {
+    if (_runtime == null) return;
+    _runtime!.evaluate(
+        'if(globalThis._callbacks) delete globalThis._callbacks["timeout_${id ?? ''}"];');
   }
 
   void _resolveDeferredMessage(String? id, String result) {
