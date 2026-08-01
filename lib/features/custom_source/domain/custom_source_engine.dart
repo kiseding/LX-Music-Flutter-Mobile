@@ -10,6 +10,7 @@ import 'package:uuid/uuid.dart';
 import 'package:encrypt/encrypt.dart' as encrypt_lib;
 import 'package:pointycastle/export.dart' as pc;
 import 'lx_source_capabilities.dart';
+import 'source_runtime_polyfill.dart';
 import '../../../core/network/source_request_policy.dart';
 import '../../../core/network/source_pinned_transport.dart';
 import '../domain/custom_source.dart';
@@ -218,6 +219,10 @@ class CustomSourceEngine {
         };
       })();
     ''');
+
+    // 完整 DOM/浏览器 polyfill + 原生 sha256（借鉴 phg-music），
+    // 让对环境敏感的混淆音源（如 sixyin）通过 self-defending 自校验。
+    _runtime!.evaluate(SourceRuntimePolyfill.js());
 
     _runtime!.onMessage('set_timeout', (dynamic args) {
       final data = json.decode(args);
