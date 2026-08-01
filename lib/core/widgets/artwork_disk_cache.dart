@@ -52,7 +52,10 @@ class ArtworkDiskCache {
     final root = _root;
     if (root == null) return null;
     final key = _keyFor(url);
-    final file = File('$root/$key.img');
+    // 用图片扩展名 .jpg：iOS 锁屏/灵动岛的 audio_service 用
+    // `UIImage imageWithContentsOfFile` 读取 artCacheFile，该 API 按扩展名
+    // 识别图片格式，`.img` 会导致 artImage 为 nil、锁屏封面缺失。
+    final file = File('$root/$key.jpg');
     if (!await file.exists()) return null;
     final touched = _diskTouched[key] ?? await file.lastModified();
     if (_clock().difference(touched) > ttl) {
@@ -90,7 +93,7 @@ class ArtworkDiskCache {
     final root = _root;
     if (root == null) return null;
     final key = _keyFor(url);
-    final file = File('$root/$key.img');
+    final file = File('$root/$key.jpg');
     await file.writeAsBytes(bytes, flush: true);
     _diskTouched[key] = _clock();
     _memory.set(key, bytes);

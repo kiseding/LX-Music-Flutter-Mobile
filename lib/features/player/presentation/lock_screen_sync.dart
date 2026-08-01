@@ -234,7 +234,7 @@ class LockScreenSyncService {
         _appGroupId,
       );
       if (directory == null) return;
-      final artworkFile = File('${directory.path}/home_widget/artwork.img');
+      final artworkFile = File('${directory.path}/home_widget/artwork.jpg');
       await artworkFile.parent.create(recursive: true);
       await artworkFile.writeAsBytes(bytes, flush: true);
       _artworkPath = artworkFile.path;

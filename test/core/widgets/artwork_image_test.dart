@@ -23,10 +23,10 @@ void main() {
     expect(artworkNeedsBrowserClient(neteaseUrl), isTrue);
   });
 
-  test('non-netease artwork does not force netease headers', () {
+  test('non-netease artwork uses its own referer headers', () {
     final headers = artworkRequestHeaders(qqUrl);
-    expect(headers, isEmpty);
-    expect(artworkNeedsBrowserClient(qqUrl), isFalse);
+    expect(headers['Referer'], 'https://y.qq.com/');
+    expect(artworkNeedsBrowserClient(qqUrl), isTrue);
   });
 
   test('artwork loader closes client when request fails', () async {
