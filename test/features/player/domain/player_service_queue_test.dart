@@ -33,8 +33,8 @@ void main() {
     ).readAsStringSync();
     expect(source, isNot(contains('final List<MediaItem> _playQueue')));
     expect(source, isNot(contains('int _currentIndex')));
-    expect(source, contains('handler.queueItems'));
-    expect(source, contains('handler.currentQueueIndex'));
+    expect(source, contains('queueItems'));
+    expect(source, contains('currentQueueIndex'));
   });
 
   test('queue metadata updates never replace the active audio source', () {

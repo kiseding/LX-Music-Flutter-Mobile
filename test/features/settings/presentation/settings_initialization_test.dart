@@ -175,10 +175,11 @@ void main() {
 
     final staleWrite = notifier.setQuality(AudioQualityOption.lossless);
     await firstWriteStarted.future;
-    await notifier.setQuality(AudioQualityOption.lossless);
+    final newerWrite = notifier.setQuality(AudioQualityOption.lossless);
     firstWrite.complete(false);
 
     await expectLater(staleWrite, throwsA(isA<StorageWriteException>()));
+    await newerWrite;
     expect(notifier.state, AudioQualityOption.lossless);
   });
 
@@ -277,9 +278,10 @@ void main() {
 
     final staleWrite = notifier.setQuality(AudioQualityOption.low);
     await firstWriteStarted.future;
-    await notifier.setQuality(AudioQualityOption.hires);
+    final newerWrite = notifier.setQuality(AudioQualityOption.hires);
     firstWrite.complete(true);
     await staleWrite;
+    await newerWrite;
 
     expect(notifier.state, AudioQualityOption.hires);
     expect(appliedQualities, ['hires']);

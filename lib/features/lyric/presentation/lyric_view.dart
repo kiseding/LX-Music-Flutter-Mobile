@@ -281,10 +281,10 @@ class _LyricViewState extends ConsumerState<LyricView> {
         currentLineIndex >= 0 && currentLineIndex < lyrics.lines.length
             ? lyrics.lines[currentLineIndex].text
             : '';
-    final previousIndex = lyrics.isEmpty
+    final previousIndex = lyrics.isEmpty || currentLineIndex < 0
         ? -1
         : (currentLineIndex - 1).clamp(0, lyrics.lines.length - 1);
-    final nextIndex = lyrics.isEmpty
+    final nextIndex = lyrics.isEmpty || currentLineIndex < 0
         ? -1
         : (currentLineIndex + 1).clamp(0, lyrics.lines.length - 1);
 

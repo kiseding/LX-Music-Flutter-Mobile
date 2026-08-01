@@ -127,7 +127,8 @@ void main() {
     expect(lyrics.lines[0].text, 'ABCD');
     expect(lyrics.lines[0].hasWordTiming, isTrue);
     expect(lyrics.lines[0].words![1].time, const Duration(milliseconds: 368));
-    expect(lyrics.lines[1].words![1].time, const Duration(milliseconds: 7070));
+    expect(lyrics.lines[1].words![1].time,
+        const Duration(milliseconds: 12960));
     expect(lyrics.lines[1].words![1].text, 'G');
   });
 }

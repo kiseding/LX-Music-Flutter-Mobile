@@ -55,7 +55,14 @@ void main() {
       expect(songs.first.id, '517');
       expect(songs.map((song) => song.id).toSet(), hasLength(12));
       expect(requestedPages.toSet().length, lessThanOrEqualTo(12));
-      expect(requestedPages, isNot(contains(0)));
+      final takenIndices = songs.map((song) => int.parse(song.id));
+      for (final page in requestedPages.toSet()) {
+        expect(
+          takenIndices.any((index) => (index ~/ 100) * 100 == page),
+          isTrue,
+          reason: 'page $page was requested without being needed',
+        );
+      }
     },
   );
 

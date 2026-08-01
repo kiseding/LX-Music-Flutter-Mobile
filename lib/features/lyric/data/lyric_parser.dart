@@ -288,7 +288,7 @@ class LyricParser {
         final words = [
           for (final w in wordsRaw)
             LyricWord(
-              time: w.time + offset,
+              time: time + w.time,
               text: w.text,
               duration: w.duration,
             ),

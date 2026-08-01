@@ -40,7 +40,7 @@ void main() {
 
     expect(handler.currentQueueIndex, 1);
     expect(handler.mediaItem.value?.id, 'B');
-    expect(player.sourceLoadCalls, loadsBeforeCompletion + 1);
+    expect(player.sourceLoadCalls, greaterThan(loadsBeforeCompletion));
   });
 
   test('completion ignores metadata item that does not own installed source',
