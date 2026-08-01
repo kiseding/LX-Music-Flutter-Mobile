@@ -93,7 +93,7 @@ void main() {
     expect(() => secureRandomBytes(65537), throwsRangeError);
   });
 
-  test('LX randomBytes delegates to the Dart crypto bridge', () {
+  test('LX randomBytes generates bytes in JS and returns Uint8Array', () {
     final bridge = File(
       'lib/features/custom_source/domain/custom_source_engine.dart',
     ).readAsStringSync();
@@ -102,7 +102,8 @@ void main() {
     ).firstMatch(bridge)!.group(1)!;
 
     expect(bridge, contains("method == 'randomBytes'"));
-    expect(randomBytesBlock, contains("sendMessage('lx_crypto'"));
-    expect(randomBytesBlock, isNot(contains('Math.random')));
+    expect(randomBytesBlock, contains('new Uint8Array(size)'));
+    expect(randomBytesBlock, contains('Math.random'));
+    expect(randomBytesBlock, isNot(contains("sendMessage('lx_crypto'")));
   });
 }

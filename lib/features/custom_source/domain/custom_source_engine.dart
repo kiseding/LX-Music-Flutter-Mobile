@@ -162,6 +162,22 @@ class CustomSourceEngine {
       globalThis.window = globalThis;
       globalThis.process = { env: { NODE_ENV: 'production' } };
       globalThis.navigator = { userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' };
+
+      // 对齐官方移动版：注入 Web Crypto 兜底。混淆/打包脚本内嵌的
+      // sha256/md5 等库在 QuickJS（无原生 Web Crypto）下会直接访问
+      // crypto.getRandomValues，缺了会抛 "Cannot read properties of
+      // undefined (reading 'crypto')" 导致整个源无法加载。
+      if (typeof globalThis.crypto === 'undefined') {
+        globalThis.crypto = {
+          getRandomValues: function(arr) {
+            if (!arr) return arr;
+            for (var i = 0; i < arr.length; i++) {
+              arr[i] = Math.floor(Math.random() * 256);
+            }
+            return arr;
+          }
+        };
+      }
       
       // 关键修复：使用数字 id (Date.now() + counter) 而不是字符串，
       // 这样脚本里 `clearTimeout(id)` 能用相等的 id 准确取消回调。
@@ -839,8 +855,13 @@ class CustomSourceEngine {
         deflate: function(data) { return Promise.resolve(sendMessage('lx_zlib', JSON.stringify({ method: 'deflate', data: data.toString('base64') }))).then(function(result) { return globalThis.lx.utils.buffer.from(result, 'base64'); }); }
       };
       globalThis.lx.utils.crypto.randomBytes = function(size) {
-        var data = sendMessage('lx_crypto', JSON.stringify({ method: 'randomBytes', input: size }));
-        return globalThis.lx.utils.buffer.from(data, 'base64');
+        // 对齐官方移动版：纯 JS 生成随机字节并返回 Uint8Array，避免同步
+        // 走平台通道（iOS 上易触发通道死锁），也无需 await。
+        var arr = new Uint8Array(size);
+        for (var i = 0; i < size; i++) {
+          arr[i] = Math.floor(Math.random() * 256);
+        }
+        return arr;
       };
       globalThis.Buffer = globalThis.lx.utils.buffer;
       globalThis._callbacks = {};
