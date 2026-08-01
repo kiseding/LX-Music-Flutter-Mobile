@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_app_group_directory/flutter_app_group_directory.dart';
 import 'package:home_widget/home_widget.dart';
 import 'package:live_activities/live_activities.dart';
+import 'package:live_activities/models/url_scheme_data.dart';
 
 import '../../../core/audio/audio_handler.dart';
 import '../../../core/widgets/artwork_disk_cache.dart';
@@ -38,7 +39,11 @@ class LockScreenSyncService {
       await HomeWidget.setAppGroupId(_appGroupId);
       await _liveActivities.init(
         appGroupId: _appGroupId,
+        urlScheme: 'lxmusic',
         requestAndroidNotificationPermission: false,
+      );
+      _subscriptions.add(
+        _liveActivities.urlSchemeStream().listen(_handleUrlCommand),
       );
       _subscriptions.add(_handler.mediaItem.listen((_) => _syncNow()));
       _subscriptions.add(_handler.playbackState.listen((_) => _syncNow()));
@@ -174,6 +179,31 @@ class LockScreenSyncService {
       }
     } catch (e) {
       debugPrint('[LockScreenSync] position sync failed: $e');
+    }
+  }
+
+  /// 处理来自灵动岛 / 锁屏卡片的深链控制命令（lxmusic://command/xxx）。
+  Future<void> _handleUrlCommand(dynamic data) async {
+    try {
+      final path = data is UrlSchemeData ? data.path : data?.toString();
+      if (path == null || path.isEmpty) return;
+      switch (path.replaceFirst(RegExp(r'^/'), '')) {
+        case 'toggle-play':
+          if (_handler.playbackState.value.playing) {
+            await _handler.pause();
+          } else {
+            await _handler.play();
+          }
+          break;
+        case 'next':
+          await _handler.skipToNext();
+          break;
+        case 'previous':
+          await _handler.skipToPrevious();
+          break;
+      }
+    } catch (e) {
+      debugPrint('[LockScreenSync] url command failed: $e');
     }
   }
 

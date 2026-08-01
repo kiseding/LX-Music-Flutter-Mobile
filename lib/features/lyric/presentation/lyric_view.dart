@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/app_colors.dart';
 import '../domain/lyric.dart';
 import '../presentation/lyric_provider.dart';
+import '../presentation/lyrics_translation_provider.dart';
 import '../../player/presentation/player_provider.dart';
 import '../../player/domain/music_item.dart';
 
@@ -116,12 +117,22 @@ class _LyricViewState extends ConsumerState<LyricView> {
     final muted = AppColors.mutedText(context);
     final accent = AppColors.accentOf(context);
 
+    final translationEnabled = ref.watch(lyricsTranslationEnabledProvider);
+    final translations = ref.watch(lyricsTranslationsProvider);
+
     // 换歌/重载歌词时强制滚到当前行
     final identity = '${currentMusic?.id ?? ''}:${lyrics.raw.hashCode}';
     if (identity != _lyricsIdentity) {
       _lyricsIdentity = identity;
       _lastScrolledIndex = -1;
       _isUserScrolling = false;
+      if (translationEnabled && lyrics.isNotEmpty) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          ref.read(lyricsTranslationsProvider.notifier).reset();
+          ref.read(lyricsTranslationsProvider.notifier).ensureForCurrent();
+        });
+      }
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _scrollToCurrent(force: true);
       });
@@ -256,7 +267,26 @@ class _LyricViewState extends ConsumerState<LyricView> {
                           ? (widget.isFullScreen ? 13 : 11)
                           : (widget.isFullScreen ? 11 : 10),
                     ),
-                  ),
+                  )
+                else if (translationEnabled)
+                  Builder(builder: (context) {
+                    final online = translations[line.text.trim()];
+                    if (online == null || online.isEmpty) {
+                      return const SizedBox.shrink();
+                    }
+                    return Text(
+                      online,
+                      textAlign: TextAlign.center,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: transColor,
+                        fontSize: isCurrent
+                            ? (widget.isFullScreen ? 13 : 11)
+                            : (widget.isFullScreen ? 11 : 10),
+                      ),
+                    );
+                  }),
               ],
             ),
           );
@@ -288,19 +318,78 @@ class _LyricViewState extends ConsumerState<LyricView> {
         ? -1
         : (currentLineIndex + 1).clamp(0, lyrics.lines.length - 1);
 
-    return Semantics(
-      label: '歌词',
-      value: currentText,
-      decreasedValue:
-          previousIndex < 0 ? null : lyrics.lines[previousIndex].text,
-      increasedValue: nextIndex < 0 ? null : lyrics.lines[nextIndex].text,
-      onDecrease: previousIndex < 0
-          ? null
-          : () => ref.read(seekProvider)(lyrics.lines[previousIndex].time),
-      onIncrease: nextIndex < 0
-          ? null
-          : () => ref.read(seekProvider)(lyrics.lines[nextIndex].time),
-      child: lyricList,
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: Semantics(
+            label: '歌词',
+            value: currentText,
+            decreasedValue:
+                previousIndex < 0 ? null : lyrics.lines[previousIndex].text,
+            increasedValue: nextIndex < 0 ? null : lyrics.lines[nextIndex].text,
+            onDecrease: previousIndex < 0
+                ? null
+                : () => ref.read(seekProvider)(lyrics.lines[previousIndex].time),
+            onIncrease: nextIndex < 0
+                ? null
+                : () => ref.read(seekProvider)(lyrics.lines[nextIndex].time),
+            child: lyricList,
+          ),
+        ),
+        Positioned(
+          top: 8,
+          right: 12,
+          child: _TranslationToggle(enabled: translationEnabled),
+        ),
+      ],
+    );
+  }
+
+  Widget _TranslationToggle({required bool enabled}) {
+    return GestureDetector(
+      onTap: () {
+        final next = !enabled;
+        ref.read(lyricsTranslationEnabledProvider.notifier).setEnabled(next);
+        if (next) {
+          ref.read(lyricsTranslationsProvider.notifier).ensureForCurrent();
+        }
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        decoration: BoxDecoration(
+          color: enabled
+              ? AppColors.accentOf(context).withValues(alpha: 0.18)
+              : AppColors.fill(context).withValues(alpha: 0.6),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: enabled
+                ? AppColors.accentOf(context).withValues(alpha: 0.5)
+                : AppColors.cardBorder(context),
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.translate,
+              size: 13,
+              color: enabled
+                  ? AppColors.accentOf(context)
+                  : AppColors.mutedText(context),
+            ),
+            const SizedBox(width: 4),
+            Text(
+              enabled ? '翻译中' : '翻译',
+              style: TextStyle(
+                fontSize: 11,
+                color: enabled
+                    ? AppColors.accentOf(context)
+                    : AppColors.mutedText(context),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 

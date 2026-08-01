@@ -10,7 +10,6 @@ import '../../../core/theme/app_colors.dart';
 import '../../../core/widgets/app_notification.dart';
 import '../../../core/storage/storage_service.dart';
 import 'settings_provider.dart';
-import '../../download/presentation/download_provider.dart';
 import '../../search/presentation/search_provider.dart';
 import '../../playlist/data/playlist_repository.dart';
 import '../../playlist/presentation/playlist_provider.dart';
@@ -110,6 +109,29 @@ class SettingsScreen extends ConsumerWidget {
                 '默认搜索平台',
                 _platformName(ref.watch(defaultSearchPlatformProvider)),
                 () => _showDefaultPlatformDialog(context, ref),
+              ),
+              _buildNavTile(
+                context,
+                ref,
+                '听歌统计',
+                '播放历史 · Top 排行 · 热力图',
+                () => context.push('/stats'),
+              ),
+            ]),
+            _buildSection(context, '歌单', [
+              _buildNavTile(
+                context,
+                ref,
+                '智能歌单',
+                '按规则自动筛选歌曲',
+                () => context.push('/smart-playlists'),
+              ),
+              _buildNavTile(
+                context,
+                ref,
+                '重复歌曲',
+                '检测并清理重复歌曲',
+                () => context.push('/duplicates'),
               ),
             ]),
             _buildSection(context, '下载', [

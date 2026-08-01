@@ -395,9 +395,19 @@ private struct LXLiveActivityContentView: View {
           }
         }
         Spacer(minLength: 0)
-        Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-          .font(.title3)
-          .foregroundStyle(.white)
+        HStack(spacing: 18) {
+          Link(destination: URL(string: "lxmusic://command/previous")!) {
+            Image(systemName: "backward.fill").font(.title3)
+          }
+          Link(destination: URL(string: "lxmusic://command/toggle-play")!) {
+            Image(systemName: isPlaying ? "pause.fill" : "play.fill").font(.title2)
+          }
+          Link(destination: URL(string: "lxmusic://command/next")!) {
+            Image(systemName: "forward.fill").font(.title3)
+          }
+        }
+        .foregroundStyle(.white)
+        .buttonStyle(.plain)
       }
       .padding(14)
     }
@@ -486,6 +496,23 @@ private func lxDynamicIsland(context: ActivityViewContext<LiveActivitiesAppAttri
             ProgressView(value: min(currentPositionMs, durationMs), total: durationMs)
           }
         }
+        HStack {
+          Spacer()
+          Link(destination: URL(string: "lxmusic://command/previous")!) {
+            Image(systemName: "backward.fill").font(.subheadline)
+          }
+          Spacer()
+          Link(destination: URL(string: "lxmusic://command/toggle-play")!) {
+            Image(systemName: isPlaying ? "pause.fill" : "play.fill").font(.title3)
+          }
+          Spacer()
+          Link(destination: URL(string: "lxmusic://command/next")!) {
+            Image(systemName: "forward.fill").font(.subheadline)
+          }
+          Spacer()
+        }
+        .foregroundStyle(.white)
+        .buttonStyle(.plain)
       }
       .padding(.horizontal, 8)
     }

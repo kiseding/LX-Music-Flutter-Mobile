@@ -5,6 +5,7 @@ import 'package:lx_music_flutter/core/widgets/app_notification.dart';
 import 'package:lx_music_flutter/router/app_router.dart';
 import 'package:lx_music_flutter/features/settings/presentation/settings_provider.dart';
 import 'package:lx_music_flutter/features/player/presentation/player_provider.dart';
+import 'package:lx_music_flutter/features/stats/presentation/play_history_provider.dart';
 
 class PlayerMessageListener extends ConsumerStatefulWidget {
   const PlayerMessageListener({super.key, required this.child});
@@ -51,6 +52,7 @@ class LxMusicApp extends ConsumerWidget {
     final themeMode = ref.watch(themeModeProvider);
     ref.watch(playbackSessionRecorderProvider);
     ref.watch(recentPlayRecorderProvider);
+    ref.watch(playHistoryRecorderProvider);
 
     return MaterialApp.router(
       title: 'LX Music',

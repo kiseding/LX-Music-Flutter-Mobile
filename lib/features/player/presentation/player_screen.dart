@@ -8,6 +8,7 @@ import '../../../core/widgets/artwork_image.dart';
 import '../../../core/widgets/page_navigation_bar.dart';
 import '../../../core/widgets/pressable.dart';
 import '../../../core/widgets/play_pulse_button.dart';
+import '../../../core/widgets/cover_tint_provider.dart';
 import '../../../core/network/play_url_result.dart';
 import '../domain/music_item.dart';
 import '../domain/player_service.dart';
@@ -326,6 +327,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     final duration = ref.watch(durationProvider).value ?? currentMusic.duration;
     final isFavorite =
         ref.watch(isSongFavoriteProvider(currentMusic.id)).valueOrNull ?? false;
+    final coverTint =
+        ref.watch(coverTintColorProvider(currentMusic.artwork ?? '')).value;
 
     final screenH = MediaQuery.of(context).size.height;
     final dismissThreshold = screenH * 0.4; // 超过 2/5 关闭
@@ -353,8 +356,27 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
               color: Theme.of(context).scaffoldBackgroundColor,
               elevation: 8,
               shadowColor: Colors.black54,
-              child: SafeArea(
-                child: GestureDetector(
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  Positioned.fill(
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 400),
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [
+                            (coverTint ?? Colors.transparent)
+                                .withValues(alpha: 0.32),
+                            Theme.of(context).scaffoldBackgroundColor,
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  SafeArea(
+                    child: GestureDetector(
                   onVerticalDragStart: (_) {
                     setState(() {
                       _draggingDown = true;
@@ -432,8 +454,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                   ),
                 ),
               ),
-            ),
+            ],
           ),
+        ),
+      ),
         ],
       ),
     );
