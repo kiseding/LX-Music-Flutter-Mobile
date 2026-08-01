@@ -322,12 +322,12 @@ void main() {
       );
       final first = item('A');
       await handler.setPlaylist([first, item('B')]);
-      player.gateNextPause();
+      player.gateNextSourceLoad();
 
       final navigation = handler.skipToNext();
-      await player.pauseStarted.future;
+      await player.sourceLoadStarted.future;
       await handler.updateQueue([first]);
-      player.releasePause.complete();
+      player.releaseSourceLoad.complete();
       await navigation;
 
       await handler.skipToQueueItem(0);
@@ -340,7 +340,7 @@ void main() {
 
   for (final direction in ['next', 'previous']) {
     test(
-      '$direction follows its occurrence when queue moves during pause',
+      '$direction follows its occurrence when queue moves during load',
       () async {
         MediaItem item(String id) => MediaItem(
           id: id,
@@ -358,16 +358,16 @@ void main() {
         final liveA = handler.queueItems[0];
         final liveB = handler.queueItems[1];
         final liveC = handler.queueItems[2];
-        player.gateNextPause();
+        player.gateNextSourceLoad();
 
         final navigation = direction == 'next'
             ? handler.skipToNext()
             : handler.skipToPrevious();
-        await player.pauseStarted.future;
+        await player.sourceLoadStarted.future;
         await handler.updateQueue(
           direction == 'next' ? [liveA, liveC, liveB] : [liveB, liveA, liveC],
         );
-        player.releasePause.complete();
+        player.releaseSourceLoad.complete();
         await navigation;
 
         expect(handler.mediaItem.value?.id, 'B');

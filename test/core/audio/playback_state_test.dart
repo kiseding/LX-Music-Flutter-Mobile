@@ -45,7 +45,8 @@ void main() {
     final player = _PlaybackStateAudioPlayer();
     final handler = LxAudioHandler(player: player);
     addTearDown(player.dispose);
-    await handler.updateQueue([
+    handler.urlResolver = (id, [extras]) async => 'file:///tmp/$id.mp3';
+    await handler.setPlaylist([
       const MediaItem(id: 'A', title: 'A'),
       const MediaItem(id: 'B', title: 'B'),
     ]);
