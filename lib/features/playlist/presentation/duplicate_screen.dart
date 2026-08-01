@@ -207,11 +207,7 @@ class _DuplicateScreenState extends ConsumerState<DuplicateScreen> {
     setState(() => _removing = true);
     try {
       final service = ref.read(playlistServiceProvider);
-      var removed = 0;
-      for (final id in songIds) {
-        final ok = await service.removeSongFromPlaylist('favorites', id);
-        if (ok) removed++;
-      }
+      final removed = await service.removeSongsFromPlaylist('favorites', songIds);
       if (!mounted) return;
       showAppNotification(
         '已移除 $removed 处重复项',

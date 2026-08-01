@@ -230,20 +230,40 @@ class PlaylistService {
   }
 
   Future<bool> removeSongFromPlaylist(String playlistId, String songId) {
+    return removeSongsFromPlaylist(playlistId, [songId]).then((n) => n > 0);
+  }
+
+  /// 批量移除同一歌单中的多首歌曲，只触发一次持久化与一次 revision，
+  /// 避免逐首移除导致的重复刷新（UI 闪烁）。
+  Future<int> removeSongsFromPlaylist(
+    String playlistId,
+    Iterable<String> songIds,
+  ) {
+    final ids = songIds.toSet();
     return _mutate((current) {
       final index = _indexOf(current, playlistId);
       final existing = current[index];
-      if (!existing.songs.any((song) => song.id == songId)) {
-        return (next: current, result: false, changed: false);
+      if (existing.songs.isEmpty || ids.isEmpty) {
+        return (next: current, result: 0, changed: false);
+      }
+      var removed = 0;
+      final kept = <MusicItem>[];
+      for (final song in existing.songs) {
+        if (ids.contains(song.id)) {
+          removed++;
+        } else {
+          kept.add(song);
+        }
+      }
+      if (removed == 0) {
+        return (next: current, result: 0, changed: false);
       }
       final updated = existing.copyWith(
-        songs: List.unmodifiable(
-          existing.songs.where((song) => song.id != songId),
-        ),
+        songs: List.unmodifiable(kept),
         updatedAt: _clock(),
       );
       final next = _replacePlaylistAt(current, index, updated);
-      return (next: next, result: true, changed: true);
+      return (next: next, result: removed, changed: true);
     });
   }
 

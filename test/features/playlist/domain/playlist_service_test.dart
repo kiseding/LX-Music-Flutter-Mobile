@@ -871,6 +871,41 @@ void main() {
     expect(service.revision, 5);
     await service.dispose();
   });
+
+  test('removeSongsFromPlaylist removes multiple ids in a single revision',
+      () async {
+    final repository = MemoryPlaylistRepository(systemSnapshot(additional: [
+      playlist('custom', songs: [song('a'), song('b'), song('c'), song('d')]),
+    ]));
+    final service = PlaylistService(repository: repository);
+    await service.init();
+
+    final revisionBefore = service.revision;
+    final removed =
+        await service.removeSongsFromPlaylist('custom', ['a', 'c', 'missing']);
+    expect(removed, 2);
+    expect(service.getPlaylist('custom')!.songs.map((item) => item.id),
+        ['b', 'd']);
+    expect(service.revision, revisionBefore + 1);
+    expect(repository.saves, hasLength(1));
+    await service.dispose();
+  });
+
+  test('removeSongsFromPlaylist returns 0 and does not mutate when nothing matches',
+      () async {
+    final repository = MemoryPlaylistRepository(systemSnapshot(additional: [
+      playlist('custom', songs: [song('a'), song('b')]),
+    ]));
+    final service = PlaylistService(repository: repository);
+    await service.init();
+
+    final revisionBefore = service.revision;
+    final removed = await service.removeSongsFromPlaylist('custom', ['zzz']);
+    expect(removed, 0);
+    expect(service.revision, revisionBefore);
+    expect(repository.saves, hasLength(0));
+    await service.dispose();
+  });
 }
 
 final class ControlledPlaylistRepository implements PlaylistRepository {
