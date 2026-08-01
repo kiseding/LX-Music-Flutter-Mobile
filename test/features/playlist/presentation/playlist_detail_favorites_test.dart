@@ -21,7 +21,7 @@ void main() {
     expect(more, contains('Dialog('));
     expect(more, contains('BorderRadius.circular(20)'));
     expect(more, contains('maxHeight: maxH'));
-    expect(more, contains('全部添加到我喜欢的音乐'));
+    expect(more, contains('全部添加到收藏列表'));
     expect(more, contains('await ref'));
     expect(more, contains('.addAllSongsToFavorites(playlist.id)'));
     expect(more, isNot(contains('showModalBottomSheet')));
@@ -32,7 +32,7 @@ void main() {
       'lib/features/playlist/presentation/playlist_detail_screen.dart',
     ).readAsStringSync();
     expect(source, isNot(contains("case 'add_all_to_favorites':")));
-    expect(source, isNot(contains('全部添加到我喜欢的音乐')));
+    expect(source, isNot(contains('全部添加到收藏列表')));
   });
 
   testWidgets('replaceAll removal shows missing playlist without stale actions',

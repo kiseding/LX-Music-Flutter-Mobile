@@ -420,7 +420,7 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      '我喜欢的音乐',
+                       '收藏列表',
                       style: TextStyle(
                         color: onAccent,
                         fontSize: 16,
@@ -477,7 +477,7 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
     dynamic playerService,
   ) {
     final songCount = recent?.songCount ?? 0;
-    // 蓝色渐变（与“我喜欢的音乐”结构一致，仅替换为蓝色）
+    // 蓝色渐变（与收藏列表结构一致，仅替换为蓝色）
     const blue = Colors.blue;
     final onBlue = Colors.white;
 
@@ -1409,7 +1409,7 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
                               playlist.songCount > 0)
                             action(
                               icon: Icons.favorite_border_rounded,
-                              label: '全部添加到我喜欢的音乐',
+                               label: '全部添加到收藏列表',
                               onTap: () async {
                                 final int added;
                                 try {
@@ -1429,8 +1429,8 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
                                 if (!context.mounted) return;
                                 showAppNotification(
                                   added == 0
-                                      ? '所有歌曲已在我喜欢的音乐中'
-                                      : '已添加 $added 首到我喜欢的音乐',
+                                       ? '所有歌曲已在收藏列表中'
+                                       : '已添加 $added 首到收藏列表',
                                   type: added == 0
                                       ? AppNotificationType.info
                                       : AppNotificationType.success,

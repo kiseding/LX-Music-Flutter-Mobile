@@ -155,7 +155,7 @@ class RecommendationScreen extends ConsumerWidget {
               style: TextStyle(
                   color: AppColors.mutedText(context), fontSize: 14)),
           const SizedBox(height: 4),
-          Text('“我喜欢的音乐”满 100 首后，将随机取样推荐 30 首歌曲',
+          Text('“收藏列表”满 100 首后，将随机取样推荐 30 首歌曲',
               style: TextStyle(
                   color: AppColors.mutedText(context), fontSize: 12)),
         ],
