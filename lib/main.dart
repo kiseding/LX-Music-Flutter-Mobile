@@ -197,15 +197,14 @@ void main() async {
     }
 
     // 恢复上次播放会话：默认只加载队列并暂停，自动恢复由设置控制。
-    // 加总超时防止音源不可用时阻塞启动（白屏）。
-    try {
-      await restorePlaybackSession(
-        container: container,
-        autoplay: preferences.getBool('auto_resume_playback') ?? false,
-      ).timeout(const Duration(seconds: 15));
-    } catch (e) {
-      debugPrint('[startup] 恢复播放会话失败或超时: $e');
-    }
+    // 异步执行，不阻塞 runApp：否则音源不可用时 URL 解析会卡住首帧
+    // 渲染，造成启动白屏。
+    unawaited(restorePlaybackSession(
+      container: container,
+      autoplay: preferences.getBool('auto_resume_playback') ?? false,
+    ).catchError((Object e) {
+      debugPrint('[startup] 恢复播放会话失败: $e');
+    }));
 
     final lockScreenSync = LockScreenSyncService(
       lxHandler,
