@@ -20,14 +20,39 @@ const String kArtworkUserAgent =
 
 Map<String, String> artworkRequestHeaders(String url) {
   final lower = url.toLowerCase();
-  final isNetease = lower.contains('music.126.net') ||
+  if (lower.contains('music.126.net') ||
       lower.contains('126.net') ||
-      lower.contains('music.163.com');
-  if (!isNetease) return const {};
-  return const {
-    'User-Agent': kArtworkUserAgent,
-    'Referer': 'https://music.163.com/',
-  };
+      lower.contains('music.163.com')) {
+    // 网易云：防盗链，需要浏览器 UA + 网易 Referer
+    return const {
+      'User-Agent': kArtworkUserAgent,
+      'Referer': 'https://music.163.com/',
+    };
+  }
+  if (lower.contains('y.gtimg.cn') ||
+      lower.contains('y.ggtimg.cn') ||
+      lower.contains('imgcache.qq.com')) {
+    // 腾讯系封面：防盗链，需 QQ 音乐 Referer
+    return const {
+      'User-Agent': kArtworkUserAgent,
+      'Referer': 'https://y.qq.com/',
+    };
+  }
+  if (lower.contains('img1.kuwo.cn') || lower.contains('kuwo.cn')) {
+    // 酷我封面：防盗链
+    return const {
+      'User-Agent': kArtworkUserAgent,
+      'Referer': 'https://www.kuwo.cn/',
+    };
+  }
+  if (lower.contains('kugou.com') || lower.contains('kgimg.com')) {
+    // 酷狗封面：防盗链
+    return const {
+      'User-Agent': kArtworkUserAgent,
+      'Referer': 'https://www.kugou.com/',
+    };
+  }
+  return const {};
 }
 
 bool artworkNeedsBrowserClient(String url) {
