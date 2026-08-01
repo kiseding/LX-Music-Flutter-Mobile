@@ -12,11 +12,19 @@ import '../domain/custom_source.dart';
 import '../domain/custom_source_service.dart';
 import 'custom_source_provider.dart';
 
-class CustomSourceScreen extends ConsumerWidget {
+class CustomSourceScreen extends ConsumerStatefulWidget {
   const CustomSourceScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<CustomSourceScreen> createState() =>
+      _CustomSourceScreenState();
+}
+
+class _CustomSourceScreenState extends ConsumerState<CustomSourceScreen> {
+  final Set<String> _initializingSources = {};
+
+  @override
+  Widget build(BuildContext context) {
     final sources = ref.watch(customSourcesProvider);
 
     return Scaffold(
@@ -124,15 +132,45 @@ class CustomSourceScreen extends ConsumerWidget {
                   ],
                 ),
               ),
-              Switch(
-                value: source.isEnabled,
-                activeThumbColor: AppColors.accentOf(context),
-                onChanged: (value) {
-                  ref
-                      .read(customSourcesProvider.notifier)
-                      .toggleSource(source.id);
-                },
-              ),
+              if (_initializingSources.contains(source.id))
+                const SizedBox(
+                  width: 59,
+                  height: 32,
+                  child: Center(
+                    child: SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                  ),
+                )
+              else
+                Switch(
+                  value: source.isEnabled,
+                  activeThumbColor: AppColors.accentOf(context),
+                  onChanged: (value) async {
+                    setState(() => _initializingSources.add(source.id));
+                    bool ok = true;
+                    try {
+                      ok = await ref
+                          .read(customSourcesProvider.notifier)
+                          .toggleSource(source.id);
+                    } finally {
+                      if (mounted) {
+                        setState(
+                            () => _initializingSources.remove(source.id));
+                      }
+                    }
+                    if (!ok && mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('${source.name} 初始化失败，请检查脚本'),
+                          duration: const Duration(seconds: 3),
+                        ),
+                      );
+                    }
+                  },
+                ),
             ],
           ),
           if (source.description.isNotEmpty) ...[

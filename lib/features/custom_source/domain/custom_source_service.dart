@@ -155,13 +155,17 @@ class CustomSourceService {
         ));
   }
 
-  Future<void> toggleSource(String id) async {
+  /// 切换源启用状态。启用时会立即初始化引擎（官方行为），
+  /// 返回初始化是否成功；禁用返回 true。
+  Future<bool> toggleSource(String id) async {
+    final int index = _sources.indexWhere((source) => source.id == id);
+    final CustomSource? target = index >= 0 ? _sources[index] : null;
+    final bool willEnable = target != null && !target.isEnabled;
     await _mutate<void>((current) {
-      final index = current.indexWhere((source) => source.id == id);
-      if (index >= 0) {
-        final bool willEnable = !current[index].isEnabled;
+      final curIndex = current.indexWhere((source) => source.id == id);
+      if (curIndex >= 0) {
         for (int i = 0; i < current.length; i++) {
-          if (i == index) {
+          if (i == curIndex) {
             current[i] = current[i].copyWith(
               isEnabled: willEnable,
               updatedAt: DateTime.now(),
@@ -173,6 +177,17 @@ class CustomSourceService {
       }
       return _SourceMutation(current, null);
     });
+    // 启用时立即初始化引擎（真实加载脚本并注册 handler），
+    // 而不是等到第一次请求才懒加载。
+    if (willEnable && target != null) {
+      final engine = _getEngine(id);
+      try {
+        return await engine.loadSource(target);
+      } catch (_) {
+        return false;
+      }
+    }
+    return true;
   }
 
   CustomSourceEngine _getEngine(String sourceId) {

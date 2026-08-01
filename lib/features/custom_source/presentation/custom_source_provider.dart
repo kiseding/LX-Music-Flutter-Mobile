@@ -52,11 +52,12 @@ class CustomSourcesNotifier extends StateNotifier<List<CustomSource>> {
     state = _service.sources;
   }
 
-  Future<void> toggleSource(String id) async {
+  Future<bool> toggleSource(String id) async {
     final generation = ++_generation;
-    await _service.toggleSource(id);
-    if (generation != _generation) return;
+    final result = await _service.toggleSource(id);
+    if (generation != _generation) return false;
     state = _service.sources;
+    return result;
   }
 
   Future<bool> importSource(String jsonStr) async {
