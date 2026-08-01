@@ -14,6 +14,7 @@ import '../features/sync/presentation/sync_screen.dart';
 import '../features/stats/presentation/stats_screen.dart';
 import '../features/smart_playlist/presentation/smart_playlist_list_screen.dart';
 import '../features/playlist/presentation/duplicate_screen.dart';
+import '../features/recommend/presentation/recommendation_screen.dart';
 
 final GlobalKey<NavigatorState> _rootNavigatorKey = GlobalKey<NavigatorState>();
 
@@ -147,6 +148,11 @@ final appRouter = GoRouter(
       path: '/duplicates',
       parentNavigatorKey: _rootNavigatorKey,
       builder: (context, state) => const DuplicateScreen(),
+    ),
+    GoRoute(
+      path: '/recommend',
+      parentNavigatorKey: _rootNavigatorKey,
+      builder: (context, state) => const RecommendationScreen(),
     ),
   ],
 );

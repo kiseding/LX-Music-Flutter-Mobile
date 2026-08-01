@@ -10,6 +10,7 @@ import '../domain/playlist_service.dart';
 import '../../player/domain/music_item.dart';
 import 'playlist_provider.dart';
 import '../../player/presentation/player_provider.dart';
+import '../../recommend/presentation/recommendation_provider.dart';
 
 enum PlaylistSortMode { recent, name, songCount }
 
@@ -181,6 +182,8 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
                 children: [
                   if (_searchQuery.isEmpty) ...[
                     _buildFavoritesCard(context, ref, favorites, playerService),
+                    const SizedBox(height: 12),
+                    _buildRecommendCard(context, ref, playerService),
                     const SizedBox(height: 12),
                     _buildRecentCard(context, ref, recent, playerService),
                     const SizedBox(height: 24),
@@ -551,6 +554,95 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
                       Icons.play_arrow_rounded,
                       color: onBlue,
                       size: 30,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildRecommendCard(
+    BuildContext context,
+    WidgetRef ref,
+    dynamic playerService,
+  ) {
+    final recommendations = ref.watch(recommendationProvider);
+    final count = recommendations.length;
+    const orange = Color(0xFFFF8F1F);
+    const onOrange = Colors.white;
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: () => context.push('/recommend'),
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [orange.withAlpha(235), orange.withAlpha(130)],
+            ),
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  color: onOrange.withAlpha(40),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child:
+                    const Icon(Icons.auto_awesome, color: onOrange, size: 28),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '猜你喜欢',
+                      style: TextStyle(
+                        color: onOrange,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      count > 0 ? '为你推荐 $count 首歌曲' : '收藏歌曲后为你推荐',
+                      style: TextStyle(
+                        color: onOrange.withAlpha(200),
+                        fontSize: 13,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Semantics(
+                container: true,
+                child: Container(
+                  width: 48,
+                  height: 48,
+                  decoration: BoxDecoration(
+                    color: onOrange.withAlpha(40),
+                    shape: BoxShape.circle,
+                  ),
+                  child: IconButton(
+                    tooltip: '查看推荐',
+                    padding: EdgeInsets.zero,
+                    onPressed: () => context.push('/recommend'),
+                    icon: Icon(
+                      Icons.arrow_forward_rounded,
+                      color: onOrange,
+                      size: 24,
                     ),
                   ),
                 ),
