@@ -56,6 +56,12 @@ class LyricNotifier extends StateNotifier<LyricLoadState> {
   String? _selectedSongId;
 
   Future<void> select(MusicItem? music) async {
+    // 同一首歌的元数据刷新（如封面下载后 patchQueueArtUri 触发 mediaItem
+    // 变化）不应清空并重新加载歌词，否则逐字歌词会在播放中突然消失。
+    if (music?.id == _selectedSongId && state.lyrics.isNotEmpty) {
+      _selectedMusic = music;
+      return;
+    }
     final generation = ++_generation;
     _selectedMusic = music;
     _selectedSongId = music?.id;
