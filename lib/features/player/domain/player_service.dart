@@ -4,6 +4,7 @@ import 'package:audio_service/audio_service.dart';
 import '../domain/music_item.dart';
 import '../../../core/audio/audio_handler.dart';
 import '../../../core/network/outbound_url.dart';
+import '../../../core/widgets/app_notification.dart';
 import '../../../core/widgets/artwork_disk_cache.dart';
 import 'lazy_playlist_order.dart';
 
@@ -23,16 +24,26 @@ class PlayerService {
   bool get isPlaying => audioHandler.playbackState.value.playing;
   MediaItem? get mediaItem => audioHandler.mediaItem.value;
 
-  Future<void> setQueue(List<MusicItem> songs, {int startIndex = 0}) async {
-    await playPlaylist(songs, index: startIndex);
+  Future<void> setQueue(
+    List<MusicItem> songs, {
+    int startIndex = 0,
+    String? manualPlayName,
+  }) async {
+    await playPlaylist(songs, index: startIndex, manualPlayName: manualPlayName);
   }
 
   /// Instant start: no await on artwork download.
+  /// [manualPlayName] 非空时立即弹顶部通知（仅手动点击歌曲播放的场景，
+  /// 自动切歌 / 会话恢复不传，避免误弹）。
   Future<void> playPlaylist(
     List<MusicItem> songs, {
     int index = 0,
     bool autoplay = true,
+    String? manualPlayName,
   }) async {
+    if (manualPlayName != null) {
+      _notifyManualPlay(manualPlayName);
+    }
     currentLazyPlaylistId = null;
     currentLazyPlaylistSongCount = 0;
     final items = songs.map(_convertToMediaItemSync).toList();
@@ -52,6 +63,7 @@ class PlayerService {
     required Future<List<MusicItem>> Function(int offset, int limit) loadPage,
     String? playlistId,
     bool autoplay = true,
+    bool manual = false,
   }) async {
     currentLazyPlaylistId = playlistId;
     currentLazyPlaylistSongCount = songCount;
@@ -74,6 +86,9 @@ class PlayerService {
 
     final initialEntries = await window.takeEntries(9);
     if (initialEntries.isEmpty) return;
+    if (manual) {
+      _notifyManualPlay(initialEntries.first.song.name);
+    }
     handler.configureLazyQueue(
       loadMore: (minimumItems) async {
         var entries = await window.takeEntries(minimumItems);
@@ -121,6 +136,13 @@ class PlayerService {
     } else {
       isPlaying ? await audioHandler.pause() : await audioHandler.play();
     }
+  }
+
+  void _notifyManualPlay(String songName) {
+    showAppNotification(
+      '播放"$songName"',
+      type: AppNotificationType.info,
+    );
   }
 
   MediaItem _convertToMediaItemSync(MusicItem song, {int? lazyPlaylistIndex}) {

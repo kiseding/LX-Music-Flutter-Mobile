@@ -308,7 +308,9 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
               final pIndex = playable.indexWhere((e) => e.id == item.id);
               ref
                   .read(playerServiceProvider)
-                  .setQueue(playable, startIndex: pIndex >= 0 ? pIndex : 0);
+                  .setQueue(playable,
+                      startIndex: pIndex >= 0 ? pIndex : 0,
+                      manualPlayName: item.name);
             }
           },
           onLongPress: isSonglist
@@ -469,7 +471,8 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                 Navigator.pop(ctx);
                 final pIndex = playableItems.indexWhere((e) => e.id == item.id);
                 ref.read(playerServiceProvider).setQueue(playableItems.cast(),
-                    startIndex: pIndex >= 0 ? pIndex : 0);
+                    startIndex: pIndex >= 0 ? pIndex : 0,
+                    manualPlayName: item.name);
               },
             ),
             ListTile(

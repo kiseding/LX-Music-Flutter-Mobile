@@ -1103,6 +1103,10 @@ class _PlaybackQueueSheetState extends ConsumerState<_PlaybackQueueSheet> {
       await widget.playerService.setQueue(
         widget.queue.map((e) => MusicItem.fromJson(e.extras ?? {})).toList(),
         startIndex: globalIndex,
+        manualPlayName:
+            globalIndex >= 0 && globalIndex < widget.queue.length
+            ? widget.queue[globalIndex].title
+            : null,
       );
       return;
     }
@@ -1113,6 +1117,7 @@ class _PlaybackQueueSheetState extends ConsumerState<_PlaybackQueueSheet> {
           : widget.queue.length,
       startIndex: globalIndex,
       playlistId: playlistId,
+      manual: true,
       loadPage: (offset, limit) async {
         final page = await ref
             .read(playlistServiceProvider)

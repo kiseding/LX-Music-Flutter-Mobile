@@ -519,7 +519,10 @@ class _DownloadScreenState extends ConsumerState<DownloadScreen> {
     final currentIndex = completedTasks.indexWhere((t) => t.id == task.id);
     ref
         .read(playerServiceProvider)
-        .setQueue(items, startIndex: currentIndex >= 0 ? currentIndex : 0);
+        .setQueue(items,
+            startIndex: currentIndex >= 0 ? currentIndex : 0,
+            manualPlayName:
+                currentIndex >= 0 ? items[currentIndex].name : null);
   }
 
   void _pauseAll(WidgetRef ref) {

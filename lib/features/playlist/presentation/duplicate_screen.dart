@@ -130,8 +130,11 @@ class _DuplicateScreenState extends ConsumerState<DuplicateScreen> {
                 tooltip: '播放',
                 icon: Icon(Icons.play_arrow,
                     size: 22, color: AppColors.accentOf(context)),
-                onPressed: () =>
-                    playProvider.playPlaylist(group.songs, index: 0),
+                onPressed: () => playProvider.playPlaylist(
+                  group.songs,
+                  index: 0,
+                  manualPlayName: group.songs.first.name,
+                ),
               ),
             ],
           ),

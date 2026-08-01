@@ -300,6 +300,7 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
         songCount: playlist.songCount,
         startIndex: startIndex,
         playlistId: playlist.id,
+        manual: true,
         loadPage: (offset, limit) async {
           final page = await ref
               .read(playlistServiceProvider)

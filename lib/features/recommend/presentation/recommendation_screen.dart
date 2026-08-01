@@ -85,11 +85,13 @@ class RecommendationScreen extends ConsumerWidget {
                             onPressed: () => playProvider.playPlaylist(
                               recommendations.map((r) => r.song).toList(),
                               index: index,
+                              manualPlayName: recommendations[index].song.name,
                             ),
                           ),
                           onTap: () => playProvider.playPlaylist(
                             recommendations.map((r) => r.song).toList(),
                             index: index,
+                            manualPlayName: recommendations[index].song.name,
                           ),
                           );
                         },

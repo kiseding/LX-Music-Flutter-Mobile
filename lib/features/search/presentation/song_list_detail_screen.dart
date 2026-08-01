@@ -69,7 +69,9 @@ class _SongListDetailScreenState extends ConsumerState<SongListDetailScreen> {
               TextButton.icon(
                 onPressed: () {
                   final playerService = ref.read(playerServiceProvider);
-                  playerService.setQueue(_songs, startIndex: 0);
+                  playerService.setQueue(_songs,
+                      startIndex: 0,
+                      manualPlayName: _songs.first.name);
                 },
                 icon: Icon(Icons.play_arrow, color: AppColors.amber, size: 20),
                 label: const Text('播放全部',
@@ -117,7 +119,8 @@ class _SongListDetailScreenState extends ConsumerState<SongListDetailScreen> {
                                 final playerService =
                                     ref.read(playerServiceProvider);
                                 playerService.setQueue(_songs,
-                                    startIndex: index);
+                                    startIndex: index,
+                                    manualPlayName: song.name);
                               },
                               child: Padding(
                                 padding: EdgeInsets.all(12),
