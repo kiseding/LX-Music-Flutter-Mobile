@@ -924,9 +924,27 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     if (_disposed) return;
     _userIntentGeneration++;
     _userWantsPlay = true;
-    if (_player.processingState == ProcessingState.idle) {
+    final currentOccurrenceId = _activeOccurrenceId;
+    final hasInstalledCurrentSource =
+        currentOccurrenceId != null &&
+        _currentIndex >= 0 &&
+        _currentIndex < _queue.length &&
+        _installedPlaybackGeneration == _playGeneration &&
+        _installedMediaId == _queue[_currentIndex].id;
+    if (_player.processingState == ProcessingState.idle ||
+        !hasInstalledCurrentSource) {
       unawaited(_commands.recordExplicitPlayIntent());
-      await _commands.recoverIdleSource();
+      if (currentOccurrenceId != null &&
+          _currentIndex >= 0 &&
+          _currentIndex < _queue.length) {
+        await _loadQueueItem(
+          _currentIndex,
+          preserveUserIntent: true,
+          provenance: _captureStartProvenance(),
+        );
+      } else {
+        await _commands.recoverIdleSource();
+      }
     } else {
       await _commands.recordExplicitPlayIntent();
     }
