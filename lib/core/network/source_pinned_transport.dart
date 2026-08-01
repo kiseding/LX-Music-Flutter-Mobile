@@ -110,21 +110,24 @@ class SourcePinnedTransport {
     final starter = startSocket ?? startPinnedSocket;
     return (uri, proxyHost, proxyPort) {
       // 按需求放开代理：不再拦截 proxy，改为直连已校验的目标地址。
-      final address = request.addresses[nextAddress % request.addresses.length];
+      // 轮转起始 IP，但连接层负责 failover 到列表里的其它 IP。
+      final start = nextAddress % request.addresses.length;
       nextAddress++;
-      return starter(
-        address,
+      final rotated = <InternetAddress>[
+        for (var i = 0; i < request.addresses.length; i++)
+          request.addresses[(start + i) % request.addresses.length],
+      ];
+      return starterWithFailover(
+        rotated,
         uri.port,
         host: uri.host,
         useTls: uri.scheme.toLowerCase() == 'https',
+        connect: starter,
       );
     };
   }
 
-  /// TCP-connect to the DNS-validated address, then (for HTTPS) run TLS with
-  /// the original hostname so SNI and certificate verification still match.
-  /// Plain [Socket.startConnect] on HTTPS sends cleartext to port 443 and
-  /// yields nginx's 45-byte "plain HTTP request was sent to HTTPS port".
+  /// 连接单个 IP，TLS 用原 hostname（SNI + 证书校验匹配）。
   static Future<ConnectionTask<Socket>> startPinnedSocket(
     InternetAddress address,
     int port, {
@@ -137,6 +140,44 @@ class SourcePinnedTransport {
       (socket) => SecureSocket.secure(socket, host: host),
     );
     return ConnectionTask.fromSocket(secureFuture, rawTask.cancel);
+  }
+
+  /// 依次尝试候选 IP，首个真正建立连接（含 TLS）的即返回。
+  /// 修复：DNS 解析常返回多个 IP（如 onrender 的两个 Cloudflare 地址），
+  /// 其中个别 IP 的 TCP 通但 TLS/HTTP 挂起。盲目轮流 pin 会导致
+  /// “第一首能播、后续解析卡死”。这里对每个 IP 等连接+TLS 完成，
+  /// 超时或失败立即 cancel 并换下一个。
+  static const _connectFailoverTimeout = Duration(seconds: 5);
+
+  static Future<ConnectionTask<Socket>> starterWithFailover(
+    List<InternetAddress> addresses,
+    int port, {
+    required String host,
+    required bool useTls,
+    SourceSocketStarter? connect,
+  }) async {
+    final connectFn = connect ?? startPinnedSocket;
+    Object? lastError;
+    for (final address in addresses) {
+      ConnectionTask<Socket>? task;
+      try {
+        // connectFn 是 async：await 它拿到 ConnectionTask 时 TCP 已建立，
+        // 但 TLS（SecureSocket.secure）仍在 task.socket 里推进。
+        // 必须在这里等 task.socket，才能确认 TLS 握手真正完成；
+        // 否则对“TCP通但TLS挂起”的 IP 会误判为成功。
+        task = await connectFn(address, port, host: host, useTls: useTls);
+        // 等连接（含 TLS）真正建立，确认该 IP 可用后再交给 Dio 使用。
+        await task.socket.timeout(_connectFailoverTimeout);
+        return task;
+      } catch (e) {
+        lastError = e;
+        try {
+          task?.cancel();
+        } catch (_) {}
+      }
+    }
+    if (lastError != null) throw lastError;
+    throw const SocketException('No addresses to connect to');
   }
 
   static Future<Response<dynamic>> _execute(

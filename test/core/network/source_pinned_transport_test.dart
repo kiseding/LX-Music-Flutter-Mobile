@@ -112,4 +112,39 @@ void main() {
     );
     expect(secure, isFalse);
   });
+
+  test('failover skips a hanging address and connects to the next', () async {
+    var attempts = 0;
+    // 用真实本地回环 socket 构造可成功连接的 ConnectionTask。
+    final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => server.close());
+    final acceptFuture = server.first;
+    final clientTask = Socket.connect(
+      InternetAddress.loopbackIPv4,
+      server.port,
+    );
+    await acceptFuture; // 建立真实 TCP 连接
+
+    final task = await SourcePinnedTransport.starterWithFailover(
+      [InternetAddress('10.0.0.1'), InternetAddress('10.0.0.2')],
+      443,
+      host: 'source.example',
+      useTls: false,
+      connect: (address, port, {required String host, required bool useTls}) async {
+        attempts++;
+        if (address.address == '10.0.0.1') {
+          // 第一个地址的 task.socket 永不完成（模拟 TCP 通但 TLS 挂起）
+          return ConnectionTask.fromSocket(
+            Completer<Socket>().future,
+            () {},
+          );
+        }
+        return ConnectionTask.fromSocket(clientTask, () {});
+      },
+    );
+
+    expect(attempts, 2);
+    final socket = await task.socket;
+    socket.destroy();
+  });
 }
