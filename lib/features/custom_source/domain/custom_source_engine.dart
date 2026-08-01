@@ -716,6 +716,12 @@ class CustomSourceEngine {
                 }
                 finally { globalThis._pendingRequests--; }
               };
+              // 对齐官方移动版 fetchData：默认带 Accept: application/json
+              //（脚本显式设置的头优先），部分 API 服务器校验该头。
+              options.headers = options.headers || {};
+              if (!options.headers.Accept && !options.headers.accept) {
+                options.headers.Accept = 'application/json';
+              }
               globalThis._pendingRequests++;
               sendMessage('lx_request', JSON.stringify({ url: url, options: options, callbackId: callbackId }));
               return function() {
