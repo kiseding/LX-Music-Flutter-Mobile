@@ -12,7 +12,6 @@ import '../features/custom_source/presentation/custom_source_screen.dart';
 import '../features/leaderboard/presentation/leaderboard_screen.dart';
 import '../features/sync/presentation/sync_screen.dart';
 import '../features/stats/presentation/stats_screen.dart';
-import '../features/smart_playlist/presentation/smart_playlist_list_screen.dart';
 import '../features/playlist/presentation/duplicate_screen.dart';
 import '../features/recommend/presentation/recommendation_screen.dart';
 
@@ -138,11 +137,6 @@ final appRouter = GoRouter(
       path: '/stats',
       parentNavigatorKey: _rootNavigatorKey,
       builder: (context, state) => const StatsScreen(),
-    ),
-    GoRoute(
-      path: '/smart-playlists',
-      parentNavigatorKey: _rootNavigatorKey,
-      builder: (context, state) => const SmartPlaylistListScreen(),
     ),
     GoRoute(
       path: '/duplicates',

@@ -332,7 +332,7 @@ class PlayHistoryStore extends ChangeNotifier {
     );
   }
 
-  // 供 SmartPlaylist 引擎使用的聚合
+  // 供统计与推荐使用的播放聚合
   ({Map<String, int> countBySongId, Map<String, DateTime> lastPlayedBySongId})
       get playStats {
     final count = <String, int>{};

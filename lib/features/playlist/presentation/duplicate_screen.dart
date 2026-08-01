@@ -4,7 +4,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../player/domain/music_item.dart';
 import '../../player/presentation/player_provider.dart';
-import '../../smart_playlist/presentation/smart_playlist_provider.dart';
 import '../domain/duplicate_detector.dart';
 import 'playlist_provider.dart';
 
@@ -20,9 +19,13 @@ class _DuplicateScreenState extends ConsumerState<DuplicateScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final allSongs = ref.watch(allSongsProvider);
-    final favorites =
-        ref.watch(playlistServiceProvider).favorites?.songs ?? const [];
+    final playlistService = ref.watch(playlistServiceProvider);
+    final songsById = <String, MusicItem>{
+      for (final playlist in playlistService.playlists)
+        for (final song in playlist.songs) song.id: song,
+    };
+    final allSongs = songsById.values.toList(growable: false);
+    final favorites = playlistService.favorites?.songs ?? const [];
 
     final detector = DuplicateDetector(
       songs: allSongs,

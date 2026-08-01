@@ -130,13 +130,6 @@ class SettingsScreen extends ConsumerWidget {
               _buildNavTile(
                 context,
                 ref,
-                '智能歌单',
-                '按规则自动筛选歌曲',
-                () => context.push('/smart-playlists'),
-              ),
-              _buildNavTile(
-                context,
-                ref,
                 '重复歌曲',
                 '检测并清理重复歌曲',
                 () => context.push('/duplicates'),
