@@ -1,7 +1,7 @@
 /**
  * 网易云音乐 source: search, lyric, import
  */
-import { md5Sync, aes128BlockEncrypt } from '../utils/crypto';
+import { aes128BlockEncrypt } from '../utils/crypto';
 
 // Search — uses the plain-text /api/search/get endpoint (no eapi encryption).
 // The previous eapi AES path produced ciphertext that NetEase's server rejected
@@ -79,8 +79,6 @@ async function fetchWySongDetail(ids: Array<number | string>): Promise<Map<strin
   if (!ids.length) return map;
   const cleanIds = ids.map(id => Number(id)).filter(n => Number.isFinite(n) && n > 0);
   if (!cleanIds.length) return map;
-  const cParam = '[' + cleanIds.map(id => JSON.stringify({ id })).join(',') + ']';
-  const detailUrl = 'https://music.163.com/api/v3/song/detail?c=' + encodeURIComponent(cParam);
   // NetEase returns code:-462 (anti-bot / verify challenge) often enough
   // on /api/v3/song/detail from Cloudflare edges that we have to defend
   // against it. Splitting into sub-batches of 2 IDs limits blast radius,
@@ -110,26 +108,10 @@ async function fetchWySongDetail(ids: Array<number | string>): Promise<Map<strin
   return map;
 }
 
-// Lyric
-// Uses gdstudio's public NetEase API (replaces the broken eapi path that
-// returned 200 with empty body when called from Workers). gdstudio returns
-// both the original LRC and translation (tlyric) when available.
-export async function lyricWy(songmid: string) {
-  const url = `https://music-api.gdstudio.xyz/api.php?types=lyric&source=netease&id=${encodeURIComponent(songmid)}`;
-  try {
-    const resp = await fetch(url, { signal: AbortSignal.timeout(8000) });
-    const data: any = await resp.json();
-    if (!data || typeof data.lyric !== 'string') return { lyric: '', tlyric: '' };
-    return { lyric: data.lyric, tlyric: data.tlyric || '' };
-  } catch {
-    return { lyric: '', tlyric: '' };
-  }
-}
-
 // Import playlist
 export async function importWy(id: string) {
   const linuxapiKey = new TextEncoder().encode('rFgB&h#%2?^eDg:Q');
-  const reqBody = JSON.stringify({ method: 'POST', url: 'https://music.163.com/api/v3/playlist/detail', params: { id, n: 100000, s: 8 } });
+  const reqBody = JSON.stringify({ method: 'POST', url: 'https://music.163.com/api/v3/playlist/detail', params: { id: id.replace(/\D/g, ''), n: 100000, s: 8 } });
   const encrypted = await aes128BlockEncrypt(linuxapiKey.buffer as ArrayBuffer, new TextEncoder().encode(reqBody).buffer as ArrayBuffer);
   const eparams = Array.from(new Uint8Array(encrypted)).map(b => b.toString(16).padStart(2, '0')).join('').toUpperCase();
   const resp = await fetch('https://music.163.com/api/linux/forward', {

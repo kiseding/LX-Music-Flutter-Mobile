@@ -67,3 +67,17 @@ export function requireJsonContentType(request: Request): Response | null {
   }
   return null;
 }
+
+/** Parse a JSON request body into a non-null object, returning a 400 on invalid input. */
+export async function readJsonBody(request: Request): Promise<{ body: Record<string, unknown> } | Response> {
+  let parsed: unknown;
+  try {
+    parsed = await request.json();
+  } catch {
+    return jsonResponse({ error: '无效请求' }, 400);
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return jsonResponse({ error: '无效请求' }, 400);
+  }
+  return { body: parsed as Record<string, unknown> };
+}

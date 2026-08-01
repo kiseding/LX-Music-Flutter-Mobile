@@ -45,33 +45,6 @@ export async function requireAuth(request: Request, env: Env): Promise<{ userId:
   return result;
 }
 
-export function bearerToken(request: Request): string | null {
-  const header = request.headers.get('Authorization');
-  const match = header?.match(/^Bearer\s+(.+)$/i);
-  return match?.[1] || null;
-}
-
-export function isMusicCapabilityPath(pathname: string): boolean {
-  if (pathname === '/api/proxy' || pathname === '/api/ping') return true;
-  if (!pathname.startsWith('/api/music/')) return false;
-  return pathname !== '/api/music/config'
-    && pathname !== '/api/music/auth'
-    && pathname !== '/api/music/auth/verify';
-}
-
-export async function requireMusicAccess(request: Request, env: Env): Promise<Response | null> {
-  if (!env.PLAYER_PASSWORD) return null;
-  const token = bearerToken(request);
-  if (!token) return jsonResponse({ error: '需要播放器认证' }, 401);
-  const payload = await verifyToken(token, env);
-  if (payload?.type === 'player') return null;
-  if (payload?.sub) {
-    const user = await requireAuth(request, env);
-    if (!(user instanceof Response)) return null;
-  }
-  return jsonResponse({ error: '播放器认证无效' }, 401);
-}
-
 export async function requireAdmin(request: Request, env: Env): Promise<{ userId: number; payload: Record<string, unknown> } | Response> {
   const auth = await requireAuth(request, env);
   if (auth instanceof Response) return auth;

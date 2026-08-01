@@ -28,7 +28,6 @@ import {
   handlePlaylistRefresh,
 } from './routes/user/playlist';
 import { handlePlaylistImport } from './routes/playlist-import';
-import { requireAdmin } from './utils/auth';
 import { checkSchemaReady } from './db/schema';
 export { RateLimiterDO } from './middleware/rateLimitDO';
 
@@ -140,10 +139,6 @@ export default {
       const handler = routes.get(method + pathname);
       if (handler) {
         response = await handler(request, url, env, ctx);
-      } else if (pathname === '/api/diag' && (method === 'GET' || method === 'POST')) {
-        const admin = await requireAdmin(request, env);
-        if (admin instanceof Response) response = admin;
-        else response = jsonResponse({ version: VERSION, ok: true });
       } else {
         response = jsonResponse({
           error: 'Not Found',

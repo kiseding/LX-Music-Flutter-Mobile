@@ -1,7 +1,7 @@
 /**
  * User authentication routes
  */
-import { Env, jsonResponse, requireJsonContentType } from '../../lib/response';
+import { Env, jsonResponse, requireJsonContentType, readJsonBody } from '../../lib/response';
 import { signToken, verifyToken, hashPassword, verifyPassword, checkPasswordLength } from '../../utils/jwt';
 import { getUserId, isAdmin, requireAuth } from '../../utils/auth';
 import { RateLimiter, RateLimiterUnavailableError, getClientIP } from '../../middleware/rateLimit';
@@ -43,8 +43,9 @@ export async function handleUserLogin(request: Request, env: Env): Promise<Respo
   const ctErr = requireJsonContentType(request);
   if (ctErr) return ctErr;
 
-  let body: any;
-  try { body = await request.json(); } catch { return jsonResponse({ error: '无效请求' }, 400); }
+  const parsed = await readJsonBody(request);
+  if (parsed instanceof Response) return parsed;
+  const body = parsed.body as { username?: unknown; password?: unknown };
   const { username, password } = body;
   if (!username || !password) {
     return jsonResponse({ error: '用户名和密码不能为空' }, 400);
@@ -75,23 +76,26 @@ export async function handleUserLogin(request: Request, env: Env): Promise<Respo
   // passwords set before the cap was added. verifyPassword itself does
   // no length cap (relies on the 256KB body limit for DoS protection).
 
-  const user = await selectUserByUsername(env, username);
+  // B2: 用归一化（trim + 小写）后的用户名查询，注册端也存归一化值，
+  // 保证大小写不同的登录输入能匹配同一账号。
+  const user = await selectUserByUsername(env, normalized);
   if (!user) {
     return jsonResponse({ error: '用户名或密码错误' }, 401);
   }
 
-  const { valid, needsUpgrade } = await verifyPassword(password, user.password_hash);
+  const passwordStr = String(password);
+  const { valid, needsUpgrade } = await verifyPassword(passwordStr, user.password_hash);
   if (!valid) {
     return jsonResponse({ error: '用户名或密码错误' }, 401);
   }
 
   // Auto-upgrade legacy SHA-256 hash to PBKDF2
   if (needsUpgrade) {
-    const newHash = await hashPassword(password);
+    const newHash = await hashPassword(passwordStr);
     await env.DB.prepare('UPDATE users SET password_hash = ? WHERE id = ?').bind(newHash, user.id).run();
   }
 
-  const token = await signToken({ sub: user.id, username, role: user.role, tv: user.token_version }, '7d', env);
+  const token = await signToken({ sub: user.id, username: normalized, role: user.role, tv: user.token_version }, '7d', env);
 
   // Reset only the account bucket on successful login; keep shared IP bucket.
   await limiter.reset(ip, [`account:${normalized}`]);
@@ -103,8 +107,9 @@ export async function handleUserRegister(request: Request, env: Env): Promise<Re
   const ctErr = requireJsonContentType(request);
   if (ctErr) return ctErr;
 
-  let body: any;
-  try { body = await request.json(); } catch { return jsonResponse({ error: '无效请求' }, 400); }
+  const parsed = await readJsonBody(request);
+  if (parsed instanceof Response) return parsed;
+  const body = parsed.body as { username?: unknown; password?: unknown };
   const { username, password } = body;
   if (!username || !password) {
     return jsonResponse({ error: '用户名和密码不能为空' }, 400);
@@ -114,7 +119,8 @@ export async function handleUserRegister(request: Request, env: Env): Promise<Re
     return jsonResponse({ error: '输入过长' }, 400);
   }
   if (username.length < 2) return jsonResponse({ error: '用户名至少2字符' }, 400);
-  const pwCheck = checkPasswordLength(password);
+  const passwordStr = String(password);
+  const pwCheck = checkPasswordLength(passwordStr);
   if (!pwCheck.ok) return jsonResponse({ error: pwCheck.reason }, 400);
   if (!/^[\w\-一-鿿]+$/.test(username)) {
     return jsonResponse({ error: '用户名只能包含字母、数字、下划线、中文字符' }, 400);
@@ -136,18 +142,19 @@ export async function handleUserRegister(request: Request, env: Env): Promise<Re
     throw error;
   }
 
-  const existing = await env.DB.prepare('SELECT id FROM users WHERE username = ?').bind(username).first();
+  // B2: 注册时即存归一化（trim + 小写）用户名，避免大小写不同账号冲突。
+  const existing = await env.DB.prepare('SELECT id FROM users WHERE username = ?').bind(normalized).first();
   if (existing) {
     return jsonResponse({ error: '用户名已存在' }, 409);
   }
 
-  const passwordHash = await hashPassword(password);
+  const passwordHash = await hashPassword(passwordStr);
   const result = await env.DB.prepare('INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)')
-    .bind(username, passwordHash, 'user').run();
+    .bind(normalized, passwordHash, 'user').run();
 
   const userId = result.meta.last_row_id as number;
-  const token = await signToken({ sub: userId, username, role: 'user', tv: 0 }, '7d', env);
-  return jsonResponse({ token, username });
+  const token = await signToken({ sub: userId, username: normalized, role: 'user', tv: 0 }, '7d', env);
+  return jsonResponse({ token, username: normalized });
 }
 
 export async function handleUserVerify(request: Request, env: Env): Promise<Response> {
@@ -174,30 +181,35 @@ export async function handleChangePassword(request: Request, env: Env): Promise<
   const ctErr = requireJsonContentType(request);
   if (ctErr) return ctErr;
 
-  let body: any;
-  try { body = await request.json(); } catch { return jsonResponse({ error: '无效请求' }, 400); }
+  const parsed = await readJsonBody(request);
+  if (parsed instanceof Response) return parsed;
+  const body = parsed.body as { oldPassword?: unknown; newPassword?: unknown };
   const { oldPassword, newPassword } = body;
   if (!oldPassword || !newPassword) return jsonResponse({ error: '请填写新旧密码' }, 400);
-  const pwCheck = checkPasswordLength(newPassword);
+  const oldPasswordStr = String(oldPassword);
+  const newPasswordStr = String(newPassword);
+  const pwCheck = checkPasswordLength(newPasswordStr);
   if (!pwCheck.ok) return jsonResponse({ error: pwCheck.reason }, 400);
 
   const user = await env.DB.prepare('SELECT password_hash, username, role, token_version FROM users WHERE id = ?')
     .bind(userId).first<{ password_hash: string; username: string; role: string; token_version: number }>();
   if (!user) return jsonResponse({ error: '用户不存在' }, 404);
-  const { valid } = await verifyPassword(oldPassword, user.password_hash);
+  const { valid } = await verifyPassword(oldPasswordStr, user.password_hash);
   if (!valid) return jsonResponse({ error: '原密码错误' }, 403);
 
-  const newHash = await hashPassword(newPassword);
-  // P1-9: bump token_version so all of this user's existing tokens are
-  // invalidated immediately. The user will need to log in again on other
-  // devices.
-  await env.DB.prepare('UPDATE users SET password_hash = ?, token_version = token_version + 1, updated_at = datetime(\'now\') WHERE id = ?')
-    .bind(newHash, userId).run();
+  const newHash = await hashPassword(newPasswordStr);
+  // P1-9 + B5: bump token_version so all of this user's existing tokens are
+  // invalidated immediately. Use RETURNING so the new token carries the exact
+  // version even when two password changes race (no stale read).
+  const updated = await env.DB.prepare(
+    'UPDATE users SET password_hash = ?, token_version = token_version + 1, updated_at = datetime(\'now\') WHERE id = ? RETURNING token_version'
+  ).bind(newHash, userId).first<{ token_version: number }>();
+  if (!updated) return jsonResponse({ error: '更新失败' }, 500);
   const token = await signToken({
     sub: userId,
     username: user.username,
     role: user.role,
-    tv: user.token_version + 1,
+    tv: updated.token_version,
   }, '7d', env);
   return jsonResponse({ ok: true, token });
 }
@@ -257,16 +269,22 @@ export async function seedAdminUser(env: Env, ctx?: ExecutionContext): Promise<B
   }
 
   try {
+    const normalizedAdmin = normalizeUsername(username);
     const hash = await hashPassword(password);
     const result = await env.DB.prepare(
       'INSERT OR IGNORE INTO users (username, password_hash, role) VALUES (?, ?, ?)'
-    ).bind(username, hash, 'admin').run();
+    ).bind(normalizedAdmin, hash, 'admin').run();
     if ((result.meta?.changes ?? 0) > 0) {
-      console.log(`[lx-music-api] Admin user created: ${username}`);
+      console.log(`[lx-music-api] Admin user created: ${normalizedAdmin}`);
     }
 
     const admin = await env.DB.prepare("SELECT id FROM users WHERE role = 'admin' LIMIT 1").first();
-    if (!admin) return { ready: false, reason: 'admin creation failed' };
+    if (!admin) {
+      // B6: 非 admin 用户占用了 ADMIN_USERNAME 这个名字（INSERT OR IGNORE 被忽略）。
+      // 直接失败并给出可处理的提示，避免服务永久卡在 bootstrap 状态。
+      console.error({ event: 'admin_bootstrap_squatted', username: normalizedAdmin });
+      return { ready: false, reason: '管理员用户名被占用，请更换 ADMIN_USERNAME 或清理该账号' };
+    }
     _seeded = true;
     if (ctx) ctx.waitUntil(env.CACHE.put('v2:system:seeded', '1'));
     else await env.CACHE.put('v2:system:seeded', '1');
@@ -297,9 +315,11 @@ export async function handleAdminUsers(request: Request, env: Env): Promise<Resp
   if (request.method === 'POST') {
     const ctErr = requireJsonContentType(request);
     if (ctErr) return ctErr;
-    let body: any;
-    try { body = await request.json(); } catch { return jsonResponse({ error: '无效请求' }, 400); }
-    const { username, password } = body;
+    const parsed = await readJsonBody(request);
+    if (parsed instanceof Response) return parsed;
+    const body = parsed.body as { username?: unknown; password?: unknown };
+    const username = String(body.username || '');
+    const password = String(body.password || '');
     if (!username || !password) return jsonResponse({ error: '缺少参数' }, 400);
     if (username.length < 2 || username.length > 32) return jsonResponse({ error: '用户名长度需2-32字符' }, 400);
     const pwCheck = checkPasswordLength(password);
@@ -315,15 +335,15 @@ export async function handleAdminUsers(request: Request, env: Env): Promise<Resp
   if (request.method === 'DELETE') {
     const ctErr = requireJsonContentType(request);
     if (ctErr) return ctErr;
-    let body: any;
-    try { body = await request.json(); } catch { return jsonResponse({ error: '无效请求' }, 400); }
-    const id = Number(body?.id);
+    const parsed = await readJsonBody(request);
+    if (parsed instanceof Response) return parsed;
+    const id = Number(parsed.body.id);
     if (!Number.isFinite(id) || id <= 0) return jsonResponse({ error: '缺少ID' }, 400);
     // P2-18: don't let an admin delete themselves — leaves the system with no
     // admins (or worse, locked-out-of-everything).
     if (id === userId) return jsonResponse({ error: '不能删除自己' }, 403);
-    const user = await env.DB.prepare('SELECT username FROM users WHERE id = ?').bind(id).first<{ username: string }>();
-    if (user?.username === 'admin') return jsonResponse({ error: '不能删除admin' }, 403);
+    const user = await env.DB.prepare('SELECT username, role FROM users WHERE id = ?').bind(id).first<{ username: string; role: string }>();
+    if (user?.role === 'admin') return jsonResponse({ error: '不能删除管理员' }, 403);
     // DELETE cascades via FK to playlists / playlist_songs / playback_progress,
     // and the next verify on a still-cached JWT will fail the user lookup,
     // so the target's active sessions are invalidated as a side effect.
@@ -334,9 +354,11 @@ export async function handleAdminUsers(request: Request, env: Env): Promise<Resp
   if (request.method === 'PUT') {
     const ctErr = requireJsonContentType(request);
     if (ctErr) return ctErr;
-    let body: any;
-    try { body = await request.json(); } catch { return jsonResponse({ error: '无效请求' }, 400); }
-    const { id, password } = body;
+    const parsed = await readJsonBody(request);
+    if (parsed instanceof Response) return parsed;
+    const body = parsed.body as { id?: unknown; password?: unknown };
+    const id = String(body.id || '');
+    const password = String(body.password || '');
     if (!id || !password) return jsonResponse({ error: '缺少参数' }, 400);
     const pwCheck = checkPasswordLength(password);
     if (!pwCheck.ok) return jsonResponse({ error: pwCheck.reason }, 400);

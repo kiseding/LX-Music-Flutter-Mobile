@@ -1,8 +1,9 @@
 /**
  * Playlist import: two-phase — preview then save
  */
-import { Env, jsonResponse, requireJsonContentType } from '../lib/response';
+import { Env, jsonResponse, requireJsonContentType, readJsonBody } from '../lib/response';
 import { requireAuth } from '../utils/auth';
+import { RateLimiter, RateLimiterUnavailableError, getClientIP } from '../middleware/rateLimit';
 import { importTx, searchTx } from '../sources/tx';
 import { importKw, searchKw } from '../sources/kw';
 import { importWy, searchWy } from '../sources/wy';
@@ -18,10 +19,25 @@ const VALID_SOURCES = new Set(['tx', 'kw', 'wy']);
 // split into multiple Phase-2 requests with the same `playlistId`
 // to append in batches.
 
-// Rematch imported songs across all platforms, pick the one with best quality
+// Rematch imported songs across all platforms, pick the one with best quality.
+// A bounded concurrency pool limits outbound requests (Workers cap subrequests).
+const REMATCH_CONCURRENCY = 10;
+
+async function runPooled<T>(items: T[], concurrency: number, worker: (item: T, index: number) => Promise<void>): Promise<void> {
+  let cursor = 0;
+  const runners = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (cursor < items.length) {
+      const index = cursor++;
+      await worker(items[index], index);
+    }
+  });
+  await Promise.all(runners);
+}
+
 export async function rematchSongs(songs: SongInfo[]): Promise<SongInfo[]> {
-  return Promise.all(songs.map(async (s) => {
-    if (!s.name) return s;
+  const out: SongInfo[] = new Array(songs.length);
+  await runPooled(songs, REMATCH_CONCURRENCY, async (s, index) => {
+    if (!s.name) { out[index] = s; return; }
     const kw = `${s.name} ${s.singer || ''}`.trim();
 
     const searchers = [
@@ -65,27 +81,54 @@ export async function rematchSongs(songs: SongInfo[]): Promise<SongInfo[]> {
       }
     }
 
-    return best.song;
-  }));
+    out[index] = best.song;
+  });
+  return out;
 }
+
+const IMPORT_IP_MAX = 30;
+const IMPORT_WINDOW_SECONDS = 300;
 
 export async function handlePlaylistImport(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const ctErr = requireJsonContentType(request);
   if (ctErr) return ctErr;
 
-  let body: any;
-  try { body = await request.json(); } catch { return jsonResponse({ error: '无效请求' }, 400); }
+  const parsed = await readJsonBody(request);
+  if (parsed instanceof Response) return parsed;
+  const body = parsed.body as any;
+
+  // 预览与保存都需要登录；未认证的 Phase 1 预览会触发大量上游请求，必须限流。
+  const auth = await requireAuth(request, env);
+  if (auth instanceof Response) return auth;
+  const userId = auth.userId;
+
+  const ip = getClientIP(request);
+  const limiter = new RateLimiter(env.RATE_LIMITER);
+  try {
+    const rateCheck = await limiter.check(ip, [
+      { key: `import:${userId}`, max: IMPORT_IP_MAX, windowSeconds: IMPORT_WINDOW_SECONDS },
+    ]);
+    if (!rateCheck.allowed) {
+      return jsonResponse({ error: '导入过于频繁，请稍后再试', retryAfter: Math.ceil((rateCheck.resetAt - Date.now()) / 1000) }, 429);
+    }
+  } catch (error) {
+    if (error instanceof RateLimiterUnavailableError) {
+      return jsonResponse({ error: '导入服务暂时不可用' }, 503, { 'Retry-After': '60' });
+    }
+    throw error;
+  }
 
   // Phase 2: save songs to D1
   if (body.songs?.length && body.name) {
-    const auth = await requireAuth(request, env);
-    if (auth instanceof Response) return auth;
-    const userId = auth.userId;
 
     const source = body.source || '';
-    const sourceId = body.sourceId || '';
+    const sourceId = String(body.sourceId || '');
     if (!VALID_SOURCES.has(source)) {
       return jsonResponse({ error: '不支持的音源' }, 400);
+    }
+    // S2: source_id 会被拼进上游 URL，必须限定为纯数字，防止参数注入。
+    if (sourceId.length === 0 || !/^\d+$/.test(sourceId)) {
+      return jsonResponse({ error: '无效的歌单ID' }, 400);
     }
     // Drop any songs whose source slipped past the whitelist (legacy clients sending kg/mg).
     const cleanSongs = (body as PlaylistImportSaveBody).songs.filter((s: SongInfo) => VALID_SOURCES.has(s.source || ''));

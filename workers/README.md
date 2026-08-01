@@ -14,14 +14,16 @@
 | POST | `/api/user/register` | 注册 |
 | GET/POST | `/api/user/auth/verify` | 校验 Bearer token |
 | POST | `/api/user/password` | 修改密码 |
-| GET | `/api/user/list` | 我喜欢 + 云端歌单 |
-| POST | `/api/user/list` | 保存我喜欢 / 歌单 |
+| GET | `/api/user/list` | 收藏列表 + 云端歌单 |
+| POST | `/api/user/list` | 保存收藏列表 / 歌单 |
 | DELETE | `/api/user/playlist?id=` | 删除歌单 |
 | POST | `/api/user/playlist/refresh` | 刷新导入歌单 |
 | POST | `/api/user/love/add` | 添加收藏 |
 | POST | `/api/user/love/remove` | 移除收藏 |
-| POST | `/api/music/playlist/import` | 导入预览 / 保存（QQ / 酷我 / 网易） |
+| POST | `/api/music/playlist/import` | 导入预览 / 保存（QQ / 酷我 / 网易，需登录） |
 | * | `/api/admin/users` | 管理员用户 CRUD |
+
+除 `health` / `ping` / `version` 外的接口均需登录（`Authorization: Bearer <token>`）；歌单导入同样需要登录，并对每个账号做了频率限制。
 
 App 路径：**设置 → 云端账号 / 歌单**，填写 `https://lx-music-api.<account>.workers.dev`。
 

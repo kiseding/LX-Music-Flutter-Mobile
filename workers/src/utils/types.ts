@@ -14,7 +14,6 @@ export interface SongInfo {
   mrcUrl?: string;
   lrcUrl?: string;
   trcUrl?: string;
-  strMediaMid?: string;
 }
 
 export interface PlaylistImportResult {
@@ -23,26 +22,9 @@ export interface PlaylistImportResult {
 }
 
 // Request body types
-export interface ProxyRequestBody {
-  url: string;
-  headers?: Record<string, string>;
-}
-
-export interface PlayerAuthRequestBody {
-  password?: string;
-}
-
 export interface PlaylistImportSaveBody {
   name: string;
   source?: string;
   sourceId?: string;
   songs: SongInfo[];
-}
-
-export interface PingResult {
-  source: string;
-  ok: boolean;
-  status?: number;
-  size?: number;
-  error?: string;
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { internalServerError } from '../src/lib/response';
+import { internalServerError, readJsonBody } from '../src/lib/response';
 
 describe('internalServerError', () => {
   it('returns only a generic error and request ID while logging details', async () => {
@@ -19,5 +19,47 @@ describe('internalServerError', () => {
       error: 'secret SQL and upstream URL',
     }));
     log.mockRestore();
+  });
+});
+
+describe('readJsonBody', () => {
+  it('rejects a literal null body with 400 instead of destructuring it', async () => {
+    const request = new Request('https://example.com/api/user/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: 'null',
+    });
+
+    const result = await readJsonBody(request);
+    expect(result).toBeInstanceOf(Response);
+    const response = result as Response;
+    expect(response.status).toBe(400);
+  });
+
+  it('rejects a JSON array body with 400', async () => {
+    const request = new Request('https://example.com/api/user/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '[]',
+    });
+
+    const result = await readJsonBody(request);
+    expect(result).toBeInstanceOf(Response);
+    expect((result as Response).status).toBe(400);
+  });
+
+  it('accepts a JSON object body', async () => {
+    const request = new Request('https://example.com/api/user/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{"username":"alice","password":"secret"}',
+    });
+
+    const result = await readJsonBody(request);
+    expect(result).not.toBeInstanceOf(Response);
+    expect((result as { body: Record<string, unknown> }).body).toEqual({
+      username: 'alice',
+      password: 'secret',
+    });
   });
 });

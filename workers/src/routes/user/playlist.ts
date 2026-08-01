@@ -1,4 +1,4 @@
-import { Env, jsonResponse, requireJsonContentType } from '../../lib/response';
+import { Env, jsonResponse, requireJsonContentType, readJsonBody } from '../../lib/response';
 import { getUserId } from '../../utils/auth';
 import { fetchAndRematch } from '../playlist-import';
 import type { SongInfo } from '../../utils/types';
@@ -16,11 +16,14 @@ async function readLoveListFromD1(env: Env, userId: number): Promise<any[]> {
   return (songs.results || []).map((s: any) => {
     let meta: any = {};
     try { meta = JSON.parse(s.metadata || '{}'); } catch { /* corrupted */ }
+    // B1: types 可能因截断/损坏无法解析，回退为空数组。
+    let types: any[] = [];
+    try { types = JSON.parse(s.types || '[]'); } catch { /* corrupted */ }
     return {
       name: s.name, singer: s.singer, source: s.source,
       songmid: s.songmid, albumName: s.album_name, albumId: s.album_id,
       img: s.img, interval: s.interval,
-      types: JSON.parse(s.types || '[]'), hash: s.hash,
+      types, hash: s.hash,
       mrcUrl: meta.mrcUrl || '', lrcUrl: meta.lrcUrl || '', trcUrl: meta.trcUrl || '',
     };
   });
@@ -69,11 +72,14 @@ export async function handleUserPlaylist(request: Request, url: URL, env: Env, c
     const list = songs.map((s: any) => {
       let meta: any = {};
       try { meta = JSON.parse(s.metadata || '{}'); } catch { /* corrupted */ }
+      // B1: types 可能因截断/损坏无法解析，回退为空数组。
+      let types: any[] = [];
+      try { types = JSON.parse(s.types || '[]'); } catch { /* corrupted */ }
       return {
         name: s.name, singer: s.singer, source: s.source,
         songmid: s.songmid, albumName: s.album_name, albumId: s.album_id,
         img: s.img, interval: s.interval,
-        types: JSON.parse(s.types || '[]'), hash: s.hash,
+        types, hash: s.hash,
         mrcUrl: meta.mrcUrl || '', lrcUrl: meta.lrcUrl || '', trcUrl: meta.trcUrl || '',
       };
     });
@@ -95,35 +101,42 @@ export async function handleUserPlaylistSave(request: Request, env: Env, ctx: Ex
   const ctErr = requireJsonContentType(request);
   if (ctErr) return ctErr;
 
-  let body: any;
-  try { body = await request.json(); } catch { return jsonResponse({ error: '无效请求' }, 400); }
+  const parsed = await readJsonBody(request);
+  if (parsed instanceof Response) return parsed;
+  const body = parsed.body as {
+    loveList?: unknown;
+    pls?: Array<{ id?: unknown; name?: unknown }>;
+    append?: unknown;
+  };
   const { loveList, pls, append } = body;
+  const plsArray = Array.isArray(pls) ? pls : [];
+  const loveArray = Array.isArray(loveList) ? loveList : [];
 
   // P2-16: never let a user rename the protected 'love' playlist. The
   // A parent rewrite in the save path would otherwise reset the name to
   // '我喜欢' on the next save, causing UI/DB drift.
-  if (pls?.length) {
-    for (const p of pls) {
-      if (p.id === 'love') continue;
-      if (p.id && typeof p.name === 'string' && p.name.length > 0 && p.name.length <= 128) {
-        await env.DB.prepare('UPDATE playlists SET name = ?, updated_at = datetime(\'now\') WHERE id = ? AND user_id = ?')
-          .bind(p.name, p.id, userId).run();
-      }
+  for (const p of plsArray) {
+    const pid = String(p.id || '');
+    if (pid === 'love') continue;
+    const name = typeof p.name === 'string' ? p.name : '';
+    if (pid && name.length > 0 && name.length <= 128) {
+      await env.DB.prepare('UPDATE playlists SET name = ?, updated_at = datetime(\'now\') WHERE id = ? AND user_id = ?')
+        .bind(name, pid, userId).run();
     }
   }
 
-  if (Array.isArray(loveList) && loveList.length) {
+  if (loveArray.length) {
     // P1-4: D1 is the source of truth. Write to D1 first, then update KV
     // so concurrent saves from the same user converge on a single consistent
     // state instead of one racing with another in waitUntil.
     try {
-      await writeLoveListToD1(env, userId, loveList);
+      await writeLoveListToD1(env, userId, loveArray as any[]);
       ctx.waitUntil(env.CACHE.delete(`v2:love:${userId}`));
     } catch (e: any) {
       console.error('[love:d1] save failed:', e?.message);
       return jsonResponse({ error: '保存失败' }, 500);
     }
-  } else if (Array.isArray(loveList) && loveList.length === 0 && !append) {
+  } else if (loveArray.length === 0 && !append) {
     // Clearing the love list — explicit empty array, append flag not set.
     try {
       await env.DB.prepare('DELETE FROM playlist_songs WHERE playlist_id = ? AND user_id = ?').bind('love', userId).run();
@@ -134,7 +147,7 @@ export async function handleUserPlaylistSave(request: Request, env: Env, ctx: Ex
     }
   }
 
-  return jsonResponse({ ok: true, saved: loveList?.length || 0 });
+  return jsonResponse({ ok: true, saved: loveArray.length });
 }
 
 // POST /api/user/love/add — incrementally add songs to the love list
@@ -148,9 +161,9 @@ export async function handleLoveAdd(request: Request, env: Env, ctx: ExecutionCo
   const ctErr = requireJsonContentType(request);
   if (ctErr) return ctErr;
 
-  let body: any;
-  try { body = await request.json(); } catch { return jsonResponse({ error: '无效请求' }, 400); }
-  const songs: any[] = Array.isArray(body?.songs) ? body.songs : [];
+  const parsed = await readJsonBody(request);
+  if (parsed instanceof Response) return parsed;
+  const songs: any[] = Array.isArray(parsed.body.songs) ? parsed.body.songs : [];
   if (songs.length === 0) return jsonResponse({ error: '无歌曲' }, 400);
   if (songs.length > 500) return jsonResponse({ error: '单批最多500首' }, 400);
 
@@ -179,7 +192,8 @@ export async function handleLoveAdd(request: Request, env: Env, ctx: ExecutionCo
     const key = songIdentity(mid, src);
     if (!mid || existingMids.has(key) || seen.has(key)) continue;
     seen.add(key);
-    toInsert.push(s);
+    // B4: 保存与去重 key 使用相同的截断值，保证 ON CONFLICT 索引一致。
+    toInsert.push({ ...s, songmid: mid, source: src });
   }
 
   if (toInsert.length === 0) {
@@ -218,30 +232,36 @@ export async function handleLoveRemove(request: Request, env: Env, ctx: Executio
   const ctErr = requireJsonContentType(request);
   if (ctErr) return ctErr;
 
-  let body: any;
-  try { body = await request.json(); } catch { return jsonResponse({ error: '无效请求' }, 400); }
+  const parsed = await readJsonBody(request);
+  if (parsed instanceof Response) return parsed;
+  const body = parsed.body as { songs?: unknown; keys?: unknown };
 
   const keys: string[] = [];
-  if (Array.isArray(body?.songs)) {
+  if (Array.isArray(body.songs)) {
     for (const s of body.songs) {
-      const mid = String(s.songmid || '');
-      const src = String(s.source || '');
+      const mid = String((s as any).songmid || '');
+      const src = String((s as any).source || '');
       if (mid) keys.push(mid + '|' + src);
     }
   }
-  if (Array.isArray(body?.keys)) {
+  if (Array.isArray(body.keys)) {
     keys.push(...body.keys.filter((k: any) => typeof k === 'string' && k.length > 0));
   }
   if (keys.length === 0) return jsonResponse({ error: '无歌曲' }, 400);
   if (keys.length > 500) return jsonResponse({ error: '单批最多500首' }, 400);
 
+  // O3: 批量删除，避免逐条串行 DELETE。
   let removed = 0;
-  for (const key of keys) {
-    const [mid, src] = key.split('|', 2);
-    const r = await env.DB.prepare(
-      "DELETE FROM playlist_songs WHERE playlist_id = 'love' AND user_id = ? AND songmid = ? AND source = ?"
-    ).bind(userId, mid, src || '').run();
-    removed += r.meta?.changes ?? 0;
+  for (let i = 0; i < keys.length; i += 100) {
+    const batch = keys.slice(i, i + 100);
+    const stmts = batch.map((key) => {
+      const [mid, src] = key.split('|', 2);
+      return env.DB.prepare(
+        "DELETE FROM playlist_songs WHERE playlist_id = 'love' AND user_id = ? AND songmid = ? AND source = ?"
+      ).bind(userId, mid, src || '');
+    });
+    const results = await env.DB.batch(stmts);
+    for (const r of results) removed += r.meta?.changes ?? 0;
   }
 
   try { ctx.waitUntil(env.CACHE.delete(`v2:love:${userId}`)); } catch {}
@@ -276,15 +296,15 @@ export async function handlePlaylistRefresh(request: Request, env: Env, ctx: Exe
   const ctErr = requireJsonContentType(request);
   if (ctErr) return ctErr;
 
-  let body: any;
-  try { body = await request.json(); } catch { return jsonResponse({ error: '无效请求' }, 400); }
+  const parsed = await readJsonBody(request);
+  if (parsed instanceof Response) return parsed;
 
-  const id = String(body?.id || '').slice(0, 128);
+  const id = String(parsed.body.id || '').slice(0, 128);
   if (!id || id === 'love') return jsonResponse({ error: '无效歌单ID' }, 400);
 
   const pl = await env.DB.prepare(
-    'SELECT id, name, source, source_id FROM playlists WHERE id = ? AND user_id = ?'
-  ).bind(id, userId).first<{ id: string; name: string; source: string; source_id: string }>();
+    'SELECT id, name, source, source_id, position FROM playlists WHERE id = ? AND user_id = ?'
+  ).bind(id, userId).first<{ id: string; name: string; source: string; source_id: string; position: number }>();
   if (!pl) return jsonResponse({ error: '歌单不存在' }, 404);
   // An imported playlist must have a source + source_id to be refreshable.
   // The 'love' playlist and any future purely-local playlists fall through here.
@@ -304,7 +324,7 @@ export async function handlePlaylistRefresh(request: Request, env: Env, ctx: Exe
   const newName = String(info.name || pl.name || '').slice(0, 128);
   try {
     await writePlaylistAtomically(env, {
-      id, userId, name: newName, position: 10, source: pl.source, sourceId: pl.source_id,
+      id, userId, name: newName, position: pl.position, source: pl.source, sourceId: pl.source_id,
     }, songs, { replace: true });
   } catch (err: any) {
     console.error('[refresh:save]', err?.message);
