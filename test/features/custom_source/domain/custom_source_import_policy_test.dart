@@ -23,7 +23,7 @@ void main() {
     expect(service.sources, isEmpty);
   });
 
-  test('remote import rejects HTTP before transport', () async {
+  test('remote import allows http and reaches transport', () async {
     var transports = 0;
     final sandbox = SourceRequestSandbox(
       policy: SourceRequestPolicy(
@@ -40,20 +40,21 @@ void main() {
     final service = CustomSourceService(importSandbox: sandbox);
     addTearDown(service.dispose);
 
+    // http 已放行：应发起传输；脚本内容无效（非 LX 脚本）导致导入失败。
     expect(
         await service.importSourceFromUrl('http://source.example/a.js'),
         isFalse);
-    expect(transports, 0);
+    expect(transports, 1);
   });
 
-  test('remote import revalidates redirect and rejects private target',
+  test('remote import follows redirect and rejects blocked IPv6 target',
       () async {
     final requests = <Uri>[];
     final sandbox = SourceRequestSandbox(
       policy: SourceRequestPolicy(
           resolve: (host) async => host == 'public.example'
               ? [InternetAddress('93.184.216.34')]
-              : [InternetAddress.loopbackIPv4]),
+              : [InternetAddress('::1')]),
       transport: (request, cancellation) async {
         requests.add(request.uri);
         return SourceTransportResponse(
@@ -68,6 +69,7 @@ void main() {
     final service = CustomSourceService(importSandbox: sandbox);
     addTearDown(service.dispose);
 
+    // IPv6 回环（::1）仍被拦截：首个请求发出，重定向目标被拒。
     expect(
         await service
             .importSourceFromUrl('https://public.example/source.js'),

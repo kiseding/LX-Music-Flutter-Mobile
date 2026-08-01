@@ -338,7 +338,8 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   static const _lazyQueueHistory = 4;
 
   /// 单曲 URL 解析总超时：音源不可用时不会无限等待，超时视为解析失败。
-  static const _resolveTimeout = Duration(seconds: 25);
+  /// 45s 需大于自定义源请求超时（40s），避免先于沙箱超时触发。
+  static const _resolveTimeout = Duration(seconds: 45);
 
   /// A paged playlist supplies future items in its global playback order.
   /// The handler still owns the short native queue used by lock-screen media

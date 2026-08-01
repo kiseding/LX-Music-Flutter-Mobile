@@ -1196,7 +1196,8 @@ class CustomSourceEngine {
     // 使用轮询方式每 500ms flush 一次，直到 completer 完成或超时。
     _flushMicrotasks();
 
-    final deadline = DateTime.now().add(const Duration(seconds: 15));
+    // 45s：onrender 等免费托管冷启动可达 20s+，15s 会过早放弃。
+    final deadline = DateTime.now().add(const Duration(seconds: 45));
     debugPrint(
         '[LX] _callRequestEvent polling reqId=$reqId pending=${_pendingRequests.length} handlers set');
     while (!completer.isCompleted && DateTime.now().isBefore(deadline)) {
@@ -1210,7 +1211,7 @@ class CustomSourceEngine {
       } catch (e) {
         _pendingRequests.remove(reqId);
         if (e is TimeoutException) {
-          final errMsg = '请求超时(15s): ${params['action']}';
+          final errMsg = '请求超时(45s): ${params['action']}';
           _eventController.add({'type': 'error', 'message': errMsg});
         } else {
           _eventController.add({'type': 'error', 'message': '请求失败: $e'});
@@ -1223,7 +1224,7 @@ class CustomSourceEngine {
     _pendingRequests.remove(reqId);
     debugPrint(
         '[LX] _callRequestEvent TIMEOUT reqId=$reqId action=${params['action']} — lx_response never arrived');
-    final errMsg = '请求超时(15s): ${params['action']}';
+    final errMsg = '请求超时(45s): ${params['action']}';
     _eventController.add({'type': 'error', 'message': errMsg});
     return null;
   }
