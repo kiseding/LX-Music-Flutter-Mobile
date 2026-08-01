@@ -16,9 +16,11 @@ import 'package:lx_music_flutter/features/player/presentation/player_provider.da
 import 'package:lx_music_flutter/features/player/presentation/lock_screen_sync.dart';
 import 'package:lx_music_flutter/features/lyric/presentation/lyric_provider.dart';
 import 'package:audio_session/audio_session.dart';
+import 'package:home_widget/home_widget.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:lx_music_flutter/features/playlist/data/file_playlist_repository.dart';
+import 'package:lx_music_flutter/router/app_router.dart';
 import 'package:lx_music_flutter/startup_lifecycle.dart';
 
 void main() async {
@@ -208,6 +210,10 @@ void main() async {
       },
     );
     unawaited(lockScreenSync.init());
+
+    // 小组件点击深链：冷启动（initiallyLaunchedFromHomeWidget）与热启动（widgetClicked）
+    unawaited(HomeWidget.initiallyLaunchedFromHomeWidget().then(routeWidgetLaunch));
+    HomeWidget.widgetClicked.listen(routeWidgetLaunch);
 
     runApp(
       OwnedProviderScope(

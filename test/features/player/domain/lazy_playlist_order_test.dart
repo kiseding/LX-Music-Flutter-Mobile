@@ -111,7 +111,7 @@ void main() {
       final next = await window.restartFromBeginning(shuffle: false, count: 3);
 
       expect(first.map((song) => song.id), ['3', '4']);
-      expect(next.map((song) => song.id), ['0', '1', '2']);
+      expect(next.map((entry) => entry.song.id), ['0', '1', '2']);
     },
   );
 }

@@ -32,7 +32,6 @@ class LockScreenSyncService {
   int _positionTick = 0;
   bool _disposed = false;
   bool _syncingNow = false;
-  Future<void> _activityTail = Future.value();
 
   Future<void> init() async {
     // 每一步独立容错：某个插件初始化失败不能中断小组件写入 / 订阅 / 定时器
@@ -50,7 +49,7 @@ class LockScreenSyncService {
         );
         // iOS already supplies the system Now Playing surface. Remove legacy
         // app activities so they cannot create a second island or lock screen card.
-        await _serializeActivity(() => _liveActivities.endAllActivities());
+        await _liveActivities.endAllActivities();
       }
     } catch (e) {
       debugPrint('[LockScreenSync] live activities init failed: $e');
@@ -74,6 +73,9 @@ class LockScreenSyncService {
       subscription.cancel();
     }
     _subscriptions.clear();
+    if (Platform.isIOS) {
+      unawaited(_liveActivities.dispose());
+    }
   }
 
   Future<void> _syncNow() async {
@@ -163,14 +165,6 @@ class LockScreenSyncService {
     } catch (e) {
       debugPrint('[LockScreenSync] position sync failed: $e');
     }
-  }
-
-  /// 串行化 Live Activity 操作：防止多个监听并发触发 createOrUpdateActivity，
-  /// 在插件内部 activities 尚未注册时各自新建，导致锁屏出现多张卡片。
-  Future<T> _serializeActivity<T>(Future<T> Function() op) {
-    final result = _activityTail.then((_) => op());
-    _activityTail = result.then<void>((_) {}, onError: (_) {});
-    return result;
   }
 
   Future<void> _clearNowPlaying() async {

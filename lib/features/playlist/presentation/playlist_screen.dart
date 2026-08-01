@@ -570,8 +570,8 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
     WidgetRef ref,
     dynamic playerService,
   ) {
-    final recommendations = ref.watch(recommendationProvider);
-    final count = recommendations.length;
+    final recommendationsAsync = ref.watch(recommendationProvider);
+    final count = recommendationsAsync.valueOrNull?.length ?? 0;
     const orange = Color(0xFFFF8F1F);
     const onOrange = Colors.white;
 

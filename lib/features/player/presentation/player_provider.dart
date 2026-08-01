@@ -378,10 +378,6 @@ final sleepTimerProvider =
   return SleepTimerNotifier(audioHandler.pause);
 });
 
-final sleepTimerEndProvider = Provider<DateTime?>((ref) {
-  return ref.watch(sleepTimerProvider).endTime;
-});
-
 // 全局播放消息通知（用于展示顶部通知）
 final playerMessageProvider = StateProvider<String?>((ref) => null);
 

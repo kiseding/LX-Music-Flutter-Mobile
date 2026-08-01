@@ -34,7 +34,7 @@ void main() {
     _song('c3', '夜曲', '周杰伦', '十一月的萧邦'), // 与收藏同 id → 应被排除
   ];
 
-  test('requires 100 favorites and returns only a full 30-song result', () {
+  test('requires 100 favorites and caps at 30 results', () {
     final engine = const RecommendationEngine();
     final enoughCandidates = List.generate(
       30,
@@ -48,6 +48,7 @@ void main() {
 
     expect(recs, hasLength(30));
     expect(recs.every((rec) => rec.song.singer == '周杰伦'), isTrue);
+    // 收藏不足 100 首时不生成推荐
     expect(
       engine.recommend(
         favorites: favorites.take(99).toList(),
@@ -56,14 +57,14 @@ void main() {
       ),
       isEmpty,
     );
-    expect(
-      engine.recommend(
-        favorites: favorites,
-        candidates: candidates,
-        random: Random(1),
-      ),
-      isEmpty,
+    // 候选不足 30 首时返回已有结果，而非空
+    final partial = engine.recommend(
+      favorites: favorites,
+      candidates: candidates,
+      random: Random(1),
     );
+    expect(partial, isNotEmpty);
+    expect(partial.length, lessThanOrEqualTo(candidates.length));
   });
 
   test('returns empty when favorites are below the sample threshold', () {

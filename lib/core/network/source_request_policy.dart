@@ -164,26 +164,6 @@ class SourceRequestCancellation {
 }
 
 class SourceRequestPolicy {
-  static const _ipv4DeniedPrefixes = <(List<int>, int)>[
-    ([0], 8),
-    ([10], 8),
-    ([100, 64], 10),
-    ([127], 8),
-    ([169, 254], 16),
-    ([172, 16], 12),
-    ([192, 0, 0], 24),
-    ([192, 0, 2], 24),
-    ([192, 31, 196], 24),
-    ([192, 52, 193], 24),
-    ([192, 88, 99], 24),
-    ([192, 168], 16),
-    ([192, 175, 48], 24),
-    ([198, 18], 15),
-    ([198, 51, 100], 24),
-    ([203, 0, 113], 24),
-    ([224], 4),
-    ([240], 4),
-  ];
   static const _ipv6DeniedPrefixes = <(List<int>, int)>[
     ([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 96),
     ([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff], 96),
@@ -298,9 +278,9 @@ class SourceRequestPolicy {
 
   static bool _isPublic(InternetAddress address) {
     final bytes = address.rawAddress;
+    // IPv4 不做私网拦截（按需求放开）
     if (address.type == InternetAddressType.IPv4) {
-      return !_ipv4DeniedPrefixes
-          .any((prefix) => _matchesPrefix(bytes, prefix.$1, prefix.$2));
+      return true;
     }
     final globallyRoutable = (bytes[0] & 0xe0) == 0x20;
     return globallyRoutable &&
@@ -326,11 +306,6 @@ typedef SourceTransport = Future<SourceTransportResponse> Function(
 );
 
 class SourceRequestSandbox {
-  static const _crossOriginHeaders = {
-    'accept',
-    'accept-language',
-    'user-agent',
-  };
   final SourceRequestPolicy policy;
   final SourceTransport transport;
   final int maximumRedirects;
@@ -417,11 +392,7 @@ class SourceRequestSandbox {
                   'too_many_redirects', 'Redirect limit exceeded');
             }
             next = current.resolve(location);
-            currentOptions = _redirectOptions(
-              request,
-              redirectStatus,
-              crossOrigin: !_sameOrigin(current, next),
-            );
+            currentOptions = _redirectOptions(request, redirectStatus);
           } finally {
             response.close();
           }
@@ -468,9 +439,8 @@ class SourceRequestSandbox {
 
   Map<String, dynamic> _redirectOptions(
     ValidatedSourceRequest request,
-    int status, {
-    required bool crossOrigin,
-  }) {
+    int status,
+  ) {
     var method = request.method;
     var body = request.body;
     final dropsBody = status == 303 ||
@@ -487,9 +457,8 @@ class SourceRequestSandbox {
     for (final entry in request.headers.entries) {
       final lower = entry.key.toLowerCase();
       if (lower.startsWith('content-')) continue;
-      if (!crossOrigin || _crossOriginHeaders.contains(lower)) {
-        headers[entry.key] = entry.value;
-      }
+      // 按需求放开重定向：跨域重定向也保留原请求头。
+      headers[entry.key] = entry.value;
     }
     if (body != null) {
       final contentType = _headerValue(request.headers, 'content-type');
@@ -502,11 +471,6 @@ class SourceRequestSandbox {
       'timeout': request.timeout.inMilliseconds,
     };
   }
-
-  bool _sameOrigin(Uri first, Uri second) =>
-      first.scheme.toLowerCase() == second.scheme.toLowerCase() &&
-      first.host.toLowerCase() == second.host.toLowerCase() &&
-      first.port == second.port;
 
   String? _headerValue(Map<String, String> headers, String name) {
     for (final entry in headers.entries) {

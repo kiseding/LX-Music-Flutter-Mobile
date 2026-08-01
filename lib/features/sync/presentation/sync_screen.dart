@@ -334,7 +334,7 @@ class _SyncScreenState extends ConsumerState<SyncScreen> {
       if (!mounted) return;
       setState(
         () => _message =
-            '已同步：喜欢 ${result.favoriteSongCount} 首，歌单 ${result.acceptedPlaylistCount} 个',
+            '已同步：收藏 ${result.favoriteSongCount} 首，歌单 ${result.acceptedPlaylistCount} 个',
       );
     } catch (e) {
       if (!mounted) return;

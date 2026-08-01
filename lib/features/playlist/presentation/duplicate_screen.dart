@@ -19,19 +19,12 @@ class _DuplicateScreenState extends ConsumerState<DuplicateScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final playlistService = ref.watch(playlistServiceProvider);
-    final songsById = <String, MusicItem>{
-      for (final playlist in playlistService.playlists)
-        for (final song in playlist.songs) song.id: song,
-    };
-    final allSongs = songsById.values.toList(growable: false);
-    final favorites = playlistService.favorites?.songs ?? const [];
-
-    final detector = DuplicateDetector(
-      songs: allSongs,
-      favoriteIds: favorites.map((s) => s.id).toSet(),
-    );
-    final groups = detector.detect();
+    final playlistsAsync = ref.watch(hydratedPlaylistsProvider);
+    final favoritesAsync =
+        ref.watch(playlistSongsPageProvider(PlaylistSongsPageRequest(
+      playlistId: 'favorites',
+      pageIndex: 0,
+    )));
 
     return Scaffold(
       backgroundColor: AppColors.scaffold(context),
@@ -46,8 +39,27 @@ class _DuplicateScreenState extends ConsumerState<DuplicateScreen> {
       ),
       body: SafeArea(
         top: false,
-        child: groups.isEmpty
-            ? Center(
+        child: playlistsAsync.when(
+          loading: () => const Center(child: CircularProgressIndicator()),
+          error: (_, __) => const Center(child: Text('加载失败')),
+          data: (playlists) {
+            final songsById = <String, MusicItem>{
+              for (final playlist in playlists)
+                for (final song in playlist.songs) song.id: song,
+            };
+            final allSongs = songsById.values.toList(growable: false);
+            final favoriteIds =
+                favoritesAsync.valueOrNull?.songs.map((s) => s.id).toSet() ??
+                    const <String>{};
+
+            final detector = DuplicateDetector(
+              songs: allSongs,
+              favoriteIds: favoriteIds,
+            );
+            final groups = detector.detect();
+
+            if (groups.isEmpty) {
+              return Center(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -60,14 +72,17 @@ class _DuplicateScreenState extends ConsumerState<DuplicateScreen> {
                             fontSize: 14)),
                   ],
                 ),
-              )
-            : ListView.separated(
-                padding: const EdgeInsets.all(16),
-                itemCount: groups.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 12),
-                itemBuilder: (context, index) =>
-                    _buildGroup(context, groups[index]),
-              ),
+              );
+            }
+            return ListView.separated(
+              padding: const EdgeInsets.all(16),
+              itemCount: groups.length,
+              separatorBuilder: (_, __) => const SizedBox(height: 12),
+              itemBuilder: (context, index) =>
+                  _buildGroup(context, groups[index]),
+            );
+          },
+        ),
       ),
     );
   }

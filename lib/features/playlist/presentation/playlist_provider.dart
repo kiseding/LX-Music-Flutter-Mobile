@@ -77,6 +77,12 @@ final playlistSongSearchProvider = FutureProvider.autoDispose
   return ref.read(playlistServiceProvider).searchSongs(query);
 });
 
+/// 完整加载的歌单列表（内存中的惰性摘要不含歌曲，需 hydrate 后使用）。
+final hydratedPlaylistsProvider = FutureProvider<List<Playlist>>((ref) {
+  ref.watch(playlistRevisionProvider);
+  return ref.read(playlistServiceProvider).getAllPlaylists();
+});
+
 final isSongFavoriteProvider = FutureProvider.family<bool, String>((ref, songId) async {
   ref.watch(playlistRevisionProvider);
   final playlistService = ref.watch(playlistServiceProvider);

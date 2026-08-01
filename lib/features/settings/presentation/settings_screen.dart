@@ -14,6 +14,7 @@ import '../../search/presentation/search_provider.dart';
 import '../../playlist/data/playlist_repository.dart';
 import '../../playlist/presentation/playlist_provider.dart';
 import '../../player/presentation/player_provider.dart';
+import '../../download/presentation/download_provider.dart';
 import '../domain/playlist_backup.dart';
 
 class SettingsScreen extends ConsumerWidget {
@@ -153,6 +154,7 @@ class SettingsScreen extends ConsumerWidget {
                   ref
                       .read(wifiOnlyDownloadProvider.notifier)
                       .setWifiOnly(value);
+                  ref.read(setWifiOnlyDownloadProvider)(value);
                 },
               ),
               _buildNavTile(
@@ -509,18 +511,21 @@ class SettingsScreen extends ConsumerWidget {
   void _showDefaultPlatformDialog(BuildContext context, WidgetRef ref) {
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: AppColors.dialogBg(context),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Text(
-          '默认搜索平台',
-          style: TextStyle(color: AppColors.onScaffold(context)),
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: ['tx', 'kw', 'wy'].map((id) {
-            final current = ref.watch(defaultSearchPlatformProvider);
-            return ListTile(
+      builder: (context) => Consumer(
+        builder: (context, ref, _) {
+          final current = ref.watch(defaultSearchPlatformProvider);
+          return AlertDialog(
+            backgroundColor: AppColors.dialogBg(context),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: Text(
+              '默认搜索平台',
+              style: TextStyle(color: AppColors.onScaffold(context)),
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: ['tx', 'kw', 'wy'].map((id) {
+                return ListTile(
               title: Text(
                 _platformName(id),
                 style: TextStyle(
@@ -539,9 +544,11 @@ class SettingsScreen extends ConsumerWidget {
                 ref.read(selectedSourceIdProvider.notifier).state = id;
                 Navigator.pop(context);
               },
-            );
-          }).toList(),
-        ),
+              );
+            }).toList(),
+            ),
+          );
+        },
       ),
     );
   }
@@ -562,20 +569,23 @@ class SettingsScreen extends ConsumerWidget {
   ) {
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: AppColors.dialogBg(context),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Text(
-          title,
-          style: TextStyle(color: AppColors.onScaffold(context)),
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: AudioQualityOption.values.map((quality) {
-            final currentQuality = ref.watch(
-              isDownload ? downloadQualityProvider : audioQualityProvider,
-            );
-            return ListTile(
+      builder: (context) => Consumer(
+        builder: (context, ref, _) {
+          final currentQuality = ref.watch(
+            isDownload ? downloadQualityProvider : audioQualityProvider,
+          );
+          return AlertDialog(
+            backgroundColor: AppColors.dialogBg(context),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: Text(
+              title,
+              style: TextStyle(color: AppColors.onScaffold(context)),
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: AudioQualityOption.values.map((quality) {
+                return ListTile(
               title: Text(
                 _getQualityName(quality),
                 style: TextStyle(
@@ -597,9 +607,11 @@ class SettingsScreen extends ConsumerWidget {
                 }
                 Navigator.pop(context);
               },
-            );
-          }).toList(),
-        ),
+              );
+              }).toList(),
+            ),
+          );
+        },
       ),
     );
   }

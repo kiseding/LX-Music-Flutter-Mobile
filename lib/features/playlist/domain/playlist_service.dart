@@ -501,7 +501,7 @@ class PlaylistService {
     if (!result.any((playlist) => playlist.id == 'favorites')) {
       result.add(_systemPlaylist(
         id: 'favorites',
-        name: '我喜欢',
+        name: '收藏列表',
         description: '收藏的歌曲',
       ));
     }

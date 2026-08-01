@@ -121,7 +121,7 @@ class RecommendationEngine {
       ));
     }
     scored.sort((a, b) => b.score.compareTo(a.score));
-    if (scored.length < defaultTopN) return const [];
+    // 候选不足 30 首时返回已有结果（不再返回空），不足时展示实际数量。
     return scored.take(defaultTopN).toList(growable: false);
   }
 

@@ -2430,7 +2430,6 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
           : _indexOfOccurrence(activeOccurrence);
       final replacementIndex = index.clamp(0, _queue.length - 1);
       if (removedCurrent) {
-        final replacementId = _queue[replacementIndex].id;
         final replacementOccurrence = _occurrenceIdAt(replacementIndex);
         final sourceCommandToken = _commands.requestSource(
           occurrenceId: replacementOccurrence,
@@ -2512,23 +2511,6 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     await _commands.setShuffleModeEnabled(enabled);
   }
 
-  /// 合并 extras 到队列中指定 id 的项（不切换当前曲）。
-  void patchQueueItemExtras(String mediaId, Map<String, dynamic> patch) {
-    if (_disposed) return;
-    final idx = _queue.indexWhere((m) => m.id == mediaId);
-    if (idx < 0) return;
-    final extras = Map<String, dynamic>.from(_queue[idx].extras ?? {});
-    extras.addAll(patch);
-    _replaceQueueItem(idx, _queue[idx].copyWith(extras: extras));
-    queue.add(List.from(_queue));
-    final current = mediaItem.value;
-    if (current != null && current.id == mediaId) {
-      final curExtras = Map<String, dynamic>.from(current.extras ?? {});
-      curExtras.addAll(patch);
-      mediaItem.add(current.copyWith(extras: curExtras));
-    }
-  }
-
   /// Background artwork warm-up: set local file artUri without reloading audio.
   void patchQueueArtUri(String mediaId, Uri artUri) {
     if (_disposed) return;
@@ -2585,7 +2567,6 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     );
     preferredQuality = quality;
     if (_queue.isEmpty) return;
-    final reloadItemId = mediaItem.value?.id;
     for (var i = 0; i < _queue.length; i++) {
       final extras = Map<String, dynamic>.from(_queue[i].extras ?? {});
       final cachedQ = extras['requestedQuality']?.toString();

@@ -52,7 +52,8 @@ void main() {
       }
     });
 
-    test('rejects non-public IPv4 destinations and DNS answers', () async {
+    test('allows IPv4 destinations regardless of reserved/private ranges',
+        () async {
       final policy = policyWith({});
       for (final address in [
         '0.0.0.0',
@@ -70,9 +71,9 @@ void main() {
         '240.0.0.1',
         '255.255.255.255',
       ]) {
-        await expectLater(
-          policy.validate(Uri.parse('https://$address/a'), {}),
-          throwsA(isA<SourceRequestPolicyException>()),
+        expect(
+          await policy.validate(Uri.parse('https://$address/a'), {}),
+          isA<ValidatedSourceRequest>(),
           reason: address,
         );
       }
@@ -97,7 +98,7 @@ void main() {
       }
     });
 
-    test('rejects every IPv4 special-purpose prefix at its boundaries',
+    test('allows every IPv4 special-purpose prefix at its boundaries',
         () async {
       final policy = policyWith({});
       const prefixes = <List<String>>[
@@ -123,9 +124,9 @@ void main() {
 
       for (final prefix in prefixes) {
         for (final address in prefix) {
-          await expectLater(
-            policy.validate(Uri.parse('https://$address'), {}),
-            throwsA(isA<SourceRequestPolicyException>()),
+          expect(
+            await policy.validate(Uri.parse('https://$address'), {}),
+            isA<ValidatedSourceRequest>(),
             reason: '$prefix boundary $address',
           );
         }
@@ -200,8 +201,7 @@ void main() {
       }
     });
 
-    test('keeps public addresses when DNS returns mixed public/private',
-        () async {
+    test('keeps IPv4 and public addresses, drops blocked IPv6', () async {
       final policy = policyWith({
         'mixed.example': ['127.0.0.1', '93.184.216.34', '::1'],
       });
@@ -209,7 +209,11 @@ void main() {
       final request =
           await policy.validate(Uri.parse('https://mixed.example/a'), {});
 
-      expect(request.addresses, [publicAddress]);
+      // IPv4 不再拦截；::1 仍被 IPv6 拦截。
+      expect(
+        request.addresses.map((a) => a.address),
+        ['127.0.0.1', '93.184.216.34'],
+      );
     });
 
     test('prefers IPv4 when both public families are returned', () async {
@@ -227,17 +231,17 @@ void main() {
       expect(request.addresses, [publicAddress, ipv6]);
     });
 
-    test('rejects DNS results with only non-public addresses', () async {
+    test('allows DNS results with private IPv4 addresses', () async {
       final policy = policyWith({
         'private.example': ['127.0.0.1', '10.0.0.1'],
       });
 
-      await expectLater(
-        policy.validate(Uri.parse('https://private.example/a'), {}),
-        throwsA(
-          isA<SourceRequestPolicyException>()
-              .having((error) => error.code, 'code', 'blocked_address'),
-        ),
+      final request =
+          await policy.validate(Uri.parse('https://private.example/a'), {});
+
+      expect(
+        request.addresses.map((a) => a.address),
+        ['127.0.0.1', '10.0.0.1'],
       );
     });
 
@@ -423,8 +427,7 @@ void main() {
       });
     }
 
-    test('cross-origin redirect forwards only allowlisted caller headers',
-        () async {
+    test('cross-origin redirect forwards all caller headers', () async {
       final requests = await followRedirect(
         status: 307,
         location: 'https://two.example/done',
@@ -446,10 +449,10 @@ void main() {
       expect(requests.last.headers['Accept-Language'], 'en');
       expect(requests.last.headers['User-Agent'], 'source-agent');
       expect(requests.last.headers['Content-Type'], 'text/plain');
-      expect(requests.last.headers, isNot(contains('Authorization')));
-      expect(requests.last.headers, isNot(contains('Cookie')));
-      expect(requests.last.headers, isNot(contains('X-Api-Key')));
-      expect(requests.last.headers, isNot(contains('X-Custom')));
+      expect(requests.last.headers['Authorization'], 'Bearer sponsor-token');
+      expect(requests.last.headers['Cookie'], 'session=secret');
+      expect(requests.last.headers['X-Api-Key'], 'secret');
+      expect(requests.last.headers['X-Custom'], 'private');
     });
 
     test('same-origin redirect keeps first-hop auth headers', () async {
@@ -469,7 +472,7 @@ void main() {
       expect(requests.last.headers['X-Api-Key'], 'secret');
     });
 
-    test('cross-origin body-dropping redirect forwards no content headers',
+    test('cross-origin body-dropping redirect drops body content headers',
         () async {
       final requests = await followRedirect(
         status: 302,
@@ -478,7 +481,8 @@ void main() {
 
       expect(requests.last.method, 'GET');
       expect(requests.last.headers, isNot(contains('Content-Type')));
-      expect(requests.last.headers, isNot(contains('X-Api-Key')));
+      // 非内容头（如 X-Api-Key）现在会被保留
+      expect(requests.last.headers['X-Api-Key'], 'secret');
     });
 
     test('rejects multiple Location field values', () async {
@@ -597,26 +601,34 @@ void main() {
       );
     });
 
-    test('blocks a redirect whose DNS contains a private result', () async {
+    test('allows a redirect whose DNS contains a private IPv4 result',
+        () async {
       final policy = policyWith({
         'public.example': ['93.184.216.34'],
         'private.example': ['93.184.216.34', '10.0.0.1'],
       });
       final sandbox = SourceRequestSandbox(
         policy: policy,
-        transport: (request, cancellation) async => SourceTransportResponse(
-          statusCode: 302,
-          headers: {
-            'location': ['https://private.example/secret']
-          },
-          body: const Stream.empty(),
-        ),
+        transport: (request, cancellation) async {
+          final location = request.uri.path == '/start'
+              ? 'https://private.example/secret'
+              : null;
+          return SourceTransportResponse(
+            statusCode: location == null ? 200 : 302,
+            headers: {
+              if (location != null) 'location': [location]
+            },
+            body: const Stream.empty(),
+          );
+        },
       );
 
-      await expectLater(
-        sandbox.request(Uri.parse('https://public.example/start'), {}),
-        throwsA(isA<SourceRequestPolicyException>()),
+      final response = await sandbox.request(
+        Uri.parse('https://public.example/start'),
+        {},
       );
+
+      expect(response.statusCode, 200);
     });
 
     test('bounds redirects', () async {

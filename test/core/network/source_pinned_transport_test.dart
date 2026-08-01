@@ -62,7 +62,7 @@ void main() {
     expect(forceClosed, isTrue);
   });
 
-  test('connection factory rejects proxies and dials only validated address',
+  test('connection factory allows proxies and dials only validated address',
       () async {
     InternetAddress? dialedAddress;
     int? dialedPort;
@@ -80,12 +80,10 @@ void main() {
     );
     final originalUri = Uri.parse('https://source.example/path');
 
+    // 代理不再被拦截：无论是否配置代理，都直连已校验的目标地址。
     expect(
       () => factory(originalUri, 'proxy.example', 8080),
-      throwsA(
-        isA<SourceRequestPolicyException>()
-            .having((error) => error.code, 'code', 'proxy_blocked'),
-      ),
+      throwsA(isA<SocketException>()),
     );
     expect(
       () => factory(originalUri, null, null),

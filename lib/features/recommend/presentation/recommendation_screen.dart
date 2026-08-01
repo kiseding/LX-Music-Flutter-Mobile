@@ -12,7 +12,7 @@ class RecommendationScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final recommendations = ref.watch(recommendationProvider);
+    final recommendationsAsync = ref.watch(recommendationProvider);
     final playProvider = ref.read(playerServiceProvider);
 
     return Scaffold(
@@ -28,20 +28,23 @@ class RecommendationScreen extends ConsumerWidget {
       ),
       body: SafeArea(
         top: false,
-        child: recommendations.isEmpty
-            ? _buildEmpty(context)
-            : Column(
-                children: [
-                  _buildHeader(context, recommendations.length),
-                  Expanded(
-                    child: ListView.separated(
-                      padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
-                      itemCount: recommendations.length,
-                      separatorBuilder: (_, __) =>
-                          const SizedBox(height: 4),
-                      itemBuilder: (context, index) {
-                        final rec = recommendations[index];
-                        return ListTile(
+        child: recommendationsAsync.when(
+          loading: () => const Center(child: CircularProgressIndicator()),
+          error: (_, __) => _buildEmpty(context),
+          data: (recommendations) => recommendations.isEmpty
+              ? _buildEmpty(context)
+              : Column(
+                  children: [
+                    _buildHeader(context, recommendations.length),
+                    Expanded(
+                      child: ListView.separated(
+                        padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+                        itemCount: recommendations.length,
+                        separatorBuilder: (_, __) =>
+                            const SizedBox(height: 4),
+                        itemBuilder: (context, index) {
+                          final rec = recommendations[index];
+                          return ListTile(
                           contentPadding: const EdgeInsets.symmetric(
                               horizontal: 8, vertical: 2),
                           leading: SizedBox(
@@ -88,11 +91,12 @@ class RecommendationScreen extends ConsumerWidget {
                             recommendations.map((r) => r.song).toList(),
                             index: index,
                           ),
-                        );
-                      },
+                          );
+                        },
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
       ),
     );

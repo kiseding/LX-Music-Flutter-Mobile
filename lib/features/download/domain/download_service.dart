@@ -150,7 +150,7 @@ class DownloadService {
   final Map<String, _DownloadAttempt> _attempts = {};
   final Set<String> _activeTaskIds = <String>{};
   final int _maxConcurrent;
-  final bool _wifiOnly;
+  bool _wifiOnly;
   final DownloadExecutor? _downloader;
   final String Function() _taskIdFactory;
   final Duration _progressPersistenceInterval;
@@ -177,6 +177,20 @@ class DownloadService {
   Stream<List<DownloadTask>> get tasksStream => _tasksController.stream;
   int get maxCacheSizeMB => 2048;
   Set<String> get activeTaskIds => Set.unmodifiable(_activeTaskIds);
+
+  bool get wifiOnly => _wifiOnly;
+
+  /// 更新「仅 WiFi 下载」策略，不影响下载服务实例本身。
+  void setWifiOnly(bool value) {
+    if (_wifiOnly == value) return;
+    _wifiOnly = value;
+    if (value) {
+      _connectivityEpoch++;
+      _processQueue();
+    } else {
+      _processQueue();
+    }
+  }
   Future<void> get idle async {
     while (_activeTaskIds.isNotEmpty) {
       await Future<void>.delayed(Duration.zero);
@@ -440,8 +454,9 @@ class DownloadService {
   }
 
   Future<void> _initDownloadDir() async {
-    if (_downloadDirectory != null) {
-      final dir = await _downloadDirectory!();
+    final directoryFactory = _downloadDirectory;
+    if (directoryFactory != null) {
+      final dir = await directoryFactory();
       await dir.create(recursive: true);
       _downloadDir = dir.path;
     } else {

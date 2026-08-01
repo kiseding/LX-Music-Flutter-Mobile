@@ -17,6 +17,16 @@ import '../features/recommend/presentation/recommendation_screen.dart';
 
 final GlobalKey<NavigatorState> _rootNavigatorKey = GlobalKey<NavigatorState>();
 
+/// 处理小组件 / 深链打开播放器的请求。
+/// 支持 `lxmusic://nowplaying` 等意图，统一路由到全屏播放器。
+void routeWidgetLaunch(Uri? uri) {
+  if (uri == null) return;
+  final host = uri.host.toLowerCase();
+  if (host == 'nowplaying') {
+    appRouter.push('/player');
+  }
+}
+
 final appRouter = GoRouter(
   navigatorKey: _rootNavigatorKey,
   initialLocation: '/',
@@ -113,11 +123,6 @@ final appRouter = GoRouter(
       path: '/custom-source',
       parentNavigatorKey: _rootNavigatorKey,
       builder: (context, state) => const CustomSourceScreen(),
-    ),
-    GoRoute(
-      path: '/leaderboard',
-      parentNavigatorKey: _rootNavigatorKey,
-      builder: (context, state) => const LeaderboardScreen(),
     ),
     GoRoute(
       path: '/leaderboard/detail',

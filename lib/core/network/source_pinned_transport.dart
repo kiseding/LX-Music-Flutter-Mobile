@@ -109,12 +109,7 @@ class SourcePinnedTransport {
     var nextAddress = 0;
     final starter = startSocket ?? startPinnedSocket;
     return (uri, proxyHost, proxyPort) {
-      if (proxyHost != null) {
-        throw const SourceRequestPolicyException(
-          'proxy_blocked',
-          'Proxy connections are not allowed',
-        );
-      }
+      // 按需求放开代理：不再拦截 proxy，改为直连已校验的目标地址。
       final address = request.addresses[nextAddress % request.addresses.length];
       nextAddress++;
       return starter(

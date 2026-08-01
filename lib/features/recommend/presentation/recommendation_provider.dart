@@ -7,17 +7,23 @@ import '../domain/recommendation_engine.dart';
 
 /// 猜你喜欢推荐结果。
 final recommendationProvider =
-    Provider<List<RecommendedSong>>((ref) {
-  ref.watch(playlistServiceProvider).revisions;
+    FutureProvider<List<RecommendedSong>>((ref) async {
+  ref.watch(playlistRevisionProvider);
   ref.watch(playHistoryRevisionProvider).value;
 
   final playlistService = ref.read(playlistServiceProvider);
   final history = ref.read(playHistoryStoreProvider);
-  final favorites = playlistService.favorites?.songs ?? const [];
+
+  // 使用完整加载的歌单（内存中的惰性摘要不含歌曲列表）。
+  final hydrated = await playlistService.getAllPlaylists();
+  final favorites = hydrated
+      .where((playlist) => playlist.id == 'favorites')
+      .expand((playlist) => playlist.songs)
+      .toList(growable: false);
 
   // 候选池：所有歌单的歌曲去重（排除已收藏）
   final seen = <String, MusicItem>{};
-  for (final playlist in playlistService.playlists) {
+  for (final playlist in hydrated) {
     if (playlist.id == 'recent') continue;
     for (final song in playlist.songs) {
       seen[song.id] = song;

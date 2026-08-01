@@ -10,7 +10,10 @@ import '../../settings/presentation/settings_provider.dart';
 import '../../../startup_lifecycle.dart';
 
 final downloadServiceProvider = Provider<DownloadService>((ref) {
-  final wifiOnly = ref.watch(wifiOnlyDownloadProvider);
+  // 不要 watch wifiOnlyDownloadProvider：开关变化会重建本 Provider，
+  // 触发 onDispose 取消全部下载且新实例未 init。改为读取一次初始值，
+  // 后续开关变化通过 setWifiOnlyDownloadProvider 同步到服务实例。
+  final wifiOnly = ref.read(wifiOnlyDownloadProvider);
   final connectivity = Connectivity();
   final service = DownloadService(
     wifiOnly: wifiOnly,
@@ -52,6 +55,13 @@ final downloadServiceProvider = Provider<DownloadService>((ref) {
     disposeService();
   });
   return service;
+});
+
+// 同步「仅 WiFi 下载」到下载服务（服务实例保持存活）
+final setWifiOnlyDownloadProvider = Provider<void Function(bool)>((ref) {
+  return (value) {
+    ref.read(downloadServiceProvider).setWifiOnly(value);
+  };
 });
 
 // 版本号，用于触发 UI 刷新

@@ -159,10 +159,6 @@ private extension View {
       self
     }
   }
-
-  func lxLiveActivityBackground() -> some View {
-    activityBackgroundTint(.clear)
-  }
 }
 
 private struct LXNowPlayingWidgetView: View {
@@ -185,9 +181,23 @@ private struct LXNowPlayingWidgetView: View {
   @ViewBuilder
   private var progressBar: some View {
     if entry.durationMs > 0 {
-      ProgressView(value: displayPositionMs, total: entry.durationMs)
-        .tint(entry.isPlaying ? Color.accentColor : Color.white.opacity(0.35))
-        .scaleEffect(x: 1, y: 0.6, anchor: .center)
+      // 播放中用绝对时间区间让系统平滑推进进度，避免 30s 刷新时跳变。
+      let range = lxProgressRange(
+        positionMs: entry.positionMs,
+        durationMs: entry.durationMs,
+        syncedAtMs: entry.positionSyncedAtMs,
+        isPlaying: entry.isPlaying,
+        now: entry.date
+      )
+      if let range, entry.isPlaying {
+        ProgressView(timerInterval: range, countsDown: false)
+          .tint(Color.accentColor)
+          .scaleEffect(x: 1, y: 0.6, anchor: .center)
+      } else {
+        ProgressView(value: displayPositionMs, total: entry.durationMs)
+          .tint(entry.isPlaying ? Color.accentColor : Color.white.opacity(0.35))
+          .scaleEffect(x: 1, y: 0.6, anchor: .center)
+      }
     }
   }
 
@@ -388,84 +398,6 @@ private struct DynamicCodingKeys: CodingKey {
 extension LiveActivitiesAppAttributes {
   func prefixedKey(_ key: String) -> String {
     "\(id)_\(key)"
-  }
-}
-
-@available(iOSApplicationExtension 16.1, *)
-private struct LXLiveActivityContentView: View {
-  let context: ActivityViewContext<LiveActivitiesAppAttributes>
-
-  private var defaults: UserDefaults? {
-    UserDefaults(suiteName: context.state.appGroupId ?? widgetGroupId)
-  }
-
-  private func value(_ key: String) -> String? {
-    defaults?.string(forKey: context.attributes.prefixedKey(key))
-  }
-
-  private var title: String { context.state.title ?? (value("title") ?? "LX Music") }
-  private var artist: String { context.state.artist ?? (value("artist") ?? "") }
-  private var artworkPath: String? { context.state.artworkPath ?? value("artworkPath") }
-  private var isPlaying: Bool { context.state.isPlaying ?? (defaults?.bool(forKey: context.attributes.prefixedKey("playing")) ?? false) }
-  private var positionMs: Double { context.state.positionMs ?? (defaults?.double(forKey: context.attributes.prefixedKey("positionMs")) ?? 0) }
-  private var positionSyncedAtMs: Double { context.state.positionSyncedAtMs ?? (defaults?.double(forKey: context.attributes.prefixedKey("positionSyncedAtMs")) ?? 0) }
-  private var durationMs: Double { context.state.durationMs ?? (defaults?.double(forKey: context.attributes.prefixedKey("durationMs")) ?? 0) }
-  private var lyric: String { context.state.lyric ?? (value("lyric") ?? "") }
-
-  private var currentPositionMs: Double {
-    lxPlaybackPositionMs(
-      positionMs: positionMs,
-      durationMs: durationMs,
-      syncedAtMs: positionSyncedAtMs,
-      isPlaying: isPlaying
-    )
-  }
-
-  private var progressRange: ClosedRange<Date>? {
-    lxProgressRange(
-      positionMs: positionMs,
-      durationMs: durationMs,
-      syncedAtMs: positionSyncedAtMs,
-      isPlaying: isPlaying
-    )
-  }
-
-  var body: some View {
-    HStack(spacing: 12) {
-      LXArtworkView(path: artworkPath)
-        .frame(width: 48, height: 48)
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-      VStack(alignment: .leading, spacing: 4) {
-        Text(title)
-          .font(.headline)
-          .foregroundStyle(.white)
-          .lineLimit(1)
-        Text(artist)
-          .font(.subheadline)
-          .foregroundStyle(.white.opacity(0.72))
-          .lineLimit(1)
-        if !lyric.isEmpty {
-          Text(lyric)
-            .font(.caption2)
-            .foregroundStyle(.white.opacity(0.78))
-            .lineLimit(1)
-        }
-        if let range = progressRange {
-          if isPlaying {
-            ProgressView(timerInterval: range, countsDown: false)
-              .tint(.white)
-          } else {
-            ProgressView(value: min(currentPositionMs, durationMs), total: durationMs)
-              .tint(.white.opacity(0.6))
-          }
-        }
-      }
-      Spacer(minLength: 0)
-      Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-        .font(.title3)
-        .foregroundStyle(.white)
-    }
-    .padding(14)
   }
 }
 
