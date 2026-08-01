@@ -44,6 +44,8 @@ class LockScreenSyncService {
         urlScheme: 'lxmusic',
         requestAndroidNotificationPermission: false,
       );
+      // 清除上次会话遗留/重复的卡片，保证锁屏只有一张 Live Activity
+      await _serializeActivity(() => _liveActivities.endAllActivities());
       _subscriptions.add(
         _liveActivities.urlSchemeStream().listen(_handleUrlCommand),
       );

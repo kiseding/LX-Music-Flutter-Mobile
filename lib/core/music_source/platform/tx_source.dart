@@ -162,7 +162,18 @@ class TxSource extends MusicPlatform {
               'platform': 'yqq',
             },
           );
-          final body = resp.data is String ? jsonDecode(resp.data) : resp.data;
+          final raw = resp.data;
+          Object? body = raw;
+          if (raw is String) {
+            var jsonStr = raw.trim();
+            // QQ 的 format=json205361747 可能返回 JSONP 包裹（json205361747({...})），
+            // 需剥离回调壳再解码，否则 jsonDecode 失败导致永远拿不到 vkey。
+            final callbackIdx = jsonStr.indexOf('(');
+            if (callbackIdx != -1 && jsonStr.endsWith(')')) {
+              jsonStr = jsonStr.substring(callbackIdx + 1, jsonStr.length - 1);
+            }
+            body = jsonDecode(jsonStr);
+          }
           if (body is! Map) continue;
           final data = body['data'];
           String? vkey;
