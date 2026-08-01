@@ -20,12 +20,16 @@ private struct LXNowPlayingEntry: TimelineEntry {
   let positionMs: Double
   let positionSyncedAtMs: Double
   let durationMs: Double
+
+  var hasNowPlayingData: Bool {
+    !title.isEmpty || !artist.isEmpty
+  }
 }
 
 private func loadNowPlayingEntry(date: Date = Date()) -> LXNowPlayingEntry {
   let defaults = lxDefaults()
-  let title = defaults?.string(forKey: "title") ?? "LX Music"
-  let artist = defaults?.string(forKey: "artist") ?? "正在播放"
+  let title = defaults?.string(forKey: "title") ?? ""
+  let artist = defaults?.string(forKey: "artist") ?? ""
   let album = defaults?.string(forKey: "album") ?? ""
   let artworkPath = defaults?.string(forKey: "artworkPath")
   let isPlaying = defaults?.bool(forKey: "playing") ?? false
@@ -122,6 +126,28 @@ private struct LXArtworkView: View {
   }
 }
 
+private struct LXWidgetArtwork: View {
+  let path: String?
+  let size: CGFloat
+
+  var body: some View {
+    ZStack(alignment: .bottomTrailing) {
+      LXArtworkView(path: path)
+        .frame(width: size, height: size)
+        .clipShape(RoundedRectangle(cornerRadius: size * 0.18, style: .continuous))
+      Circle()
+        .fill(Color(red: 0.07, green: 0.08, blue: 0.11))
+        .frame(width: size * 0.29, height: size * 0.29)
+        .overlay {
+          Image(systemName: "waveform")
+            .font(.system(size: size * 0.12, weight: .bold))
+            .foregroundStyle(Color.accentColor)
+        }
+        .offset(x: size * 0.07, y: size * 0.07)
+    }
+  }
+}
+
 private extension View {
   @ViewBuilder
   func lxWidgetBackground() -> some View {
@@ -165,67 +191,116 @@ private struct LXNowPlayingWidgetView: View {
     }
   }
 
+  private var emptyState: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      HStack(spacing: 8) {
+        Image(systemName: "music.note.list")
+          .foregroundStyle(Color.accentColor)
+        Text("LX Music")
+          .font(.headline.weight(.semibold))
+          .foregroundStyle(.white)
+      }
+      Spacer(minLength: 0)
+      Text("打开 LX Music 开始播放")
+        .font(.subheadline)
+        .foregroundStyle(.white.opacity(0.62))
+      HStack(spacing: 5) {
+        Circle()
+          .fill(Color.accentColor)
+          .frame(width: 5, height: 5)
+        Text("正在等待播放内容")
+          .font(.caption2)
+          .foregroundStyle(.white.opacity(0.42))
+      }
+    }
+    .padding(16)
+  }
+
+  private var smallNowPlaying: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      HStack(spacing: 12) {
+        LXWidgetArtwork(path: entry.artworkPath, size: 58)
+        VStack(alignment: .leading, spacing: 3) {
+          Text(entry.title)
+            .font(.headline.weight(.semibold))
+            .foregroundStyle(.white)
+            .lineLimit(2)
+          Text(entry.artist)
+            .font(.caption)
+            .foregroundStyle(.white.opacity(0.68))
+            .lineLimit(1)
+        }
+      }
+      Spacer(minLength: 0)
+      HStack(spacing: 7) {
+        Image(systemName: entry.isPlaying ? "waveform" : "pause.fill")
+          .font(.caption.weight(.bold))
+          .foregroundStyle(entry.isPlaying ? Color.accentColor : .white.opacity(0.55))
+        Text(entry.isPlaying ? "正在播放" : "已暂停")
+          .font(.caption2)
+          .foregroundStyle(.white.opacity(0.58))
+        Spacer(minLength: 0)
+        Image(systemName: "arrow.up.right")
+          .font(.caption.weight(.bold))
+          .foregroundStyle(.white.opacity(0.4))
+      }
+      progressBar
+    }
+    .padding(16)
+  }
+
+  private var mediumNowPlaying: some View {
+    HStack(spacing: 16) {
+      LXWidgetArtwork(path: entry.artworkPath, size: 104)
+      VStack(alignment: .leading, spacing: 5) {
+        Text("正在播放")
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(Color.accentColor)
+        Text(entry.title)
+          .font(.headline.weight(.semibold))
+          .foregroundStyle(.white)
+          .lineLimit(2)
+        Text(entry.artist)
+          .font(.subheadline)
+          .foregroundStyle(.white.opacity(0.68))
+          .lineLimit(1)
+        if !entry.album.isEmpty {
+          Text(entry.album)
+            .font(.caption)
+            .foregroundStyle(.white.opacity(0.42))
+            .lineLimit(1)
+        }
+        Spacer(minLength: 0)
+        HStack(spacing: 8) {
+          Image(systemName: entry.isPlaying ? "waveform" : "pause.fill")
+            .font(.caption.weight(.bold))
+            .foregroundStyle(entry.isPlaying ? Color.accentColor : .white.opacity(0.55))
+          Text(entry.isPlaying ? "正在播放" : "已暂停")
+            .font(.caption)
+            .foregroundStyle(.white.opacity(0.58))
+        }
+        progressBar
+      }
+    }
+    .padding(16)
+  }
+
   var body: some View {
     ZStack {
-      Color(red: 0.07, green: 0.08, blue: 0.11)
-      if family == .systemMedium {
-        HStack(spacing: 14) {
-          LXArtworkView(path: entry.artworkPath)
-            .frame(width: 96, height: 96)
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-          VStack(alignment: .leading, spacing: 3) {
-            Text(entry.title)
-              .font(.headline)
-              .foregroundStyle(.white)
-              .lineLimit(2)
-            Text(entry.artist)
-              .font(.subheadline)
-              .foregroundStyle(.white.opacity(0.72))
-              .lineLimit(1)
-            if !entry.album.isEmpty {
-              Text(entry.album)
-                .font(.caption)
-                .foregroundStyle(.white.opacity(0.45))
-                .lineLimit(1)
-            }
-            if !entry.lyric.isEmpty {
-              Text(entry.lyric)
-                .font(.caption2)
-                .foregroundStyle(.white.opacity(0.6))
-                .lineLimit(2)
-            }
-            Spacer(minLength: 0)
-            progressBar
-          }
-        }
-        .padding(16)
+      LinearGradient(
+        colors: [
+          Color(red: 0.10, green: 0.12, blue: 0.18),
+          Color(red: 0.04, green: 0.05, blue: 0.08),
+        ],
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
+      )
+      if !entry.hasNowPlayingData {
+        emptyState
+      } else if family == .systemMedium {
+        mediumNowPlaying
       } else {
-        VStack(alignment: .leading, spacing: 8) {
-          HStack(spacing: 11) {
-            LXArtworkView(path: entry.artworkPath)
-              .frame(width: 52, height: 52)
-              .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
-            VStack(alignment: .leading, spacing: 2) {
-              Text(entry.title)
-                .font(.headline)
-                .foregroundStyle(.white)
-                .lineLimit(2)
-              Text(entry.artist)
-                .font(.caption)
-                .foregroundStyle(.white.opacity(0.72))
-                .lineLimit(1)
-            }
-          }
-          if entry.durationMs > 0 && !entry.album.isEmpty {
-            Text(entry.album)
-              .font(.caption2)
-              .foregroundStyle(.white.opacity(0.45))
-              .lineLimit(1)
-          }
-          Spacer(minLength: 0)
-          progressBar
-        }
-        .padding(14)
+        smallNowPlaying
       }
     }
     .widgetURL(URL(string: "lxmusic://nowplaying"))
