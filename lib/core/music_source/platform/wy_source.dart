@@ -361,13 +361,18 @@ class WySource extends MusicPlatform {
 
       if (body['code'] != 200) return null;
 
-      // 实测网易云官方 eapi 只返回 lrc / tlyric / romalrc（罗马音，非逐字）。
-      // yrc 逐字歌词官方接口不返回。这里保留 yrc 读取：若未来或第三方接口
-      // 返回 yrc 字级标签则直接使用；否则回退普通 lrc。
+      // 网易云 yrc 逐字歌词（部分歌曲才有，其余歌曲回退 lrc）。
+      // 实测 yrc 为 JSON 行 + 逐字行：
+      //   {"t":<ms>,"c":[{"tx":"字"}]}           → 元数据/普通行
+      //   [<行起ms>,<行时长ms>](<字起ms>,<字时长ms>,0)字...  → 逐字行
+      // 转成 LRCX 逐字格式（<start,dur>字）让解析器进入逐字渲染。
       final yrc = body['yrc'] as Map?;
       final yrcLyric = yrc?['lyric'] as String?;
       if (yrcLyric != null && yrcLyric.isNotEmpty) {
-        return yrcLyric;
+        final converted = wyYrcToLrc(yrcLyric);
+        if (converted != null && converted.isNotEmpty) {
+          return converted;
+        }
       }
 
       final lrc = body['lrc'] as Map?;
@@ -380,6 +385,72 @@ class WySource extends MusicPlatform {
     } catch (e) {
       return null;
     }
+  }
+
+  /// 将网易云 yrc 逐字歌词（JSON 行 + 逐字行）转换为 LRCX 逐字格式。
+  /// 返回 null 表示无法解析，调用方回退普通 lrc。
+  static String? wyYrcToLrc(String yrc) {
+    final lines = <String>[];
+    final timeRe = RegExp(r'^\[(\d+),(\d+)\]');
+    for (final raw in yrc.split('\n')) {
+      final line = raw.trim();
+      if (line.isEmpty) continue;
+
+      // JSON 行（元数据或普通行）
+      if (line.startsWith('{')) {
+        try {
+          final json = jsonDecode(line) as Map<String, dynamic>;
+          final t = (json['t'] as num?)?.toInt() ?? 0;
+          final c = json['c'] as List?;
+          final text = c == null
+              ? ''
+              : c.map((item) {
+                  final m = item is Map ? item['tx']?.toString() ?? '' : '';
+                  return m;
+                }).join();
+          if (text.isEmpty) continue;
+          lines.add('${_msToTimeTag(t)}$text');
+        } catch (_) {
+          continue;
+        }
+        continue;
+      }
+
+      // 逐字行：[行起ms,行时长ms](字起ms,字时长ms,0)字...
+      final lineMatch = timeRe.firstMatch(line);
+      if (lineMatch == null) continue;
+      final lineStart = int.parse(lineMatch.group(1)!);
+      final timeTag = _msToTimeTag(lineStart);
+      final body = line.substring(lineMatch.end);
+      final wordRe = RegExp(r'\((\d+),(\d+),\d+\)([^()]*)');
+      final wordMatches = wordRe.allMatches(body).toList();
+      if (wordMatches.isEmpty) {
+        // 无逐字标签的行
+        final plain = body.replaceAll(RegExp(r'\(\d+,\d+,\d+\)'), '').trim();
+        if (plain.isEmpty) continue;
+        lines.add('$timeTag$plain');
+        continue;
+      }
+      final buffer = StringBuffer(timeTag);
+      for (final m in wordMatches) {
+        final start = int.parse(m.group(1)!);
+        final dur = int.parse(m.group(2)!);
+        final text = m.group(3) ?? '';
+        if (text.isEmpty) continue;
+        final relStart = (start - lineStart).clamp(0, 1 << 40);
+        buffer.write('<$relStart,$dur>$text');
+      }
+      if (buffer.toString() != timeTag) lines.add(buffer.toString());
+    }
+    if (lines.isEmpty) return null;
+    return lines.join('\n');
+  }
+
+  static String _msToTimeTag(int ms) {
+    final m = (ms ~/ 60000).toString().padLeft(2, '0');
+    final s = ((ms ~/ 1000) % 60).toString().padLeft(2, '0');
+    final frac = (ms % 1000).toString().padLeft(3, '0');
+    return '[$m:$s.$frac]';
   }
 
   @override
