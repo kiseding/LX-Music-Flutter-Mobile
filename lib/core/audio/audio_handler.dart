@@ -942,6 +942,10 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
           preserveUserIntent: true,
           provenance: _captureStartProvenance(),
         );
+        // _loadQueueItem commits through PlaybackCommandCoordinator, which
+        // installs the source and starts it after installation. Calling
+        // super.play here races iOS setAudioSource during restored playback.
+        return;
       } else {
         await _commands.recoverIdleSource();
       }
