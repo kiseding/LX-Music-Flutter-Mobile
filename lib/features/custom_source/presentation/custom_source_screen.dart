@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:file_picker/file_picker.dart';
 import 'dart:io';
@@ -332,90 +333,110 @@ class CustomSourceScreen extends ConsumerWidget {
       context: pageContext,
       barrierDismissible: false,
       builder: (dialogContext) => StatefulBuilder(
-        builder: (dialogContext, setState) => AlertDialog(
-          backgroundColor: AppColors.dialogBg(dialogContext),
-          title: Text('通过链接导入',
-              style: TextStyle(color: AppColors.onScaffold(dialogContext))),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                '请输入脚本文件的直接下载链接',
-                style: TextStyle(
-                    color: AppColors.mutedText(dialogContext), fontSize: 12),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: controller,
-                style: TextStyle(color: AppColors.onScaffold(dialogContext)),
-                autofocus: true,
-                decoration: InputDecoration(
-                  hintText: 'https://...',
-                  hintStyle:
-                      TextStyle(color: AppColors.mutedText(dialogContext)),
-                  filled: true,
-                  fillColor: AppColors.fill2(dialogContext),
-                  border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      borderSide: BorderSide.none),
-                  contentPadding:
-                      EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        builder: (dialogContext, setState) {
+          Future<void> importUrl(String url) async {
+            if (url.isEmpty || !url.startsWith('https://')) {
+              showAppNotification(
+                '请输入有效的 HTTPS 链接',
+                type: AppNotificationType.error,
+              );
+              return;
+            }
+
+            setState(() => isLoading = true);
+            final success = await ref
+                .read(importCustomSourceFromUrlProvider)(url);
+            if (!dialogContext.mounted || !pageContext.mounted) return;
+            setState(() => isLoading = false);
+            Navigator.pop(dialogContext);
+            showAppNotification(
+              success ? '导入成功' : '导入失败，请检查链接或脚本格式',
+              type: success ? AppNotificationType.success : AppNotificationType.error,
+            );
+          }
+
+          return AlertDialog(
+            backgroundColor: AppColors.dialogBg(dialogContext),
+            title: Text('通过链接导入',
+                style: TextStyle(color: AppColors.onScaffold(dialogContext))),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '请输入脚本文件的直接下载链接',
+                  style: TextStyle(
+                      color: AppColors.mutedText(dialogContext), fontSize: 12),
                 ),
-              ),
-              if (isLoading) ...[
-                const SizedBox(height: 16),
-                Center(
-                  child: SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: AppColors.accentOf(dialogContext)),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: controller,
+                  style: TextStyle(color: AppColors.onScaffold(dialogContext)),
+                  autofocus: true,
+                  decoration: InputDecoration(
+                    hintText: 'https://...',
+                    hintStyle:
+                        TextStyle(color: AppColors.mutedText(dialogContext)),
+                    filled: true,
+                    fillColor: AppColors.fill2(dialogContext),
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: BorderSide.none),
+                    contentPadding:
+                        EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   ),
                 ),
+                if (isLoading) ...[
+                  const SizedBox(height: 16),
+                  Center(
+                    child: SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: AppColors.accentOf(dialogContext)),
+                    ),
+                  ),
+                ],
               ],
+            ),
+            actions: [
+              TextButton(
+                onPressed:
+                    isLoading ? null : () => Navigator.pop(dialogContext),
+                child: Text('取消',
+                    style: TextStyle(color: AppColors.mutedText(dialogContext))),
+              ),
+              TextButton(
+                onPressed: isLoading
+                    ? null
+                    : () async {
+                        final content = await Clipboard.getData(Clipboard.kTextPlain);
+                        if (!dialogContext.mounted) return;
+                        final url = content?.text?.trim() ?? '';
+                        if (url.isEmpty) {
+                          showAppNotification(
+                            '剪切板中没有链接',
+                            type: AppNotificationType.error,
+                          );
+                          return;
+                        }
+                        controller.text = url;
+                        await importUrl(url);
+                      },
+                child: Text('剪切板',
+                    style: TextStyle(color: AppColors.accentOf(dialogContext))),
+              ),
+              TextButton(
+                onPressed: isLoading
+                    ? null
+                    : () => importUrl(controller.text.trim()),
+                child: Text('导入',
+                    style: TextStyle(color: AppColors.accentOf(dialogContext))),
+              ),
             ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: isLoading ? null : () => Navigator.pop(dialogContext),
-              child: Text('取消',
-                  style: TextStyle(color: AppColors.mutedText(dialogContext))),
-            ),
-            TextButton(
-              onPressed: isLoading
-                  ? null
-                  : () async {
-                      final url = controller.text.trim();
-                      if (url.isEmpty || !url.startsWith('https://')) {
-                        showAppNotification(
-                          '请输入有效的 HTTPS 链接',
-                          type: AppNotificationType.error,
-                        );
-                        return;
-                      }
-
-                      setState(() => isLoading = true);
-                      final success = await ref
-                          .read(importCustomSourceFromUrlProvider)(url);
-                      if (!dialogContext.mounted || !pageContext.mounted) {
-                        return;
-                      }
-                      setState(() => isLoading = false);
-                      Navigator.pop(dialogContext);
-                      showAppNotification(
-                        success ? '导入成功' : '导入失败，请检查链接或脚本格式',
-                        type: success
-                            ? AppNotificationType.success
-                            : AppNotificationType.error,
-                      );
-                    },
-              child: Text('导入',
-                  style: TextStyle(color: AppColors.accentOf(dialogContext))),
-            ),
-          ],
-        ),
+          );
+        },
       ),
     ).whenComplete(controller.dispose);
   }
