@@ -6,7 +6,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_app_group_directory/flutter_app_group_directory.dart';
 import 'package:home_widget/home_widget.dart';
 import 'package:live_activities/live_activities.dart';
-import 'package:live_activities/models/url_scheme_data.dart';
 
 import '../../../core/audio/audio_handler.dart';
 import '../../../core/widgets/artwork_disk_cache.dart';
@@ -14,7 +13,6 @@ import '../domain/music_item.dart';
 
 const String _appGroupId = 'group.com.lxmusic.lxMusicFlutter';
 const String _widgetKind = 'LXMusicHomeWidget';
-const String _activityId = 'lx_music_now_playing';
 
 /// Syncs the current song to the iOS home widget and Live Activity.
 class LockScreenSyncService {
@@ -44,16 +42,16 @@ class LockScreenSyncService {
       debugPrint('[LockScreenSync] setAppGroupId failed: $e');
     }
     try {
-      await _liveActivities.init(
-        appGroupId: _appGroupId,
-        urlScheme: 'lxmusic',
-        requestAndroidNotificationPermission: false,
-      );
-      // 清除上次会话遗留/重复的卡片，保证锁屏只有一张 Live Activity
-      await _serializeActivity(() => _liveActivities.endAllActivities());
-      _subscriptions.add(
-        _liveActivities.urlSchemeStream().listen(_handleUrlCommand),
-      );
+      if (Platform.isIOS) {
+        await _liveActivities.init(
+          appGroupId: _appGroupId,
+          urlScheme: 'lxmusic',
+          requestAndroidNotificationPermission: false,
+        );
+        // iOS already supplies the system Now Playing surface. Remove legacy
+        // app activities so they cannot create a second island or lock screen card.
+        await _serializeActivity(() => _liveActivities.endAllActivities());
+      }
     } catch (e) {
       debugPrint('[LockScreenSync] live activities init failed: $e');
     }
@@ -124,24 +122,6 @@ class LockScreenSyncService {
       // 2) 封面异步落盘（完成后内部会再刷新一次小组件）
       await _saveArtwork(music);
 
-      // 3) 更新灵动岛（串行化，防止并发创建出多张卡片）
-      if (Platform.isIOS) {
-        await _serializeActivity(() => _liveActivities.createOrUpdateActivity(
-              _activityId,
-              {
-                'title': music.name,
-                'artist': music.singer,
-                'album': music.album,
-                'artworkPath': _artworkPath ?? '',
-                'playing': playing,
-                'positionMs': positionMs.toDouble(),
-                'positionSyncedAtMs': positionSyncedAtMs,
-                'durationMs': durationMs.toDouble(),
-                'lyric': lyric,
-              },
-              iOSEnableRemoteUpdates: false,
-            ));
-      }
     } catch (e) {
       debugPrint('[LockScreenSync] sync failed: $e');
     } finally {
@@ -180,23 +160,6 @@ class LockScreenSyncService {
       await HomeWidget.saveWidgetData<double>('positionMs', positionMs);
       await HomeWidget.saveWidgetData<double>('durationMs', durationMs);
       await HomeWidget.updateWidget(iOSName: _widgetKind);
-      if (Platform.isIOS) {
-        await _serializeActivity(() => _liveActivities.createOrUpdateActivity(
-              _activityId,
-              {
-                'title': music.name,
-                'artist': music.singer,
-                'album': music.album,
-                'artworkPath': _artworkPath ?? '',
-                'playing': playing,
-                'positionMs': positionMs,
-                'positionSyncedAtMs': positionSyncedAtMs,
-                'durationMs': durationMs,
-                'lyric': lyric,
-              },
-              iOSEnableRemoteUpdates: false,
-            ));
-      }
     } catch (e) {
       debugPrint('[LockScreenSync] position sync failed: $e');
     }
@@ -208,31 +171,6 @@ class LockScreenSyncService {
     final result = _activityTail.then((_) => op());
     _activityTail = result.then<void>((_) {}, onError: (_) {});
     return result;
-  }
-
-  /// 处理来自灵动岛 / 锁屏卡片的深链控制命令（lxmusic://command/xxx）。
-  Future<void> _handleUrlCommand(dynamic data) async {
-    try {
-      final path = data is UrlSchemeData ? data.path : data?.toString();
-      if (path == null || path.isEmpty) return;
-      switch (path.replaceFirst(RegExp(r'^/'), '')) {
-        case 'toggle-play':
-          if (_handler.playbackState.value.playing) {
-            await _handler.pause();
-          } else {
-            await _handler.play();
-          }
-          break;
-        case 'next':
-          await _handler.skipToNext();
-          break;
-        case 'previous':
-          await _handler.skipToPrevious();
-          break;
-      }
-    } catch (e) {
-      debugPrint('[LockScreenSync] url command failed: $e');
-    }
   }
 
   Future<void> _clearNowPlaying() async {
@@ -247,13 +185,6 @@ class LockScreenSyncService {
     await HomeWidget.saveWidgetData<double>('positionSyncedAtMs', 0);
     await HomeWidget.saveWidgetData<double>('durationMs', 0);
     await HomeWidget.updateWidget(iOSName: _widgetKind);
-    if (Platform.isIOS) {
-      try {
-        await _serializeActivity(() => _liveActivities.endActivity(_activityId));
-      } catch (e) {
-        debugPrint('[LockScreenSync] end activity failed: $e');
-      }
-    }
   }
 
   MusicItem _musicFromItem(MediaItem item) {

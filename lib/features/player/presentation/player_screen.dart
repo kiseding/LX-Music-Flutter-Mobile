@@ -545,7 +545,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final side = (constraints.maxWidth - 64).clamp(240.0, 420.0);
-        final box = side.clamp(0.0, constraints.maxHeight - 8);
+        // Reserve room for the 20px blur and 10px downward shadow so the
+        // largest artwork that fits never has its shadow clipped by PageView.
+        final box = side.clamp(0.0, constraints.maxHeight - 60);
         return Center(
           child: Pressable(
             semanticLabel: '打开歌词',
