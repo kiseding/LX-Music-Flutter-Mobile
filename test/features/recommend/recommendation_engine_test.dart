@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lx_music_flutter/features/player/domain/music_item.dart';
 import 'package:lx_music_flutter/features/recommend/domain/recommendation_engine.dart';
@@ -16,11 +18,15 @@ MusicItem _song(String id, String name, String singer, String album,
 }
 
 void main() {
-  final favorites = [
-    _song('f1', '夜曲', '周杰伦', '十一月的萧邦'),
-    _song('f2', '晴天', '周杰伦', '叶惠美'),
-    _song('f3', '七里香', '周杰伦', '七里香'),
-  ];
+  final favorites = List.generate(
+    100,
+    (index) => _song(
+      'f$index',
+      '收藏歌曲 $index',
+      '周杰伦',
+      '收藏专辑 ${index % 5}',
+    ),
+  );
 
   final candidates = [
     _song('c1', '稻香', '周杰伦', '魔杰座'),
@@ -28,16 +34,39 @@ void main() {
     _song('c3', '夜曲', '周杰伦', '十一月的萧邦'), // 与收藏同 id → 应被排除
   ];
 
-  test('recommends same-artist songs first and excludes favorites', () {
+  test('requires 100 favorites and returns only a full 30-song result', () {
     final engine = const RecommendationEngine();
-    final recs = engine.recommend(favorites: favorites, candidates: candidates);
+    final enoughCandidates = List.generate(
+      30,
+      (index) => _song('c$index', '候选歌曲 $index', '周杰伦', '候选专辑'),
+    );
+    final recs = engine.recommend(
+      favorites: favorites,
+      candidates: enoughCandidates,
+      random: Random(1),
+    );
 
-    expect(recs, hasLength(2));
-    expect(recs.first.song.id, 'c1');
-    expect(recs.first.score, greaterThan(recs.last.score));
+    expect(recs, hasLength(30));
+    expect(recs.every((rec) => rec.song.singer == '周杰伦'), isTrue);
+    expect(
+      engine.recommend(
+        favorites: favorites.take(99).toList(),
+        candidates: enoughCandidates,
+        random: Random(1),
+      ),
+      isEmpty,
+    );
+    expect(
+      engine.recommend(
+        favorites: favorites,
+        candidates: candidates,
+        random: Random(1),
+      ),
+      isEmpty,
+    );
   });
 
-  test('returns empty when no favorites', () {
+  test('returns empty when favorites are below the sample threshold', () {
     final engine = const RecommendationEngine();
     final recs = engine.recommend(favorites: const [], candidates: candidates);
     expect(recs, isEmpty);

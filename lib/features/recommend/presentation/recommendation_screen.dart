@@ -44,7 +44,7 @@ class RecommendationScreen extends ConsumerWidget {
                         return ListTile(
                           contentPadding: const EdgeInsets.symmetric(
                               horizontal: 8, vertical: 2),
-                          leading: Container(
+                          leading: SizedBox(
                             width: 28,
                             child: Text(
                               '${index + 1}',
@@ -155,7 +155,7 @@ class RecommendationScreen extends ConsumerWidget {
               style: TextStyle(
                   color: AppColors.mutedText(context), fontSize: 14)),
           const SizedBox(height: 4),
-          Text('先收藏几首歌，我会根据你喜欢的歌手和专辑推荐',
+          Text('“我喜欢的音乐”满 100 首后，将随机取样推荐 30 首歌曲',
               style: TextStyle(
                   color: AppColors.mutedText(context), fontSize: 12)),
         ],

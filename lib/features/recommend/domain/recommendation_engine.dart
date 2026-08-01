@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import '../../player/domain/music_item.dart';
 
 /// 「猜你喜欢」推荐引擎。
@@ -14,6 +16,7 @@ class RecommendationEngine {
   const RecommendationEngine();
 
   static const int defaultTopN = 30;
+  static const int favoriteSampleSize = 100;
 
   /// 用户画像：从收藏歌曲统计各特征的出现权重（归一化到 0~1）。
   FavoriteProfile buildProfile(List<MusicItem> favorites) {
@@ -75,15 +78,19 @@ class RecommendationEngine {
     return score;
   }
 
-  /// 生成推荐：排除已收藏歌曲，按预测得分降序取 Top-N。
+  /// 生成推荐：收藏不足 100 首时不生成；否则随机抽取 100 首建立画像，
+  /// 排除已收藏歌曲后固定返回 30 首完整推荐。
   List<RecommendedSong> recommend({
     required List<MusicItem> favorites,
     required List<MusicItem> candidates,
     Map<String, int>? playCounts,
-    int topN = defaultTopN,
+    Random? random,
   }) {
-    if (favorites.isEmpty) return const [];
-    final profile = buildProfile(favorites);
+    if (favorites.length < favoriteSampleSize) return const [];
+    final sampledFavorites = List<MusicItem>.of(favorites)..shuffle(random);
+    final profile = buildProfile(
+      sampledFavorites.take(favoriteSampleSize).toList(growable: false),
+    );
     if (profile.artistWeights.isEmpty &&
         profile.albumWeights.isEmpty &&
         profile.platformWeights.isEmpty) {
@@ -114,7 +121,8 @@ class RecommendationEngine {
       ));
     }
     scored.sort((a, b) => b.score.compareTo(a.score));
-    return scored.take(topN).toList();
+    if (scored.length < defaultTopN) return const [];
+    return scored.take(defaultTopN).toList(growable: false);
   }
 
   List<String> _reasons(
