@@ -31,9 +31,11 @@ class SmartPlaylistListScreen extends ConsumerWidget {
             onPressed: () async {
               final name = await _promptName(context);
               if (name == null || name.trim().isEmpty) return;
-              await ref
+              final smart = await ref
                   .read(smartPlaylistControllerProvider.notifier)
                   .create(name.trim());
+              if (!context.mounted) return;
+              _edit(context, ref, smart);
             },
           ),
         ],
@@ -126,9 +128,15 @@ class SmartPlaylistListScreen extends ConsumerWidget {
                               ],
                             ),
                           ),
-                          Icon(Icons.more_vert,
-                              size: 20,
-                              color: AppColors.secondaryText(context)),
+                           IconButton(
+                             tooltip: '编辑规则',
+                             icon: Icon(
+                               Icons.tune,
+                               size: 20,
+                               color: AppColors.secondaryText(context),
+                             ),
+                             onPressed: () => _edit(context, ref, smart),
+                           ),
                         ],
                       ),
                     ),

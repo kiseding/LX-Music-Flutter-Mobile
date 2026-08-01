@@ -40,12 +40,13 @@ class SmartPlaylistController extends StateNotifier<List<SmartPlaylist>> {
     }
   }
 
-  Future<void> create(String name) async {
+  Future<SmartPlaylist> create(String name) async {
     final now = DateTime.now();
     final id = DateTime.now().microsecondsSinceEpoch.toString();
     final smart = SmartPlaylist(id: id, name: name, createdAt: now, updatedAt: now);
     state = [...state, smart];
     await _persist();
+    return smart;
   }
 
   Future<void> update(SmartPlaylist smart) async {
