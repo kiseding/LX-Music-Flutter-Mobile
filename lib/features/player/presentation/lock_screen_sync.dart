@@ -37,8 +37,13 @@ class LockScreenSyncService {
   Future<void> _activityTail = Future.value();
 
   Future<void> init() async {
+    // 每一步独立容错：某个插件初始化失败不能中断小组件写入 / 订阅 / 定时器
     try {
       await HomeWidget.setAppGroupId(_appGroupId);
+    } catch (e) {
+      debugPrint('[LockScreenSync] setAppGroupId failed: $e');
+    }
+    try {
       await _liveActivities.init(
         appGroupId: _appGroupId,
         urlScheme: 'lxmusic',
@@ -49,19 +54,19 @@ class LockScreenSyncService {
       _subscriptions.add(
         _liveActivities.urlSchemeStream().listen(_handleUrlCommand),
       );
-      _subscriptions.add(_handler.mediaItem.listen((_) => _syncNow()));
-      _subscriptions.add(_handler.playbackState.listen((_) => _syncNow()));
-      _subscriptions.add(
-        _handler.player.positionDiscontinuityStream.listen((_) => _syncNow()),
-      );
-      _positionTimer = Timer.periodic(
-        const Duration(seconds: 1),
-        (_) => _syncTick(),
-      );
-      await _syncNow();
     } catch (e) {
-      debugPrint('[LockScreenSync] init failed: $e');
+      debugPrint('[LockScreenSync] live activities init failed: $e');
     }
+    _subscriptions.add(_handler.mediaItem.listen((_) => _syncNow()));
+    _subscriptions.add(_handler.playbackState.listen((_) => _syncNow()));
+    _subscriptions.add(
+      _handler.player.positionDiscontinuityStream.listen((_) => _syncNow()),
+    );
+    _positionTimer = Timer.periodic(
+      const Duration(seconds: 1),
+      (_) => _syncTick(),
+    );
+    await _syncNow();
   }
 
   void dispose() {

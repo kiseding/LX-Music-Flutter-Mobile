@@ -356,7 +356,6 @@ private struct LXLiveActivityContentView: View {
 
   private var title: String { context.state.title ?? (value("title") ?? "LX Music") }
   private var artist: String { context.state.artist ?? (value("artist") ?? "") }
-  private var album: String { context.state.album ?? (value("album") ?? "") }
   private var artworkPath: String? { context.state.artworkPath ?? value("artworkPath") }
   private var isPlaying: Bool { context.state.isPlaying ?? (defaults?.bool(forKey: context.attributes.prefixedKey("playing")) ?? false) }
   private var positionMs: Double { context.state.positionMs ?? (defaults?.double(forKey: context.attributes.prefixedKey("positionMs")) ?? 0) }
@@ -398,12 +397,6 @@ private struct LXLiveActivityContentView: View {
             .font(.subheadline)
             .foregroundStyle(.white.opacity(0.72))
             .lineLimit(1)
-          if !album.isEmpty {
-            Text(album)
-              .font(.caption2)
-              .foregroundStyle(.white.opacity(0.45))
-              .lineLimit(1)
-          }
           if !lyric.isEmpty {
             Text(lyric)
               .font(.caption2)
@@ -421,19 +414,9 @@ private struct LXLiveActivityContentView: View {
           }
         }
         Spacer(minLength: 0)
-        HStack(spacing: 18) {
-          Link(destination: URL(string: "lxmusic://command/previous")!) {
-            Image(systemName: "backward.fill").font(.title3)
-          }
-          Link(destination: URL(string: "lxmusic://command/toggle-play")!) {
-            Image(systemName: isPlaying ? "pause.fill" : "play.fill").font(.title2)
-          }
-          Link(destination: URL(string: "lxmusic://command/next")!) {
-            Image(systemName: "forward.fill").font(.title3)
-          }
-        }
-        .foregroundStyle(.white)
-        .buttonStyle(.plain)
+        Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+          .font(.title3)
+          .foregroundStyle(.white)
       }
       .padding(14)
     }
@@ -450,28 +433,16 @@ private func lxDynamicIsland(context: ActivityViewContext<LiveActivitiesAppAttri
 
   let title = context.state.title ?? (value("title") ?? "LX Music")
   let artist = context.state.artist ?? (value("artist") ?? "")
-  let album = context.state.album ?? (value("album") ?? "")
   let artworkPath = context.state.artworkPath ?? value("artworkPath")
   let isPlaying = context.state.isPlaying ?? (defaults?.bool(forKey: context.attributes.prefixedKey("playing")) ?? false)
   let positionMs = context.state.positionMs ?? (defaults?.double(forKey: context.attributes.prefixedKey("positionMs")) ?? 0)
   let positionSyncedAtMs = context.state.positionSyncedAtMs ?? (defaults?.double(forKey: context.attributes.prefixedKey("positionSyncedAtMs")) ?? 0)
   let durationMs = context.state.durationMs ?? (defaults?.double(forKey: context.attributes.prefixedKey("durationMs")) ?? 0)
-  let lyric = context.state.lyric ?? (value("lyric") ?? "")
   let currentPositionMs = lxPlaybackPositionMs(
     positionMs: positionMs,
     durationMs: durationMs,
     syncedAtMs: positionSyncedAtMs,
     isPlaying: isPlaying
-  )
-  let progressRange = lxProgressRange(
-    positionMs: positionMs,
-    durationMs: durationMs,
-    syncedAtMs: positionSyncedAtMs,
-    isPlaying: isPlaying
-  )
-  let remainingLabel = lxRemainingLabel(
-    currentPositionMs: currentPositionMs,
-    durationMs: durationMs
   )
   let progressFraction = durationMs > 0
     ? min(max(currentPositionMs / durationMs, 0), 1)
@@ -504,58 +475,11 @@ private func lxDynamicIsland(context: ActivityViewContext<LiveActivitiesAppAttri
           .font(.caption)
           .foregroundStyle(.secondary)
           .lineLimit(1)
-        if !album.isEmpty {
-          Text(album)
-            .font(.caption2)
-            .foregroundStyle(.tertiary)
-            .lineLimit(1)
-        }
       }
     }
     DynamicIslandExpandedRegion(.trailing) {
-      VStack(spacing: 2) {
-        Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
-          .font(.title3)
-        Text(remainingLabel)
-          .font(.caption2)
-          .monospacedDigit()
-          .foregroundStyle(.secondary)
-      }
-    }
-    DynamicIslandExpandedRegion(.bottom) {
-      VStack(alignment: .leading, spacing: 4) {
-        if !lyric.isEmpty {
-          Text(lyric)
-            .font(.caption2)
-            .foregroundStyle(.white.opacity(0.78))
-            .lineLimit(1)
-        }
-        if let range = progressRange {
-          if isPlaying {
-            ProgressView(timerInterval: range, countsDown: false)
-          } else {
-            ProgressView(value: min(currentPositionMs, durationMs), total: durationMs)
-          }
-        }
-        HStack {
-          Spacer()
-          Link(destination: URL(string: "lxmusic://command/previous")!) {
-            Image(systemName: "backward.fill").font(.subheadline)
-          }
-          Spacer()
-          Link(destination: URL(string: "lxmusic://command/toggle-play")!) {
-            Image(systemName: isPlaying ? "pause.fill" : "play.fill").font(.title3)
-          }
-          Spacer()
-          Link(destination: URL(string: "lxmusic://command/next")!) {
-            Image(systemName: "forward.fill").font(.subheadline)
-          }
-          Spacer()
-        }
-        .foregroundStyle(.white)
-        .buttonStyle(.plain)
-      }
-      .padding(.horizontal, 8)
+      Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+        .font(.title3)
     }
   } compactLeading: {
     LXProgressRingArtwork(path: artworkPath, progress: progressFraction, size: 16)
@@ -565,13 +489,6 @@ private func lxDynamicIsland(context: ActivityViewContext<LiveActivitiesAppAttri
   } minimal: {
     LXProgressRingArtwork(path: artworkPath, progress: progressFraction, size: 16)
   }
-}
-
-private func lxRemainingLabel(currentPositionMs: Double, durationMs: Double) -> String {
-  let remaining = max(0, (durationMs - currentPositionMs) / 1000)
-  let minutes = Int(remaining) / 60
-  let seconds = Int(remaining) % 60
-  return String(format: "%d:%02d", minutes, seconds)
 }
 
 @available(iOSApplicationExtension 16.1, *)
