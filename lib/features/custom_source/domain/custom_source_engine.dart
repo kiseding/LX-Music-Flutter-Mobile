@@ -848,7 +848,7 @@ class CustomSourceEngine {
             }
           }
         },
-        env: 'desktop', version: '2.0.0', currentScriptInfo: { rawScript: '' }
+        env: 'mobile', version: '2.0.0', currentScriptInfo: { rawScript: '' }
       };
       globalThis.lx.utils.zlib = {
         inflate: function(buf) { return Promise.resolve(sendMessage('lx_zlib', JSON.stringify({ method: 'inflate', data: buf.toString('base64') }))).then(function(data) { return globalThis.lx.utils.buffer.from(data, 'base64'); }); },
