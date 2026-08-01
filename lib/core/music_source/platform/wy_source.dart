@@ -361,8 +361,9 @@ class WySource extends MusicPlatform {
 
       if (body['code'] != 200) return null;
 
-      // 网易云逐字歌词在 yrc 字段（YRC 字级标签）。优先返回 yrc，
-      // 让解析器进入逐字渲染；无 yrc 时回退普通 lrc。
+      // 实测网易云官方 eapi 只返回 lrc / tlyric / romalrc（罗马音，非逐字）。
+      // yrc 逐字歌词官方接口不返回。这里保留 yrc 读取：若未来或第三方接口
+      // 返回 yrc 字级标签则直接使用；否则回退普通 lrc。
       final yrc = body['yrc'] as Map?;
       final yrcLyric = yrc?['lyric'] as String?;
       if (yrcLyric != null && yrcLyric.isNotEmpty) {
