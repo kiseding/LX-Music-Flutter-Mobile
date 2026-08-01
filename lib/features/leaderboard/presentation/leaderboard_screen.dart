@@ -68,7 +68,8 @@ class LeaderboardDetailScreenById extends ConsumerWidget {
         onTap: () {
           final songsAsync = ref.read(leaderboardSongsProvider(id));
           final songs = songsAsync.value ?? [];
-          playerService.setQueue(songs, startIndex: index);
+          playerService.setQueue(songs,
+              startIndex: index, manualPlayName: song.name);
         },
         child: Padding(
           padding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),

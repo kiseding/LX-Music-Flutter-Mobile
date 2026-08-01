@@ -1112,13 +1112,16 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     if (_disposed) return;
     if (_interruptionPolicy.onBecomingNoisy() ==
         InterruptionAction.pauseClearingIntent) {
+      final userIntentGeneration = _recordExplicitPlaybackIntent(false);
       ++_interruptionGeneration;
       ++_playbackStartBlockGeneration;
       _interruptionClosing = false;
       _clearInterruptionOwnership();
-      _recordExplicitPlaybackIntent(false);
       await _commands.becomingNoisy();
       if (_disposed) return;
+      // 切换输出源（耳机/喇叭）后用户可能立即按播放或切歌，此时已发起新的
+      // 播放意图；不要再执行本暂停，否则新操作会被覆盖导致"无法播放"。
+      if (userIntentGeneration != _userIntentGeneration) return;
       await super.pause();
     }
   }
