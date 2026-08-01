@@ -6,6 +6,7 @@ import '../../../core/widgets/app_notification.dart';
 import '../../player/domain/music_item.dart';
 import '../../player/presentation/player_provider.dart';
 import '../domain/duplicate_detector.dart';
+import '../domain/playlist.dart';
 import 'playlist_provider.dart';
 
 class DuplicateScreen extends ConsumerStatefulWidget {
@@ -21,11 +22,9 @@ class _DuplicateScreenState extends ConsumerState<DuplicateScreen> {
   @override
   Widget build(BuildContext context) {
     final playlistsAsync = ref.watch(hydratedPlaylistsProvider);
-    final favoritesAsync =
-        ref.watch(playlistSongsPageProvider(PlaylistSongsPageRequest(
-      playlistId: 'favorites',
-      pageIndex: 0,
-    )));
+    final groups = playlistsAsync.valueOrNull == null
+        ? null
+        : _detectGroups(playlistsAsync.requireValue);
 
     return Scaffold(
       backgroundColor: AppColors.scaffold(context),
@@ -37,6 +36,17 @@ class _DuplicateScreenState extends ConsumerState<DuplicateScreen> {
                 fontSize: 18,
                 fontWeight: FontWeight.w600,
                 color: AppColors.onScaffold(context))),
+        actions: [
+          if (groups != null && groups.isNotEmpty)
+            TextButton.icon(
+              onPressed: _removing ? null : () => _removeAllRedundant(groups),
+              icon: const Icon(Icons.delete_sweep, size: 16),
+              label: Text(_removing ? '处理中…' : '一键移除'),
+              style: TextButton.styleFrom(
+                foregroundColor: AppColors.accentOf(context),
+              ),
+            ),
+        ],
       ),
       body: SafeArea(
         top: false,
@@ -44,21 +54,7 @@ class _DuplicateScreenState extends ConsumerState<DuplicateScreen> {
           loading: () => const Center(child: CircularProgressIndicator()),
           error: (_, __) => const Center(child: Text('加载失败')),
           data: (playlists) {
-            final songsById = <String, MusicItem>{
-              for (final playlist in playlists)
-                for (final song in playlist.songs) song.id: song,
-            };
-            final allSongs = songsById.values.toList(growable: false);
-            final favoriteIds =
-                favoritesAsync.valueOrNull?.songs.map((s) => s.id).toSet() ??
-                    const <String>{};
-
-            final detector = DuplicateDetector(
-              songs: allSongs,
-              favoriteIds: favoriteIds,
-            );
-            final groups = detector.detect();
-
+            final groups = _detectGroups(playlists);
             if (groups.isEmpty) {
               return Center(
                 child: Column(
@@ -67,7 +63,7 @@ class _DuplicateScreenState extends ConsumerState<DuplicateScreen> {
                     Icon(Icons.task_alt,
                         size: 56, color: AppColors.mutedText(context)),
                     const SizedBox(height: 12),
-                    Text('没有发现重复歌曲',
+                    Text('收藏列表没有重复歌曲',
                         style: TextStyle(
                             color: AppColors.mutedText(context),
                             fontSize: 14)),
@@ -86,6 +82,16 @@ class _DuplicateScreenState extends ConsumerState<DuplicateScreen> {
         ),
       ),
     );
+  }
+
+  /// 重复检测仅针对收藏列表。
+  List<DuplicateGroup> _detectGroups(List<Playlist> playlists) {
+    final favorites = playlists.where((p) => p.id == 'favorites').toList();
+    final songs = favorites.isEmpty
+        ? const <MusicItem>[]
+        : favorites.first.songs;
+    final ids = songs.map((s) => s.id).toSet();
+    return DuplicateDetector(songs: songs, favoriteIds: ids).detect();
   }
 
   Widget _buildGroup(BuildContext context, DuplicateGroup group) {
@@ -166,7 +172,7 @@ class _DuplicateScreenState extends ConsumerState<DuplicateScreen> {
                     ? null
                     : () => _removeRedundant(group),
                 icon: const Icon(Icons.delete_outline, size: 16),
-                label: Text(_removing ? '处理中…' : '从所有歌单移除其余版本'),
+                label: Text(_removing ? '处理中…' : '移除其余版本'),
               ),
             ),
         ],
@@ -180,20 +186,31 @@ class _DuplicateScreenState extends ConsumerState<DuplicateScreen> {
         '${(song.lyricsUrl?.isNotEmpty ?? false) ? ' · 有歌词' : ''}';
   }
 
-  Future<void> _removeRedundant(DuplicateGroup group) async {
+  Future<void> _removeRedundant(DuplicateGroup group) {
+    return _removeSongIds(
+      group.redundantSongs.map((s) => s.id).toList(growable: false),
+    );
+  }
+
+  Future<void> _removeAllRedundant(List<DuplicateGroup> groups) {
+    final ids = <String>{};
+    for (final group in groups) {
+      for (final song in group.redundantSongs) {
+        ids.add(song.id);
+      }
+    }
+    return _removeSongIds(ids.toList(growable: false));
+  }
+
+  Future<void> _removeSongIds(List<String> songIds) async {
+    if (songIds.isEmpty) return;
     setState(() => _removing = true);
     try {
       final service = ref.read(playlistServiceProvider);
       var removed = 0;
-      for (final redundant in group.redundantSongs) {
-        for (final playlist in service.playlists) {
-          if (playlist.id == 'recent') continue;
-          if (playlist.songs.any((s) => s.id == redundant.id)) {
-            final ok =
-                await service.removeSongFromPlaylist(playlist.id, redundant.id);
-            if (ok) removed++;
-          }
-        }
+      for (final id in songIds) {
+        final ok = await service.removeSongFromPlaylist('favorites', id);
+        if (ok) removed++;
       }
       if (!mounted) return;
       showAppNotification(
