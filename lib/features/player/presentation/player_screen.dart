@@ -1007,126 +1007,12 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                     duration: const Duration(seconds: 1),
                   );
                 }),
-            ListTile(
-                leading: Icon(Icons.bedtime_outlined,
-                    color: AppColors.onScaffold(context)),
-                title: Text('睡眠定时',
-                    style: TextStyle(color: AppColors.onScaffold(context))),
-                subtitle: Text(_sleepTimerSubtitle(),
-                    style: TextStyle(
-                        color: AppColors.mutedText(context), fontSize: 12)),
-                onTap: () {
-                  Navigator.pop(context);
-                  _showSleepTimerMenu(context);
-                }),
           ],
         ),
       ),
     );
   }
 
-  String _sleepTimerSubtitle() {
-    final state = ref.read(sleepTimerProvider);
-    if (state case SleepTimerRunning(:final scheduledEndTime)) {
-      final remaining = scheduledEndTime.difference(DateTime.now());
-      if (remaining <= Duration.zero) return '即将停止播放';
-      final minutes = remaining.inMinutes;
-      final seconds = remaining.inSeconds.remainder(60);
-      if (minutes <= 0) return '$seconds 秒后停止播放';
-      return '$minutes 分$seconds 秒后停止播放';
-    }
-    if (state case SleepTimerFailed()) return '上次停止播放失败';
-    return '未开启';
-  }
-
-  void _showSleepTimerMenu(BuildContext context) {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: AppColors.dialogBg(context),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (context) => SafeArea(
-        child: Consumer(
-          builder: (context, ref, _) {
-            final state = ref.watch(sleepTimerProvider);
-            const options = [10, 15, 30, 60, 90];
-            return Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                    width: 32,
-                    height: 4,
-                    margin: EdgeInsets.symmetric(vertical: 12),
-                    decoration: BoxDecoration(
-                        color: AppColors.mutedText(context),
-                        borderRadius: BorderRadius.circular(2))),
-                Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  child: Row(
-                    children: [
-                      Icon(Icons.bedtime_outlined,
-                          color: AppColors.accentOf(context)),
-                      SizedBox(width: 12),
-                      Expanded(
-                        child: Text('睡眠定时',
-                            style: TextStyle(
-                                color: AppColors.onScaffold(context),
-                                fontSize: 14,
-                                fontWeight: FontWeight.w500)),
-                      ),
-                      if (state case SleepTimerRunning())
-                        Text(_sleepTimerSubtitle(),
-                            style: TextStyle(
-                                color: AppColors.mutedText(context),
-                                fontSize: 12)),
-                    ],
-                  ),
-                ),
-                Divider(color: AppColors.cardBorder(context), height: 1),
-                for (final minutes in options) ...[
-                  ListTile(
-                    leading: Icon(Icons.timer_outlined,
-                        color: AppColors.onScaffold(context)),
-                    title: Text('$minutes 分钟',
-                        style:
-                            TextStyle(color: AppColors.onScaffold(context))),
-                    trailing: state is SleepTimerRunning &&
-                            state.duration == Duration(minutes: minutes)
-                        ? Icon(Icons.check, color: AppColors.accentOf(context))
-                        : null,
-                    onTap: () {
-                      Navigator.pop(context);
-                      ref.read(sleepTimerProvider.notifier).startTimer(
-                          Duration(minutes: minutes));
-                      showAppNotification(
-                        '$minutes 分钟后停止播放',
-                        type: AppNotificationType.success,
-                        duration: const Duration(seconds: 1),
-                      );
-                    },
-                  ),
-                ],
-                if (state case SleepTimerRunning()) ...[
-                  ListTile(
-                    leading: Icon(Icons.timer_off_outlined,
-                        color: AppColors.onScaffold(context)),
-                    title: Text('取消睡眠定时',
-                        style:
-                            TextStyle(color: AppColors.onScaffold(context))),
-                    onTap: () {
-                      Navigator.pop(context);
-                      ref.read(sleepTimerProvider.notifier).cancelTimer();
-                    },
-                  ),
-                ],
-              ],
-            );
-          },
-        ),
-      ),
-    );
-  }
 }
 
 class _PlaybackQueueSheet extends ConsumerStatefulWidget {
