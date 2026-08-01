@@ -101,4 +101,42 @@ void main() {
         isFalse);
     expect(closed, 1);
   });
+
+  test('validateScript accepts obfuscated scripts with header comment', () {
+    final service = CustomSourceService();
+    addTearDown(service.dispose);
+
+    // 混淆脚本（如 lx / sixyin）：以 /*! ... @name */ 头开始，正文无关键字
+    final obfuscated = '''
+/*!
+ * @name [独家音源]
+ * @description 音源更新
+ * @version 4
+ * @author 洛雪科技
+ */
+;(function ꄲᐤ(ₒΟ,ᐤO,ᴑᣞ){function ⲟꓳ(Oᐤ){return Oᐤ}})(1);
+''';
+    expect(service.validateScript(obfuscated), isTrue);
+
+    // obfuscator.io 风格（_0x 变量名）
+    final obfuscatorStyle = '''
+/*!
+ * @name 六音音源
+ * @description v1.2.1
+ * @version v1.2.1
+ */
+(function(_0x5a3ad1,_0x22cd49){function _0x156754(){return _0x234f(0x1);}})(1,2);
+''';
+    expect(service.validateScript(obfuscatorStyle), isTrue);
+  });
+
+  test('validateScript rejects non-script content', () {
+    final service = CustomSourceService();
+    addTearDown(service.dispose);
+
+    expect(service.validateScript('hello world'), isFalse);
+    expect(service.validateScript('const a = 1;'), isFalse);
+    expect(service.validateScript('// just a comment\nconst b = 2;'), isFalse);
+    expect(service.validateScript('/* unterminated header'), isFalse);
+  });
 }

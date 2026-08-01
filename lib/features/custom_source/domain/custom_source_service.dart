@@ -404,19 +404,19 @@ class CustomSourceService {
     return json.encode(jsonList);
   }
 
+  /// 校验音源脚本。对齐洛雪桌面端：只要求脚本以 `/* ... */` 文件头注释
+  /// 开头（从中可解析 @name 等元数据），不检查内容关键字。
+  /// 这样混淆/加密过的脚本（如 sixyin、lx）也能导入；纯文本或明显非
+  /// JS 的内容（无文件头注释）仍被拒绝。
   bool validateScript(String script) {
-    if (script.contains('globalThis.lx') || script.contains('EVENT_NAMES')) {
-      return true;
-    }
-    return script.contains('search') ||
-        script.contains('getMusicUrl') ||
-        script.contains('musicUrl');
-  }
-
-  bool isLxMusicScript(String script) {
-    return script.contains('globalThis.lx') ||
-        script.contains('EVENT_NAMES') ||
-        script.contains('on(EVENT_NAMES.request');
+    final trimmed = script.trimLeft();
+    if (!trimmed.startsWith('/*')) return false;
+    // 找注释结束位置：/* ... */ 必须闭合，且是文件开头
+    final close = trimmed.indexOf('*/');
+    if (close < 0) return false;
+    final header = trimmed.substring(0, close + 2);
+    // 文件头应包含 @name 元数据（洛雪 parseScriptInfo 的 INFO_NAMES）
+    return header.contains('@name');
   }
 
   void dispose() {
