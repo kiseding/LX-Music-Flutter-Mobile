@@ -447,12 +447,22 @@ private func lxDynamicIsland(context: ActivityViewContext<LiveActivitiesAppAttri
     currentPositionMs: currentPositionMs,
     durationMs: durationMs
   )
+  let progressFraction = durationMs > 0
+    ? min(max(currentPositionMs / durationMs, 0), 1)
+    : 0
 
   return DynamicIsland {
     DynamicIslandExpandedRegion(.leading) {
       LXArtworkView(path: artworkPath)
-        .frame(width: 56, height: 56)
+        .frame(width: 52, height: 52)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+          Circle()
+            .trim(from: 0, to: progressFraction)
+            .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+            .rotationEffect(.degrees(-90))
+        )
+        .padding(2)
     }
     DynamicIslandExpandedRegion(.center) {
       VStack(alignment: .leading, spacing: 2) {
@@ -518,15 +528,29 @@ private func lxDynamicIsland(context: ActivityViewContext<LiveActivitiesAppAttri
     }
   } compactLeading: {
     LXArtworkView(path: artworkPath)
-      .frame(width: 24, height: 24)
+      .frame(width: 20, height: 20)
       .clipShape(Circle())
+      .overlay(
+        Circle()
+          .trim(from: 0, to: progressFraction)
+          .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+          .rotationEffect(.degrees(-90))
+      )
+      .padding(2)
   } compactTrailing: {
     Image(systemName: isPlaying ? "pause.fill" : "play.fill")
       .font(.footnote)
   } minimal: {
     LXArtworkView(path: artworkPath)
-      .frame(width: 24, height: 24)
+      .frame(width: 20, height: 20)
       .clipShape(Circle())
+      .overlay(
+        Circle()
+          .trim(from: 0, to: progressFraction)
+          .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+          .rotationEffect(.degrees(-90))
+      )
+      .padding(2)
   }
 }
 

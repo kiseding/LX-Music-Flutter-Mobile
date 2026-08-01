@@ -33,6 +33,8 @@ class LockScreenSyncService {
   String? _lastLyric;
   int _positionTick = 0;
   bool _disposed = false;
+  bool _syncingNow = false;
+  Future<void> _activityTail = Future.value();
 
   Future<void> init() async {
     try {
@@ -70,7 +72,8 @@ class LockScreenSyncService {
   }
 
   Future<void> _syncNow() async {
-    if (_disposed) return;
+    if (_disposed || _syncingNow) return;
+    _syncingNow = true;
     try {
       final item = _handler.mediaItem.value;
       if (item == null) {
@@ -84,13 +87,13 @@ class LockScreenSyncService {
         _lastMusicKey = key;
         _artworkPath = null;
       }
-      await _saveArtwork(music);
       final positionMs = _positionMs();
       final durationMs = _durationMs(music);
       final lyric = _currentLyricLine?.call() ?? '';
       final positionSyncedAtMs =
           DateTime.now().millisecondsSinceEpoch.toDouble();
       _lastLyric = lyric;
+      // 1) 先写小组件元数据并刷新，不等封面下载，避免长时间占位
       await HomeWidget.saveWidgetData<String>('title', music.name);
       await HomeWidget.saveWidgetData<String>('artist', music.singer);
       await HomeWidget.saveWidgetData<String>('album', music.album);
@@ -111,22 +114,26 @@ class LockScreenSyncService {
       await HomeWidget.saveWidgetData<String>('lyric', lyric);
       await HomeWidget.updateWidget(iOSName: _widgetKind);
 
+      // 2) 封面异步落盘（完成后内部会再刷新一次小组件）
+      await _saveArtwork(music);
+
+      // 3) 更新灵动岛（串行化，防止并发创建出多张卡片）
       if (Platform.isIOS) {
-        await _liveActivities.createOrUpdateActivity(
-          _activityId,
-          {
-            'title': music.name,
-            'artist': music.singer,
-            'album': music.album,
-            'artworkPath': _artworkPath ?? '',
-            'playing': playing,
-            'positionMs': positionMs.toDouble(),
-            'positionSyncedAtMs': positionSyncedAtMs,
-            'durationMs': durationMs.toDouble(),
-            'lyric': lyric,
-          },
-          iOSEnableRemoteUpdates: false,
-        );
+        await _serializeActivity(() => _liveActivities.createOrUpdateActivity(
+              _activityId,
+              {
+                'title': music.name,
+                'artist': music.singer,
+                'album': music.album,
+                'artworkPath': _artworkPath ?? '',
+                'playing': playing,
+                'positionMs': positionMs.toDouble(),
+                'positionSyncedAtMs': positionSyncedAtMs,
+                'durationMs': durationMs.toDouble(),
+                'lyric': lyric,
+              },
+              iOSEnableRemoteUpdates: false,
+            ));
       }
     } catch (e) {
       debugPrint('[LockScreenSync] sync failed: $e');
@@ -152,6 +159,10 @@ class LockScreenSyncService {
         return;
       }
       _positionTick++;
+      await HomeWidget.saveWidgetData<String>('title', music.name);
+      await HomeWidget.saveWidgetData<String>('artist', music.singer);
+      await HomeWidget.saveWidgetData<String>('album', music.album);
+      await HomeWidget.saveWidgetData<bool>('playing', playing);
       await HomeWidget.saveWidgetData<String>('lyric', lyric);
       await HomeWidget.saveWidgetData<double>(
         'positionSyncedAtMs',
@@ -161,25 +172,33 @@ class LockScreenSyncService {
       await HomeWidget.saveWidgetData<double>('durationMs', durationMs);
       await HomeWidget.updateWidget(iOSName: _widgetKind);
       if (Platform.isIOS) {
-        await _liveActivities.createOrUpdateActivity(
-          _activityId,
-          {
-            'title': music.name,
-            'artist': music.singer,
-            'album': music.album,
-            'artworkPath': _artworkPath ?? '',
-            'playing': playing,
-            'positionMs': positionMs,
-            'positionSyncedAtMs': positionSyncedAtMs,
-            'durationMs': durationMs,
-            'lyric': lyric,
-          },
-          iOSEnableRemoteUpdates: false,
-        );
+        await _serializeActivity(() => _liveActivities.createOrUpdateActivity(
+              _activityId,
+              {
+                'title': music.name,
+                'artist': music.singer,
+                'album': music.album,
+                'artworkPath': _artworkPath ?? '',
+                'playing': playing,
+                'positionMs': positionMs,
+                'positionSyncedAtMs': positionSyncedAtMs,
+                'durationMs': durationMs,
+                'lyric': lyric,
+              },
+              iOSEnableRemoteUpdates: false,
+            ));
       }
     } catch (e) {
       debugPrint('[LockScreenSync] position sync failed: $e');
     }
+  }
+
+  /// 串行化 Live Activity 操作：防止多个监听并发触发 createOrUpdateActivity，
+  /// 在插件内部 activities 尚未注册时各自新建，导致锁屏出现多张卡片。
+  Future<T> _serializeActivity<T>(Future<T> Function() op) {
+    final result = _activityTail.then((_) => op());
+    _activityTail = result.then<void>((_) {}, onError: (_) {});
+    return result;
   }
 
   /// 处理来自灵动岛 / 锁屏卡片的深链控制命令（lxmusic://command/xxx）。
@@ -221,7 +240,7 @@ class LockScreenSyncService {
     await HomeWidget.updateWidget(iOSName: _widgetKind);
     if (Platform.isIOS) {
       try {
-        await _liveActivities.endActivity(_activityId);
+        await _serializeActivity(() => _liveActivities.endActivity(_activityId));
       } catch (e) {
         debugPrint('[LockScreenSync] end activity failed: $e');
       }
@@ -286,6 +305,8 @@ class LockScreenSyncService {
       await artworkFile.writeAsBytes(bytes, flush: true);
       _artworkPath = artworkFile.path;
       await HomeWidget.saveWidgetData<String>('artworkPath', _artworkPath);
+      // 封面落盘后再刷新一次，让小组件尽快显示封面
+      await HomeWidget.updateWidget(iOSName: _widgetKind);
     } catch (e) {
       debugPrint('[LockScreenSync] artwork save failed: $e');
     }
