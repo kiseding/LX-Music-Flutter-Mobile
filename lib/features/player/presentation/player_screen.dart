@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/pagination/page_range.dart';
 import '../../../core/theme/app_colors.dart';
+import '../../../core/widgets/app_notification.dart';
 import '../../../core/widgets/artwork_image.dart';
 import '../../../core/widgets/page_navigation_bar.dart';
 import '../../../core/widgets/pressable.dart';
@@ -653,9 +654,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                 color: AppColors.secondaryText(context), size: 24),
             onPressed: () {
               ref.read(downloadSongProvider)(music);
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                    content: Text('已添加到下载队列'), duration: Duration(seconds: 1)),
+              showAppNotification(
+                '已添加到下载队列',
+                type: AppNotificationType.success,
+                duration: const Duration(seconds: 1),
               );
             },
           ),
@@ -672,8 +674,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                 await ref.read(toggleFavoriteProvider)(music);
               } catch (error) {
                 if (!mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('收藏失败: $error')),
+                showAppNotification(
+                  '收藏失败: $error',
+                  type: AppNotificationType.error,
                 );
               }
             },
@@ -975,8 +978,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                     await ref.read(toggleFavoriteProvider)(music);
                   } catch (error) {
                     if (!mounted) return;
-                    ScaffoldMessenger.of(this.context).showSnackBar(
-                      SnackBar(content: Text('收藏失败: $error')),
+                    showAppNotification(
+                      '收藏失败: $error',
+                      type: AppNotificationType.error,
                     );
                   }
                 }),
@@ -997,11 +1001,128 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                 onTap: () {
                   Navigator.pop(context);
                   ref.read(downloadSongProvider)(music);
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                      content: Text('已添加到下载队列'),
-                      duration: Duration(seconds: 1)));
+                  showAppNotification(
+                    '已添加到下载队列',
+                    type: AppNotificationType.success,
+                    duration: const Duration(seconds: 1),
+                  );
+                }),
+            ListTile(
+                leading: Icon(Icons.bedtime_outlined,
+                    color: AppColors.onScaffold(context)),
+                title: Text('睡眠定时',
+                    style: TextStyle(color: AppColors.onScaffold(context))),
+                subtitle: Text(_sleepTimerSubtitle(),
+                    style: TextStyle(
+                        color: AppColors.mutedText(context), fontSize: 12)),
+                onTap: () {
+                  Navigator.pop(context);
+                  _showSleepTimerMenu(context);
                 }),
           ],
+        ),
+      ),
+    );
+  }
+
+  String _sleepTimerSubtitle() {
+    final state = ref.read(sleepTimerProvider);
+    if (state case SleepTimerRunning(:final scheduledEndTime)) {
+      final remaining = scheduledEndTime.difference(DateTime.now());
+      if (remaining <= Duration.zero) return '即将停止播放';
+      final minutes = remaining.inMinutes;
+      final seconds = remaining.inSeconds.remainder(60);
+      if (minutes <= 0) return '$seconds 秒后停止播放';
+      return '$minutes 分$seconds 秒后停止播放';
+    }
+    if (state case SleepTimerFailed()) return '上次停止播放失败';
+    return '未开启';
+  }
+
+  void _showSleepTimerMenu(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: AppColors.dialogBg(context),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) => SafeArea(
+        child: Consumer(
+          builder: (context, ref, _) {
+            final state = ref.watch(sleepTimerProvider);
+            const options = [10, 15, 30, 60, 90];
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                    width: 32,
+                    height: 4,
+                    margin: EdgeInsets.symmetric(vertical: 12),
+                    decoration: BoxDecoration(
+                        color: AppColors.mutedText(context),
+                        borderRadius: BorderRadius.circular(2))),
+                Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  child: Row(
+                    children: [
+                      Icon(Icons.bedtime_outlined,
+                          color: AppColors.accentOf(context)),
+                      SizedBox(width: 12),
+                      Expanded(
+                        child: Text('睡眠定时',
+                            style: TextStyle(
+                                color: AppColors.onScaffold(context),
+                                fontSize: 14,
+                                fontWeight: FontWeight.w500)),
+                      ),
+                      if (state case SleepTimerRunning())
+                        Text(_sleepTimerSubtitle(),
+                            style: TextStyle(
+                                color: AppColors.mutedText(context),
+                                fontSize: 12)),
+                    ],
+                  ),
+                ),
+                Divider(color: AppColors.cardBorder(context), height: 1),
+                for (final minutes in options) ...[
+                  ListTile(
+                    leading: Icon(Icons.timer_outlined,
+                        color: AppColors.onScaffold(context)),
+                    title: Text('$minutes 分钟',
+                        style:
+                            TextStyle(color: AppColors.onScaffold(context))),
+                    trailing: state is SleepTimerRunning &&
+                            state.duration == Duration(minutes: minutes)
+                        ? Icon(Icons.check, color: AppColors.accentOf(context))
+                        : null,
+                    onTap: () {
+                      Navigator.pop(context);
+                      ref.read(sleepTimerProvider.notifier).startTimer(
+                          Duration(minutes: minutes));
+                      showAppNotification(
+                        '$minutes 分钟后停止播放',
+                        type: AppNotificationType.success,
+                        duration: const Duration(seconds: 1),
+                      );
+                    },
+                  ),
+                ],
+                if (state case SleepTimerRunning()) ...[
+                  ListTile(
+                    leading: Icon(Icons.timer_off_outlined,
+                        color: AppColors.onScaffold(context)),
+                    title: Text('取消睡眠定时',
+                        style:
+                            TextStyle(color: AppColors.onScaffold(context))),
+                    onTap: () {
+                      Navigator.pop(context);
+                      ref.read(sleepTimerProvider.notifier).cancelTimer();
+                    },
+                  ),
+                ],
+              ],
+            );
+          },
         ),
       ),
     );
@@ -1028,6 +1149,8 @@ class _PlaybackQueueSheet extends ConsumerStatefulWidget {
 }
 
 class _PlaybackQueueSheetState extends ConsumerState<_PlaybackQueueSheet> {
+  static const double _queueTileHeight = 56.0;
+
   late int _pageIndex;
   final ScrollController _queueScrollController = ScrollController();
   int? _focusedPageForScroll;
@@ -1055,12 +1178,30 @@ class _PlaybackQueueSheetState extends ConsumerState<_PlaybackQueueSheet> {
 
   void _scrollToCurrentIfNeeded(int pageIndex, int currentIndex, int pageStart) {
     if (currentIndex < pageStart || _focusedPageForScroll == pageIndex) return;
-    _focusedPageForScroll = pageIndex;
     final offsetInPage = currentIndex - pageStart;
+    _focusedPageForScroll = pageIndex;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_queueScrollController.hasClients) return;
+      if (!mounted) return;
+      if (!_queueScrollController.hasClients) {
+        _focusedPageForScroll = null;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          if (!_queueScrollController.hasClients) return;
+          final position = _queueScrollController.position;
+          final target = (offsetInPage * _queueTileHeight -
+                  (position.viewportDimension - _queueTileHeight) / 2)
+              .clamp(0.0, position.maxScrollExtent);
+          _queueScrollController.animateTo(
+            target,
+            duration: const Duration(milliseconds: 280),
+            curve: Curves.easeOutCubic,
+          );
+        });
+        return;
+      }
       final position = _queueScrollController.position;
-      final target = (offsetInPage * 72.0 - (position.viewportDimension - 72.0) / 2)
+      final target = (offsetInPage * _queueTileHeight -
+          (position.viewportDimension - _queueTileHeight) / 2)
           .clamp(0.0, position.maxScrollExtent);
       _queueScrollController.animateTo(
         target,
@@ -1114,6 +1255,7 @@ class _PlaybackQueueSheetState extends ConsumerState<_PlaybackQueueSheet> {
       );
 
       return SafeArea(
+        bottom: false,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -1162,7 +1304,7 @@ class _PlaybackQueueSheetState extends ConsumerState<_PlaybackQueueSheet> {
                 }
                 final queueItems = page.songs;
                 _scrollToCurrentIfNeeded(range.pageIndex, currentIndex, range.start);
-                final contentHeight = (queueItems.length * 72.0)
+                final contentHeight = (queueItems.length * _queueTileHeight)
                     .clamp(0.0, screenHeight * 2 / 3)
                     .toDouble();
                 return SizedBox(
@@ -1172,11 +1314,14 @@ class _PlaybackQueueSheetState extends ConsumerState<_PlaybackQueueSheet> {
                       Expanded(
                         child: ListView.builder(
                           itemCount: queueItems.length,
+                          itemExtent: _queueTileHeight,
                           itemBuilder: (context, index) {
                             final item = queueItems[index];
                             final globalIndex = range.start + index;
                             final isPlaying = globalIndex == currentIndex;
                             return ListTile(
+                              dense: true,
+                              minTileHeight: _queueTileHeight,
                               leading: isPlaying
                                   ? Icon(Icons.play_arrow, color: AppColors.accentOf(context))
                                   : Text(
@@ -1249,11 +1394,12 @@ class _PlaybackQueueSheetState extends ConsumerState<_PlaybackQueueSheet> {
     final queue = pageSlice(widget.queue, range);
     _scrollToCurrentIfNeeded(range.pageIndex, currentIndex, range.start);
     final hasMultiplePages = range.pageCount > 1;
-    final contentHeight = (queue.length * 72.0 + (hasMultiplePages ? 24.0 : 0.0))
+    final contentHeight = (queue.length * _queueTileHeight + (hasMultiplePages ? 24.0 : 0.0))
         .clamp(0.0, screenHeight * 2 / 3)
         .toDouble();
 
     return SafeArea(
+      bottom: false,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -1300,11 +1446,14 @@ class _PlaybackQueueSheetState extends ConsumerState<_PlaybackQueueSheet> {
                   Expanded(
                     child: ListView.builder(
                       itemCount: queue.length,
+                      itemExtent: _queueTileHeight,
                       itemBuilder: (context, index) {
                         final item = queue[index];
                         final queueIndex = range.start + index;
                         final isPlaying = queueIndex == currentIndex;
                         return ListTile(
+                          dense: true,
+                          minTileHeight: _queueTileHeight,
                           leading: isPlaying
                               ? Icon(Icons.play_arrow, color: AppColors.accentOf(context))
                               : Text(
