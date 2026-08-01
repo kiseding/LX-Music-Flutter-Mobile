@@ -81,32 +81,6 @@ private func lxProgressRange(
   return start...(start.addingTimeInterval(duration))
 }
 
-/// 环形进度封面：灰色轨道 + 绿色进度弧 + 封面，美团/高德风格的"药丸一圈进度"。
-private struct LXProgressRingArtwork: View {
-  let path: String?
-  let progress: Double
-  let size: CGFloat
-  var ringWidth: CGFloat = 2.5
-
-  var body: some View {
-    ZStack {
-      Circle()
-        .stroke(Color.white.opacity(0.22), lineWidth: ringWidth)
-      Circle()
-        .trim(from: 0, to: min(max(progress, 0), 1))
-        .stroke(
-          Color.accentColor,
-          style: StrokeStyle(lineWidth: ringWidth, lineCap: .round)
-        )
-        .rotationEffect(.degrees(-90))
-      LXArtworkView(path: path)
-        .frame(width: size, height: size)
-        .clipShape(Circle())
-    }
-    .frame(width: size + ringWidth * 3, height: size + ringWidth * 3)
-  }
-}
-
 private struct LXNowPlayingProvider: TimelineProvider {
   func placeholder(in context: Context) -> LXNowPlayingEntry {
     loadNowPlayingEntry()
@@ -161,7 +135,7 @@ private extension View {
   }
 
   func lxLiveActivityBackground() -> some View {
-    activityBackgroundTint(Color.black.opacity(0.35))
+    activityBackgroundTint(.clear)
   }
 }
 
@@ -382,44 +356,41 @@ private struct LXLiveActivityContentView: View {
   }
 
   var body: some View {
-    ZStack {
-      Color(red: 0.07, green: 0.08, blue: 0.11)
-      HStack(spacing: 12) {
-        LXArtworkView(path: artworkPath)
-          .frame(width: 48, height: 48)
-          .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        VStack(alignment: .leading, spacing: 4) {
-          Text(title)
-            .font(.headline)
-            .foregroundStyle(.white)
+    HStack(spacing: 12) {
+      LXArtworkView(path: artworkPath)
+        .frame(width: 48, height: 48)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+      VStack(alignment: .leading, spacing: 4) {
+        Text(title)
+          .font(.headline)
+          .foregroundStyle(.white)
+          .lineLimit(1)
+        Text(artist)
+          .font(.subheadline)
+          .foregroundStyle(.white.opacity(0.72))
+          .lineLimit(1)
+        if !lyric.isEmpty {
+          Text(lyric)
+            .font(.caption2)
+            .foregroundStyle(.white.opacity(0.78))
             .lineLimit(1)
-          Text(artist)
-            .font(.subheadline)
-            .foregroundStyle(.white.opacity(0.72))
-            .lineLimit(1)
-          if !lyric.isEmpty {
-            Text(lyric)
-              .font(.caption2)
-              .foregroundStyle(.white.opacity(0.78))
-              .lineLimit(1)
-          }
-          if let range = progressRange {
-            if isPlaying {
-              ProgressView(timerInterval: range, countsDown: false)
-                .tint(.white)
-            } else {
-              ProgressView(value: min(currentPositionMs, durationMs), total: durationMs)
-                .tint(.white.opacity(0.6))
-            }
+        }
+        if let range = progressRange {
+          if isPlaying {
+            ProgressView(timerInterval: range, countsDown: false)
+              .tint(.white)
+          } else {
+            ProgressView(value: min(currentPositionMs, durationMs), total: durationMs)
+              .tint(.white.opacity(0.6))
           }
         }
-        Spacer(minLength: 0)
-        Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-          .font(.title3)
-          .foregroundStyle(.white)
       }
-      .padding(14)
+      Spacer(minLength: 0)
+      Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+        .font(.title3)
+        .foregroundStyle(.white)
     }
+    .padding(14)
   }
 }
 
@@ -438,33 +409,11 @@ private func lxDynamicIsland(context: ActivityViewContext<LiveActivitiesAppAttri
   let positionMs = context.state.positionMs ?? (defaults?.double(forKey: context.attributes.prefixedKey("positionMs")) ?? 0)
   let positionSyncedAtMs = context.state.positionSyncedAtMs ?? (defaults?.double(forKey: context.attributes.prefixedKey("positionSyncedAtMs")) ?? 0)
   let durationMs = context.state.durationMs ?? (defaults?.double(forKey: context.attributes.prefixedKey("durationMs")) ?? 0)
-  let currentPositionMs = lxPlaybackPositionMs(
-    positionMs: positionMs,
-    durationMs: durationMs,
-    syncedAtMs: positionSyncedAtMs,
-    isPlaying: isPlaying
-  )
-  let progressFraction = durationMs > 0
-    ? min(max(currentPositionMs / durationMs, 0), 1)
-    : 0
-
   return DynamicIsland {
     DynamicIslandExpandedRegion(.leading) {
-      ZStack {
-        Circle()
-          .stroke(Color.white.opacity(0.22), lineWidth: 3)
-        Circle()
-          .trim(from: 0, to: progressFraction)
-          .stroke(
-            Color.accentColor,
-            style: StrokeStyle(lineWidth: 3, lineCap: .round)
-          )
-          .rotationEffect(.degrees(-90))
-        LXArtworkView(path: artworkPath)
-          .frame(width: 48, height: 48)
-          .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-      }
-      .frame(width: 60, height: 60)
+      LXArtworkView(path: artworkPath)
+        .frame(width: 56, height: 56)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
     DynamicIslandExpandedRegion(.center) {
       VStack(alignment: .leading, spacing: 2) {
@@ -482,21 +431,26 @@ private func lxDynamicIsland(context: ActivityViewContext<LiveActivitiesAppAttri
         .font(.title3)
     }
   } compactLeading: {
-    LXProgressRingArtwork(path: artworkPath, progress: progressFraction, size: 16)
+    LXArtworkView(path: artworkPath)
+      .frame(width: 24, height: 24)
+      .clipShape(Circle())
   } compactTrailing: {
     Image(systemName: isPlaying ? "pause.fill" : "play.fill")
       .font(.footnote)
   } minimal: {
-    LXProgressRingArtwork(path: artworkPath, progress: progressFraction, size: 16)
+    LXArtworkView(path: artworkPath)
+      .frame(width: 24, height: 24)
+      .clipShape(Circle())
   }
 }
 
 @available(iOSApplicationExtension 16.1, *)
 struct LXMusicLiveActivity: Widget {
   var body: some WidgetConfiguration {
-    ActivityConfiguration(for: LiveActivitiesAppAttributes.self) { context in
-      LXLiveActivityContentView(context: context)
-        .lxLiveActivityBackground()
+    ActivityConfiguration(for: LiveActivitiesAppAttributes.self) { _ in
+      // Keep the Live Activity available to Dynamic Island, but render no
+      // separate lock-screen card.
+      EmptyView()
     } dynamicIsland: { context in
       lxDynamicIsland(context: context)
     }
