@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/theme/app_colors.dart';
+import '../../../core/widgets/app_notification.dart';
 import '../../player/domain/music_item.dart';
 import '../../player/presentation/player_provider.dart';
 import '../domain/duplicate_detector.dart';
@@ -195,13 +196,16 @@ class _DuplicateScreenState extends ConsumerState<DuplicateScreen> {
         }
       }
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('已移除 $removed 处重复项')),
+      showAppNotification(
+        '已移除 $removed 处重复项',
+        type: AppNotificationType.success,
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('移除失败: $e')));
+      showAppNotification(
+        '移除失败: $e',
+        type: AppNotificationType.error,
+      );
     } finally {
       if (mounted) setState(() => _removing = false);
     }

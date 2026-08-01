@@ -174,8 +174,6 @@ class _AppNotificationBanner extends StatelessWidget {
     };
     final dark = AppColors.isDark(context);
     final baseColor = dark ? const Color(0xFF1C1C1E) : Colors.white;
-    final borderColor =
-        dark ? const Color(0x33FFFFFF) : const Color(0x1F3C3C43);
     final shadowColor = Colors.black.withValues(alpha: dark ? 0.42 : 0.16);
 
     return Container(
@@ -203,7 +201,6 @@ class _AppNotificationBanner extends StatelessWidget {
                 baseColor.withValues(alpha: dark ? 0.86 : 0.92),
               ),
               borderRadius: BorderRadius.circular(999),
-              border: Border.all(color: borderColor),
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
