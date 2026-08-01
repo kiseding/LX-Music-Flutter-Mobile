@@ -548,7 +548,6 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         return Center(
           child: Pressable(
             semanticLabel: '打开歌词',
-            borderRadius: BorderRadius.circular(22),
             onTap: _openLyricsPage,
             child: Container(
               width: box,
