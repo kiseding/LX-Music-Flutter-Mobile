@@ -144,6 +144,8 @@ class LockScreenSyncService {
       }
     } catch (e) {
       debugPrint('[LockScreenSync] sync failed: $e');
+    } finally {
+      _syncingNow = false;
     }
   }
 
