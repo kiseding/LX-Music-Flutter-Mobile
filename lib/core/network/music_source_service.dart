@@ -354,7 +354,7 @@ class MusicSourceService {
         }
         final detailed = await _customSourceService
             .getMusicUrlDetailed(sourceId, musicForScript, quality: quality)
-            .timeout(const Duration(seconds: 40));
+            .timeout(const Duration(seconds: 20));
         _throwIfCancelled(cancelToken);
         final rawUrl = detailed?.url;
         final url = rawUrl == null ? null : normalizeOutboundUrl(rawUrl);

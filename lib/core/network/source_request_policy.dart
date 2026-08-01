@@ -212,10 +212,8 @@ class SourceRequestPolicy {
   Future<ValidatedSourceRequest> validate(
       Uri uri, Map<String, dynamic> options) async {
     final timeoutValue = options['timeout'];
-    // 默认 40s：部分音源服务器（如 onrender 免费托管）冷启动可达 20s+，
-    // 15s 默认会超时导致“第一首能播、后续失败”。
-    final timeoutMs = timeoutValue is num ? timeoutValue.toInt() : 40000;
-    final timeout = Duration(milliseconds: timeoutMs.clamp(1, 120000));
+    final timeoutMs = timeoutValue is num ? timeoutValue.toInt() : 15000;
+    final timeout = Duration(milliseconds: timeoutMs.clamp(1, 60000));
     // 放行 http/https：部分音源（如 onrender 代理）返回 http 播放地址，
     // 强制 https 会导致这类音源解析失败。
     final scheme = uri.scheme.toLowerCase();
