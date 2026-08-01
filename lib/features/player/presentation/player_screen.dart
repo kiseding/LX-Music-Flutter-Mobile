@@ -545,7 +545,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final side = (constraints.maxWidth - 64).clamp(240.0, 420.0);
-        final box = side.clamp(0.0, constraints.maxHeight - 8);
+        // 阴影（blur 20 + offset 10 ≈ 30px）需要在封面下方留出空间，
+        // 否则被 Expanded 边缘裁断出现一条细线。预留 60px（上下各 ~30px）。
+        final box = side.clamp(0.0, constraints.maxHeight - 60);
         return Center(
           child: Pressable(
             semanticLabel: '打开歌词',
@@ -623,7 +625,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
 
   Widget _buildSongInfo(MusicItem music, bool isFavorite) {
     return Padding(
-      padding: EdgeInsets.symmetric(horizontal: 32, vertical: 24),
+      padding: EdgeInsets.symmetric(horizontal: 32, vertical: 16),
       child: Row(
         children: [
           Expanded(
