@@ -251,14 +251,32 @@ struct LiveActivitiesAppAttributes: ActivityAttributes, Identifiable {
 
   public struct ContentState: Codable, Hashable {
     var appGroupId: String?
+    var title: String?
+    var artist: String?
+    var album: String?
+    var artworkPath: String?
+    var isPlaying: Bool?
+    var positionMs: Double?
+    var positionSyncedAtMs: Double?
+    var durationMs: Double?
+    var lyric: String?
 
-    init(appGroupId: String? = nil) {
+    init(appGroupId: String? = nil, data: [String: Any]? = nil) {
       self.appGroupId = appGroupId
+      self.title = Self.raw(data, "title") as? String
+      self.artist = Self.raw(data, "artist") as? String
+      self.album = Self.raw(data, "album") as? String
+      self.artworkPath = Self.raw(data, "artworkPath") as? String
+      self.isPlaying = Self.raw(data, "playing") as? Bool
+      self.positionMs = Self.raw(data, "positionMs") as? Double
+      self.positionSyncedAtMs = Self.raw(data, "positionSyncedAtMs") as? Double
+      self.durationMs = Self.raw(data, "durationMs") as? Double
+      self.lyric = Self.raw(data, "lyric") as? String
     }
 
-    init(from decoder: Decoder) throws {
-      let container = try decoder.container(keyedBy: DynamicCodingKeys.self)
-      appGroupId = try container.decodeIfPresent(String.self, forKey: DynamicCodingKeys("appGroupId"))
+    private static func raw(_ data: [String: Any]?, _ key: String) -> Any? {
+      guard let value = data?[key] else { return nil }
+      return value
     }
   }
 
@@ -310,15 +328,15 @@ private struct LXLiveActivityContentView: View {
     defaults?.string(forKey: context.attributes.prefixedKey(key))
   }
 
-  private var title: String { value("title") ?? "LX Music" }
-  private var artist: String { value("artist") ?? "" }
-  private var album: String { value("album") ?? "" }
-  private var artworkPath: String? { value("artworkPath") }
-  private var isPlaying: Bool { defaults?.bool(forKey: context.attributes.prefixedKey("playing")) ?? false }
-  private var positionMs: Double { defaults?.double(forKey: context.attributes.prefixedKey("positionMs")) ?? 0 }
-  private var positionSyncedAtMs: Double { defaults?.double(forKey: context.attributes.prefixedKey("positionSyncedAtMs")) ?? 0 }
-  private var durationMs: Double { defaults?.double(forKey: context.attributes.prefixedKey("durationMs")) ?? 0 }
-  private var lyric: String { value("lyric") ?? "" }
+  private var title: String { context.state.title ?? (value("title") ?? "LX Music") }
+  private var artist: String { context.state.artist ?? (value("artist") ?? "") }
+  private var album: String { context.state.album ?? (value("album") ?? "") }
+  private var artworkPath: String? { context.state.artworkPath ?? value("artworkPath") }
+  private var isPlaying: Bool { context.state.isPlaying ?? (defaults?.bool(forKey: context.attributes.prefixedKey("playing")) ?? false) }
+  private var positionMs: Double { context.state.positionMs ?? (defaults?.double(forKey: context.attributes.prefixedKey("positionMs")) ?? 0) }
+  private var positionSyncedAtMs: Double { context.state.positionSyncedAtMs ?? (defaults?.double(forKey: context.attributes.prefixedKey("positionSyncedAtMs")) ?? 0) }
+  private var durationMs: Double { context.state.durationMs ?? (defaults?.double(forKey: context.attributes.prefixedKey("durationMs")) ?? 0) }
+  private var lyric: String { context.state.lyric ?? (value("lyric") ?? "") }
 
   private var currentPositionMs: Double {
     lxPlaybackPositionMs(
@@ -394,15 +412,15 @@ private func lxDynamicIsland(context: ActivityViewContext<LiveActivitiesAppAttri
     defaults?.string(forKey: context.attributes.prefixedKey(key))
   }
 
-  let title = value("title") ?? "LX Music"
-  let artist = value("artist") ?? ""
-  let album = value("album") ?? ""
-  let artworkPath = value("artworkPath")
-  let isPlaying = defaults?.bool(forKey: context.attributes.prefixedKey("playing")) ?? false
-  let positionMs = defaults?.double(forKey: context.attributes.prefixedKey("positionMs")) ?? 0
-  let positionSyncedAtMs = defaults?.double(forKey: context.attributes.prefixedKey("positionSyncedAtMs")) ?? 0
-  let durationMs = defaults?.double(forKey: context.attributes.prefixedKey("durationMs")) ?? 0
-  let lyric = value("lyric") ?? ""
+  let title = context.state.title ?? (value("title") ?? "LX Music")
+  let artist = context.state.artist ?? (value("artist") ?? "")
+  let album = context.state.album ?? (value("album") ?? "")
+  let artworkPath = context.state.artworkPath ?? value("artworkPath")
+  let isPlaying = context.state.isPlaying ?? (defaults?.bool(forKey: context.attributes.prefixedKey("playing")) ?? false)
+  let positionMs = context.state.positionMs ?? (defaults?.double(forKey: context.attributes.prefixedKey("positionMs")) ?? 0)
+  let positionSyncedAtMs = context.state.positionSyncedAtMs ?? (defaults?.double(forKey: context.attributes.prefixedKey("positionSyncedAtMs")) ?? 0)
+  let durationMs = context.state.durationMs ?? (defaults?.double(forKey: context.attributes.prefixedKey("durationMs")) ?? 0)
+  let lyric = context.state.lyric ?? (value("lyric") ?? "")
   let currentPositionMs = lxPlaybackPositionMs(
     positionMs: positionMs,
     durationMs: durationMs,

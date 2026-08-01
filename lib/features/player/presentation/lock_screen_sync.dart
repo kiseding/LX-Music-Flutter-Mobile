@@ -132,10 +132,11 @@ class LockScreenSyncService {
     if (_disposed || _handler.mediaItem.value == null) return;
     try {
       final item = _handler.mediaItem.value!;
+      final music = _musicFromItem(item);
+      final playing = _handler.playbackState.value.playing;
       final lyric = _currentLyricLine?.call() ?? '';
       final positionMs = _positionMs().toDouble();
-      final durationMs =
-          _durationMs(_musicFromItem(item)).toDouble();
+      final durationMs = _durationMs(music).toDouble();
       final positionSyncedAtMs =
           DateTime.now().millisecondsSinceEpoch.toDouble();
       final lyricChanged = lyric != _lastLyric;
@@ -158,6 +159,11 @@ class LockScreenSyncService {
         await _liveActivities.createOrUpdateActivity(
           _activityId,
           {
+            'title': music.name,
+            'artist': music.singer,
+            'album': music.album,
+            'artworkPath': _artworkPath ?? '',
+            'playing': playing,
             'positionMs': positionMs,
             'positionSyncedAtMs': positionSyncedAtMs,
             'durationMs': durationMs,
