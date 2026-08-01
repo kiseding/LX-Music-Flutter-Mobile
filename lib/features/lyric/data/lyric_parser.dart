@@ -288,7 +288,10 @@ class LyricParser {
         final words = [
           for (final w in wordsRaw)
             LyricWord(
-              time: time + w.time,
+              // 腾讯 QRC 的字 start 是绝对毫秒（从歌曲开始），直接用 w.time
+              //（可叠加 [offset:] 全局偏移）。不要加行 time，否则双重加导致
+              // 逐字高亮时间整体偏移、唱几句后逐字消失。
+              time: w.time + offset,
               text: w.text,
               duration: w.duration,
             ),

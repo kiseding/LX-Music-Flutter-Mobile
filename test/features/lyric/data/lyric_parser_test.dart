@@ -95,14 +95,16 @@ void main() {
   });
 
   test('parseQrc Tencent raw timed lines', () {
-    const raw = r'''[0,5890]A(0,368)B(368,368)
-[5890,10000]C(0,400)D(400,300)''';
+    // 腾讯 QRC 的字 start 是绝对毫秒（从歌曲开始），与行时间一致。
+    const raw = r'''[0,2250]A(0,368)B(368,368)
+[2250,4500]C(2250,400)D(2650,300)''';
     final lyrics = LyricParser.parseQrc(raw);
     expect(lyrics.lines.length, 2);
     expect(lyrics.lines[0].text, 'AB');
     expect(lyrics.lines[0].hasWordTiming, isTrue);
-    expect(lyrics.lines[1].time, const Duration(seconds: 5, milliseconds: 890));
-    expect(lyrics.lines[1].words![1].time, const Duration(milliseconds: 6290));
+    expect(lyrics.lines[1].time, const Duration(milliseconds: 2250));
+    expect(lyrics.lines[1].words![0].time, const Duration(milliseconds: 2250));
+    expect(lyrics.lines[1].words![1].time, const Duration(milliseconds: 2650));
   });
 
   test('hasWordTiming detects Tencent word tags', () {
@@ -128,7 +130,7 @@ void main() {
     expect(lyrics.lines[0].hasWordTiming, isTrue);
     expect(lyrics.lines[0].words![1].time, const Duration(milliseconds: 368));
     expect(lyrics.lines[1].words![1].time,
-        const Duration(milliseconds: 12960));
+        const Duration(milliseconds: 7070));
     expect(lyrics.lines[1].words![1].text, 'G');
   });
 }
