@@ -81,6 +81,32 @@ private func lxProgressRange(
   return start...(start.addingTimeInterval(duration))
 }
 
+/// 环形进度封面：灰色轨道 + 绿色进度弧 + 封面，美团/高德风格的"药丸一圈进度"。
+private struct LXProgressRingArtwork: View {
+  let path: String?
+  let progress: Double
+  let size: CGFloat
+  var ringWidth: CGFloat = 2.5
+
+  var body: some View {
+    ZStack {
+      Circle()
+        .stroke(Color.white.opacity(0.22), lineWidth: ringWidth)
+      Circle()
+        .trim(from: 0, to: min(max(progress, 0), 1))
+        .stroke(
+          Color.accentColor,
+          style: StrokeStyle(lineWidth: ringWidth, lineCap: .round)
+        )
+        .rotationEffect(.degrees(-90))
+      LXArtworkView(path: path)
+        .frame(width: size, height: size)
+        .clipShape(Circle())
+    }
+    .frame(width: size + ringWidth * 3, height: size + ringWidth * 3)
+  }
+}
+
 private struct LXNowPlayingProvider: TimelineProvider {
   func placeholder(in context: Context) -> LXNowPlayingEntry {
     loadNowPlayingEntry()
@@ -453,16 +479,21 @@ private func lxDynamicIsland(context: ActivityViewContext<LiveActivitiesAppAttri
 
   return DynamicIsland {
     DynamicIslandExpandedRegion(.leading) {
-      LXArtworkView(path: artworkPath)
-        .frame(width: 52, height: 52)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(
-          Circle()
-            .trim(from: 0, to: progressFraction)
-            .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-            .rotationEffect(.degrees(-90))
-        )
-        .padding(2)
+      ZStack {
+        Circle()
+          .stroke(Color.white.opacity(0.22), lineWidth: 3)
+        Circle()
+          .trim(from: 0, to: progressFraction)
+          .stroke(
+            Color.accentColor,
+            style: StrokeStyle(lineWidth: 3, lineCap: .round)
+          )
+          .rotationEffect(.degrees(-90))
+        LXArtworkView(path: artworkPath)
+          .frame(width: 48, height: 48)
+          .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+      }
+      .frame(width: 60, height: 60)
     }
     DynamicIslandExpandedRegion(.center) {
       VStack(alignment: .leading, spacing: 2) {
@@ -527,30 +558,12 @@ private func lxDynamicIsland(context: ActivityViewContext<LiveActivitiesAppAttri
       .padding(.horizontal, 8)
     }
   } compactLeading: {
-    LXArtworkView(path: artworkPath)
-      .frame(width: 20, height: 20)
-      .clipShape(Circle())
-      .overlay(
-        Circle()
-          .trim(from: 0, to: progressFraction)
-          .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 2, lineCap: .round))
-          .rotationEffect(.degrees(-90))
-      )
-      .padding(2)
+    LXProgressRingArtwork(path: artworkPath, progress: progressFraction, size: 16)
   } compactTrailing: {
     Image(systemName: isPlaying ? "pause.fill" : "play.fill")
       .font(.footnote)
   } minimal: {
-    LXArtworkView(path: artworkPath)
-      .frame(width: 20, height: 20)
-      .clipShape(Circle())
-      .overlay(
-        Circle()
-          .trim(from: 0, to: progressFraction)
-          .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 2, lineCap: .round))
-          .rotationEffect(.degrees(-90))
-      )
-      .padding(2)
+    LXProgressRingArtwork(path: artworkPath, progress: progressFraction, size: 16)
   }
 }
 
