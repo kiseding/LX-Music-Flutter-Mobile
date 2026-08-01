@@ -1029,13 +1029,26 @@ class CustomSourceEngine {
     try {
       _currentSource = source;
       _initCompleter = Completer<void>();
+      // 部分音源（如 sixyin 混淆版）会校验 currentScriptInfo 的
+      // name/description/version 必须与脚本头部注释一致，否则抛
+      // "加载音源脚本失败"。这里直接从脚本头重新解析，覆盖用户可能编辑
+      // 过的 source 元数据，确保脚本自校验通过。
+      final headerEnd = source.script.indexOf('*/');
+      final header = headerEnd > 0 ? source.script.substring(0, headerEnd) : '';
+      String? headerMeta(String key) {
+        if (header.isEmpty) return null;
+        final m =
+            RegExp('@$key\\s+(.+)', caseSensitive: false).firstMatch(header);
+        return m?.group(1)?.trim();
+      }
+
       final scriptInfo = {
         'id': source.id,
-        'name': source.name,
-        'description': source.description,
-        'version': source.version,
-        'author': source.author,
-        'homepage': source.homepage ?? '',
+        'name': headerMeta('name') ?? source.name,
+        'description': headerMeta('description') ?? source.description,
+        'version': headerMeta('version') ?? source.version,
+        'author': headerMeta('author') ?? source.author,
+        'homepage': headerMeta('homepage') ?? (source.homepage ?? ''),
         'rawScript': '', // 占位
       };
 
