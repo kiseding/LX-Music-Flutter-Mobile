@@ -2518,20 +2518,36 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   }
 
   /// Background artwork warm-up: set local file artUri without reloading audio.
+  /// Also writes `extras['artCacheFile']` so iOS lock screen shows the cover:
+  /// audio_service reads only a local file path from that key, never a remote
+  /// artUri, so without it remote covers (e.g. NetEase) are missing on lock.
   void patchQueueArtUri(String mediaId, Uri artUri) {
     if (_disposed) return;
+    final filePath = artUri.scheme == 'file' ? artUri.toFilePath() : null;
     var changed = false;
     for (var i = 0; i < _queue.length; i++) {
       if (_queue[i].id != mediaId) continue;
       if (_queue[i].artUri == artUri) continue;
-      _replaceQueueItem(i, _queue[i].copyWith(artUri: artUri));
+      final extras = Map<String, dynamic>.from(_queue[i].extras ?? {});
+      if (filePath != null) {
+        extras['artCacheFile'] = filePath;
+      } else {
+        extras.remove('artCacheFile');
+      }
+      _replaceQueueItem(i, _queue[i].copyWith(artUri: artUri, extras: extras));
       changed = true;
     }
     if (!changed) return;
     queue.add(List.unmodifiable(_queue));
     final current = mediaItem.value;
     if (current != null && current.id == mediaId && current.artUri != artUri) {
-      mediaItem.add(current.copyWith(artUri: artUri));
+      final currentExtras = Map<String, dynamic>.from(current.extras ?? {});
+      if (filePath != null) {
+        currentExtras['artCacheFile'] = filePath;
+      } else {
+        currentExtras.remove('artCacheFile');
+      }
+      mediaItem.add(current.copyWith(artUri: artUri, extras: currentExtras));
     }
   }
 

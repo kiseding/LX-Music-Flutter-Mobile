@@ -1149,6 +1149,26 @@ void main() {
     expect(handler.queueItems, queueAtShutdown);
     expect(handler.mediaItem.value, same(mediaAtShutdown));
   });
+
+  test('patchQueueArtUri writes artCacheFile for lock screen artwork',
+      () async {
+    final player = _PlaybackStateAudioPlayer();
+    final handler = LxAudioHandler(player: player);
+    addTearDown(player.dispose);
+    handler.urlResolver = (id, [extras]) async => 'file:///tmp/$id.mp3';
+    await handler.setPlaylist([
+      const MediaItem(id: 'A', title: 'A'),
+    ]);
+    await pumpEventQueue();
+
+    final local = Uri.file('/tmp/cache/art.png');
+    handler.patchQueueArtUri('A', local);
+
+    final item = handler.mediaItem.value;
+    expect(item, isNotNull);
+    expect(item!.artUri, local);
+    expect(item.extras?['artCacheFile'], '/tmp/cache/art.png');
+  });
 }
 
 class _PlaybackStateAudioPlayer extends AudioPlayer {
