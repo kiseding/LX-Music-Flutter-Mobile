@@ -545,66 +545,82 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final side = (constraints.maxWidth - 64).clamp(240.0, 420.0);
-        // Reserve room for the 20px blur and 10px downward shadow so the
-        // largest artwork that fits never has its shadow clipped by PageView.
-        final box = side.clamp(0.0, constraints.maxHeight - 60);
+        const shadowTop = 20.0;
+        const shadowBottom = 30.0;
+        // The image itself always spans the song-info width. The surrounding
+        // height belongs to this widget so neighboring controls avoid the
+        // shadow instead of PageView clipping it.
+        final box = side.clamp(
+          0.0,
+          (constraints.maxHeight - shadowTop - shadowBottom).clamp(0.0, side),
+        );
         return Center(
           child: Pressable(
             semanticLabel: '打开歌词',
             borderRadius: BorderRadius.circular(22),
             onTap: _openLyricsPage,
-            child: Container(
+            child: SizedBox(
               width: box,
-              height: box,
-              margin: const EdgeInsets.symmetric(horizontal: 32),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(22),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withAlpha(40),
-                    blurRadius: 20,
-                    offset: const Offset(0, 10),
-                  ),
-                ],
-              ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(22),
-                child: AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 420),
-                  reverseDuration: const Duration(milliseconds: 280),
-                  switchInCurve: Curves.easeOutCubic,
-                  switchOutCurve: Curves.easeInCubic,
-                  layoutBuilder: (currentChild, previousChildren) {
-                    return Stack(
-                      fit: StackFit.expand,
-                      alignment: Alignment.center,
-                      children: <Widget>[
-                        ...previousChildren,
-                        if (currentChild != null) currentChild,
-                      ],
-                    );
-                  },
-                  transitionBuilder: (child, animation) {
-                    final scale = Tween<double>(begin: 0.92, end: 1.0).animate(
-                      CurvedAnimation(
-                        parent: animation,
-                        curve: Curves.easeOutCubic,
+              height: box + shadowTop + shadowBottom,
+              child: Padding(
+                padding: const EdgeInsets.only(
+                  top: shadowTop,
+                  bottom: shadowBottom,
+                ),
+                child: Container(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(22),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withAlpha(40),
+                        blurRadius: 20,
+                        offset: const Offset(0, 10),
                       ),
-                    );
-                    return FadeTransition(
-                      opacity: animation,
-                      child: ScaleTransition(scale: scale, child: child),
-                    );
-                  },
-                  child: KeyedSubtree(
-                    key: ValueKey<String>(songId ?? artwork ?? 'empty'),
-                    child: artwork != null && artwork.isNotEmpty
-                        ? ArtworkImage(
-                            artwork,
-                            fit: BoxFit.cover,
-                            errorBuilder: (_, __, ___) => _defaultArtwork(),
-                          )
-                        : _defaultArtwork(),
+                    ],
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(22),
+                    child: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 420),
+                      reverseDuration: const Duration(milliseconds: 280),
+                      switchInCurve: Curves.easeOutCubic,
+                      switchOutCurve: Curves.easeInCubic,
+                      layoutBuilder: (currentChild, previousChildren) {
+                        return Stack(
+                          fit: StackFit.expand,
+                          alignment: Alignment.center,
+                          children: <Widget>[
+                            ...previousChildren,
+                            if (currentChild != null) currentChild,
+                          ],
+                        );
+                      },
+                      transitionBuilder: (child, animation) {
+                        final scale = Tween<double>(
+                          begin: 0.92,
+                          end: 1.0,
+                        ).animate(
+                          CurvedAnimation(
+                            parent: animation,
+                            curve: Curves.easeOutCubic,
+                          ),
+                        );
+                        return FadeTransition(
+                          opacity: animation,
+                          child: ScaleTransition(scale: scale, child: child),
+                        );
+                      },
+                      child: KeyedSubtree(
+                        key: ValueKey<String>(songId ?? artwork ?? 'empty'),
+                        child: artwork != null && artwork.isNotEmpty
+                            ? ArtworkImage(
+                                artwork,
+                                fit: BoxFit.cover,
+                                errorBuilder: (_, __, ___) => _defaultArtwork(),
+                              )
+                            : _defaultArtwork(),
+                      ),
+                    ),
                   ),
                 ),
               ),
