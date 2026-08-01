@@ -382,6 +382,9 @@ class CustomSourceService {
           return utf8.decode(owned.bytes, allowMalformed: false);
         });
         if (script == null || !validateScript(script)) return false;
+        // 脚本最终在 CustomSourceEngine 的沙箱里执行（无 DOM/Node、
+        // HTTPS-only、SSRF 拦截、超时与资源限制），导入校验不承担
+        // 安全边界，只过滤明显非音源内容。
         return await importLxMusicScript(script);
       }()
           .timeout(importTimeout, onTimeout: () {
@@ -404,18 +407,33 @@ class CustomSourceService {
     return json.encode(jsonList);
   }
 
-  /// 校验音源脚本。对齐洛雪桌面端：只要求脚本以 `/* ... */` 文件头注释
-  /// 开头（从中可解析 @name 等元数据），不检查内容关键字。
-  /// 这样混淆/加密过的脚本（如 sixyin、lx）也能导入；纯文本或明显非
-  /// JS 的内容（无文件头注释）仍被拒绝。
+  /// 校验音源脚本。与洛雪桌面端（`parseScriptInfo`）保持一致：
+  /// 只要求脚本以 `/* ... */` 文件头注释开头，并从中解析出 `@name` 元数据，
+  /// **不检查正文内容关键字**。
+  ///
+  /// 为什么这么宽松：
+  /// - 音源脚本经常用 obfuscator.io / Unicode 变量名混淆（如 sixyin、lx），
+  ///   混淆后正文不含 `EVENT_NAMES` / `musicUrl` 等明文关键字。
+  ///   若校验正文关键字，这些能正常运行的源会被误拒（Windows 桌面端可用，
+  ///   仅移动端被拦）。
+  /// - 洛雪桌面端同样只做文件头校验，我们与其对齐，保证同一份源在两个端
+  ///   行为一致。
+  ///
+  /// 安全性并未因此削弱：
+  /// - 真正的安全边界不在「导入校验」，而在**运行时沙箱**：
+  ///   脚本执行受限（无 DOM/Node、HTTPS-only 请求、SSRF 拦截、超时与
+  ///   并发/字节限制、能力声明校验）。脚本是用户主动导入并信任的，与
+  ///   桌面端风险模型一致。
+  /// - 文件头 `@name` 同时是导入后元数据（名称/作者/版本）的来源，要求它
+  ///   存在可过滤掉纯文本、无注释的普通 JS 等非音源内容。
   bool validateScript(String script) {
     final trimmed = script.trimLeft();
     if (!trimmed.startsWith('/*')) return false;
-    // 找注释结束位置：/* ... */ 必须闭合，且是文件开头
+    // 注释必须闭合，且位于文件开头
     final close = trimmed.indexOf('*/');
     if (close < 0) return false;
     final header = trimmed.substring(0, close + 2);
-    // 文件头应包含 @name 元数据（洛雪 parseScriptInfo 的 INFO_NAMES）
+    // 文件头应包含 @name 元数据（对齐洛雪 INFO_NAMES）
     return header.contains('@name');
   }
 
