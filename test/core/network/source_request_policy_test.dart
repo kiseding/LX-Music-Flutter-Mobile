@@ -34,15 +34,16 @@ void main() {
       );
     });
 
-    test('rejects cleartext, credentials, and missing hosts', () async {
+    test('rejects credentials, missing hosts, and unsupported schemes',
+        () async {
       final policy = policyWith({
         'example.com': ['93.184.216.34'],
       });
 
       for (final value in [
-        'http://example.com/a',
         'https://user:pass@example.com/a',
         'https:///a',
+        'ftp://example.com/a',
       ]) {
         await expectLater(
           policy.validate(Uri.parse(value), {}),
@@ -50,6 +51,11 @@ void main() {
           reason: value,
         );
       }
+
+      // http 已放行（部分音源返回 http 播放地址）
+      final httpRequest =
+          await policy.validate(Uri.parse('http://example.com/a'), {});
+      expect(httpRequest.uri.scheme, 'http');
     });
 
     test('allows IPv4 destinations regardless of reserved/private ranges',

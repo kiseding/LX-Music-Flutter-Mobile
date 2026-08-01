@@ -214,8 +214,11 @@ class SourceRequestPolicy {
     final timeoutValue = options['timeout'];
     final timeoutMs = timeoutValue is num ? timeoutValue.toInt() : 15000;
     final timeout = Duration(milliseconds: timeoutMs.clamp(1, 60000));
-    if (uri.scheme.toLowerCase() != 'https') {
-      throw const SourceRequestPolicyException('scheme', 'HTTPS is required');
+    // 放行 http/https：部分音源（如 onrender 代理）返回 http 播放地址，
+    // 强制 https 会导致这类音源解析失败。
+    final scheme = uri.scheme.toLowerCase();
+    if (scheme != 'http' && scheme != 'https') {
+      throw const SourceRequestPolicyException('scheme', 'Only http/https are allowed');
     }
     if (uri.host.isEmpty ||
         uri.userInfo.isNotEmpty ||
