@@ -852,9 +852,11 @@ class CustomSourceEngine {
               return "";
             },
             aesEncrypt: function(data, mode, key, iv) {
+              if (globalThis.__aesEncrypt) return globalThis.__aesEncrypt(data, mode, key, iv);
               return Promise.resolve(sendMessage('lx_crypto', JSON.stringify({ method: 'aesEncrypt', input: data, mode: mode, key: key, iv: iv })));
             },
             rsaEncrypt: function(data, key) {
+              if (globalThis.__rsaEncrypt) return globalThis.__rsaEncrypt(data, key);
               return Promise.resolve(sendMessage('lx_crypto', JSON.stringify({ method: 'rsaEncrypt', input: data, key: key })));
             }
           }
