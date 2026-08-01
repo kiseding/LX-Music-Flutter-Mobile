@@ -361,6 +361,14 @@ class WySource extends MusicPlatform {
 
       if (body['code'] != 200) return null;
 
+      // 网易云逐字歌词在 yrc 字段（YRC 字级标签）。优先返回 yrc，
+      // 让解析器进入逐字渲染；无 yrc 时回退普通 lrc。
+      final yrc = body['yrc'] as Map?;
+      final yrcLyric = yrc?['lyric'] as String?;
+      if (yrcLyric != null && yrcLyric.isNotEmpty) {
+        return yrcLyric;
+      }
+
       final lrc = body['lrc'] as Map?;
       if (lrc == null) return null;
 

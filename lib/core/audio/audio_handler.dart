@@ -337,6 +337,9 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   static const _lazyQueueAhead = 8;
   static const _lazyQueueHistory = 4;
 
+  /// 单曲 URL 解析总超时：音源不可用时不会无限等待，超时视为解析失败。
+  static const _resolveTimeout = Duration(seconds: 25);
+
   /// A paged playlist supplies future items in its global playback order.
   /// The handler still owns the short native queue used by lock-screen media
   /// controls, so background next/auto-next follows the same source path.
@@ -1985,7 +1988,9 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
             resolveExtras.remove('remoteUrl');
             resolveExtras['requestedQuality'] = preferredQuality;
             resolveExtras['_playbackGeneration'] = gen;
-            url = await urlResolver!(item.id, resolveExtras);
+            // 解析总超时：音源不可用时避免无限等待，直接进入失败分支。
+            url = await urlResolver!(item.id, resolveExtras)
+                .timeout(_resolveTimeout);
           }
         }
 
@@ -2050,7 +2055,8 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
           resolveExtras.remove('remoteUrl');
           resolveExtras['requestedQuality'] = preferredQuality;
           resolveExtras['_playbackGeneration'] = gen;
-          url = await urlResolver!(item.id, resolveExtras);
+          url = await urlResolver!(item.id, resolveExtras)
+              .timeout(_resolveTimeout);
         }
 
         if (url == null || url.isEmpty) {
