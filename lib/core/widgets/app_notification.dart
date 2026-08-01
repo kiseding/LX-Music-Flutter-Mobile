@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:ui';
 
 import 'package:flutter/material.dart';
 
@@ -181,6 +180,10 @@ class _AppNotificationBanner extends StatelessWidget {
       constraints: const BoxConstraints(maxWidth: 380),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(999),
+        color: Color.alphaBlend(
+          accent.withValues(alpha: dark ? 0.10 : 0.06),
+          baseColor.withValues(alpha: dark ? 0.86 : 0.92),
+        ),
         boxShadow: [
           BoxShadow(
             color: shadowColor,
@@ -189,49 +192,34 @@ class _AppNotificationBanner extends StatelessWidget {
           ),
         ],
       ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(999),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
-          child: Container(
-            padding: const EdgeInsets.fromLTRB(12, 8, 16, 8),
+      padding: const EdgeInsets.fromLTRB(12, 8, 16, 8),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 24,
+            height: 24,
             decoration: BoxDecoration(
-              color: Color.alphaBlend(
-                accent.withValues(alpha: dark ? 0.10 : 0.06),
-                baseColor.withValues(alpha: dark ? 0.86 : 0.92),
-              ),
-              borderRadius: BorderRadius.circular(999),
+              color: accent.withValues(alpha: 0.18),
+              shape: BoxShape.circle,
             ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 24,
-                  height: 24,
-                  decoration: BoxDecoration(
-                    color: accent.withValues(alpha: 0.18),
-                    shape: BoxShape.circle,
-                  ),
-                  child: Icon(icon, size: 15, color: accent),
-                ),
-                const SizedBox(width: 10),
-                Flexible(
-                  child: Text(
-                    notification.message,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: AppColors.onScaffold(context),
-                      fontSize: 14,
-                      fontWeight: FontWeight.w500,
-                      height: 1.25,
-                    ),
-                  ),
-                ),
-              ],
+            child: Icon(icon, size: 15, color: accent),
+          ),
+          const SizedBox(width: 10),
+          Flexible(
+            child: Text(
+              notification.message,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: AppColors.onScaffold(context),
+                fontSize: 14,
+                fontWeight: FontWeight.w500,
+                height: 1.25,
+              ),
             ),
           ),
-        ),
+        ],
       ),
     );
   }
