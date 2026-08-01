@@ -649,6 +649,27 @@ class _LogConsoleState extends ConsumerState<_LogConsole> {
     _listenLogs();
   }
 
+  Future<void> _copyLogs() async {
+    final buffer = StringBuffer();
+    for (final log in _logs) {
+      final message = log['message'] ?? log['event'] ?? '';
+      buffer
+        ..write('[${_formatTime(log['timestamp'])}] ')
+        ..writeln(message);
+      final data = log['data'];
+      if (data != null) {
+        buffer.writeln('  ${json.encode(data)}');
+      }
+    }
+    if (buffer.isEmpty) return;
+    await Clipboard.setData(ClipboardData(text: buffer.toString()));
+    if (!mounted) return;
+    showAppNotification(
+      '日志已复制',
+      type: AppNotificationType.success,
+    );
+  }
+
   void _listenLogs() {
     _logSubscription = ref
         .read(customSourceEventStreamProvider(widget.source.id))
@@ -747,10 +768,23 @@ class _LogConsoleState extends ConsumerState<_LogConsole> {
               ),
       ),
       actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child:
-              Text('关闭', style: TextStyle(color: AppColors.mutedText(context))),
+        Row(
+          children: [
+            TextButton.icon(
+              onPressed: _logs.isEmpty ? null : _copyLogs,
+              icon: const Icon(Icons.copy, size: 16),
+              label: Text('复制日志'),
+              style: TextButton.styleFrom(
+                foregroundColor: AppColors.accentOf(context),
+              ),
+            ),
+            const Spacer(),
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text('关闭',
+                  style: TextStyle(color: AppColors.mutedText(context))),
+            ),
+          ],
         ),
       ],
     );
