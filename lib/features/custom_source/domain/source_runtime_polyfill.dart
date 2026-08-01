@@ -828,26 +828,34 @@ globalThis.__aesEncrypt = function(data, mode, key, iv) {
   var AES = globalThis.__aesCore;
   var strToBytes = function(s){ var b=[]; for(var i=0;i<s.length;i++) b.push(s.charCodeAt(i)&255); return b; };
   var toB64 = function(bytes){ var s=''; for(var i=0;i<bytes.length;i++) s+=String.fromCharCode(bytes[i]); return globalThis.btoa(s); };
-  var padKey = function(s){ s=String(s||''); while(s.length<16) s+='\x00'; return s.substring(0,16); };
-  try {
-    var input;
-    if (typeof data === 'string') {
-      input = (data.length % 4 === 0 && /^[A-Za-z0-9+/=]+$/.test(data)) ? strToBytes(globalThis.atob(data)) : strToBytes(data);
-    } else if (data && data._str !== undefined) {
-      input = strToBytes(data._str);
-    } else {
-      input = strToBytes(String(data));
+  var bytesOf = function(d) {
+    if (d && (ArrayBuffer.isView(d) || Array.isArray(d))) {
+      var b=[]; for (var i=0;i<d.length;i++) b.push(d[i]&255); return b;
     }
+    if (typeof d === 'string') return strToBytes(d);
+    return strToBytes(String(d||''));
+  };
+  var padKey = function(d) {
+    var b = bytesOf(d);
+    while (b.length < 16) b.push(0);
+    return b.slice(0, 16);
+  };
+  try {
+    var input = bytesOf(data);
     var modeS = String(mode || 'aes-128-cbc').toLowerCase();
     var isEcb = modeS.indexOf('ecb') >= 0;
-    var pad = 16 - (input.length % 16);
-    for (var i=0;i<pad;i++) input.push(pad);
-    var aes = new AES(strToBytes(padKey(key)));
+    if (!isEcb) {
+      // CBC: PKCS7（对齐官方 AES/CBC/PKCS7Padding）
+      var pad = 16 - (input.length % 16);
+      for (var i=0;i<pad;i++) input.push(pad);
+    }
+    // ECB: NoPadding（对齐官方 AES/ECB/NoPadding），明文必须是 16 的倍数
+    var aes = new AES(padKey(key));
     var out = [];
     var prev = null;
-    if (!isEcb) prev = strToBytes(padKey(iv));
-    for (i=0;i<input.length;i+=16) {
-      var blk = input.slice(i,i+16);
+    if (!isEcb) prev = padKey(iv);
+    for (var j=0;j<input.length;j+=16) {
+      var blk = input.slice(j,j+16);
       if (prev) { for (var b=0;b<16;b++) blk[b] ^= prev[b]; }
       var enc = aes.encrypt(blk);
       if (prev) prev = enc;
@@ -2259,10 +2267,10 @@ globalThis.__rsaEncrypt = (function() {
     var BI = globalThis.jsbn.BigInteger;
     try {
       var input;
-      if (typeof data === 'string') {
+      if (data && (ArrayBuffer.isView(data) || Array.isArray(data))) {
+        input = []; for (var ib=0; ib<data.length; ib++) input.push(data[ib] & 255);
+      } else if (typeof data === 'string') {
         input = (data.length % 4 === 0 && /^[A-Za-z0-9+/=]+$/.test(data)) ? toBytes(data) : strToBytes(data);
-      } else if (data && data._str !== undefined) {
-        input = strToBytes(data._str);
       } else {
         input = strToBytes(String(data));
       }

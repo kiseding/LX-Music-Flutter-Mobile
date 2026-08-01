@@ -675,6 +675,42 @@ class CustomSourceEngine {
         globalThis._md5 = md5;
       })();
 
+      // 官方 preload 用原生 b642buf/str2b64 + Uint8Array，这里提供等价辅助
+      var __lxBufferUtf8 = function(s) {
+        var bytes = [];
+        for (var i = 0; i < s.length; i++) {
+          var code = s.charCodeAt(i);
+          if (code < 0x80) bytes.push(code);
+          else if (code < 0x800) {
+            bytes.push((code >> 6) | 0xC0, (code & 0x3F) | 0x80);
+          } else {
+            bytes.push((code >> 12) | 0xE0, ((code >> 6) & 0x3F) | 0x80, (code & 0x3F) | 0x80);
+          }
+        }
+        return bytes;
+      };
+      var __lxBufferUtf8Str = function(bytes) {
+        var s = '';
+        for (var i = 0; i < bytes.length; ) {
+          var b = bytes[i] & 255;
+          if (b < 0x80) { s += String.fromCharCode(b); i++; }
+          else if (b < 0xE0) { s += String.fromCharCode(((b & 0x1F) << 6) | (bytes[i + 1] & 0x3F)); i += 2; }
+          else { s += String.fromCharCode(((b & 0x0F) << 12) | ((bytes[i + 1] & 0x3F) << 6) | (bytes[i + 2] & 0x3F)); i += 3; }
+        }
+        return s;
+      };
+      var __lxBufferB64 = function(bytes) {
+        var s = '';
+        for (var i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i] & 255);
+        return globalThis.btoa(s);
+      };
+      var __lxBufferBytesB64 = function(b64) {
+        var s = globalThis.atob(b64);
+        var b = [];
+        for (var i = 0; i < s.length; i++) b.push(s.charCodeAt(i) & 255);
+        return b;
+      };
+
       globalThis.lx = {
         version: '2.0.0',
         env: 'desktop',
@@ -727,6 +763,21 @@ class CustomSourceEngine {
               if (!options.headers.Accept && !options.headers.accept) {
                 options.headers.Accept = 'application/json';
               }
+              // 二进制 body/formData 不能直接 JSON 序列化（Uint8Array 会变成索引对象），
+              // 转 base64 标记后由 Dart 侧解码，对齐官方 fetchData 的 binary body 处理。
+              if (options.body &&
+                  (ArrayBuffer.isView(options.body) || Array.isArray(options.body))) {
+                options._binaryBodyBase64 =
+                    globalThis.lx.utils.buffer.bufToString(options.body, 'base64');
+                options.body = undefined;
+              }
+              if (options.formData &&
+                  (ArrayBuffer.isView(options.formData) ||
+                      Array.isArray(options.formData))) {
+                options._formDataBase64 = globalThis.lx.utils.buffer
+                    .bufToString(options.formData, 'base64');
+                options.formData = undefined;
+              }
               globalThis._pendingRequests++;
               sendMessage('lx_request', JSON.stringify({ url: url, options: options, callbackId: callbackId }));
               return function() {
@@ -761,89 +812,68 @@ class CustomSourceEngine {
         },
         utils: {
           buffer: {
-            from: function(data, encoding) {
-              if (data && data._isBuffer) return data;
-              var str = '';
-              if (typeof data === 'string') {
+            from: function(input, encoding) {
+              if (input && (ArrayBuffer.isView(input) || Array.isArray(input))) return new Uint8Array(input);
+              if (typeof input === 'string') {
                 if (encoding === 'hex') {
-                  for (var i = 0; i < data.length; i += 2) str += String.fromCharCode(parseInt(data.substr(i, 2), 16));
-                } else if (encoding === 'base64') {
-                  str = globalThis.atob(data);
-                } else {
-                  try {
-                    str = unescape(encodeURIComponent(data));
-                  } catch (e) {
-                    str = data;
-                  }
+                  var m = input.match(/.{1,2}/g) || [];
+                  var out = new Uint8Array(m.length);
+                  for (var i = 0; i < m.length; i++) out[i] = parseInt(m[i], 16);
+                  return out;
                 }
-              } else if (data && typeof data.length === 'number') {
-                for (var i = 0; i < data.length; i++) {
-                  var c = data[i];
-                  str += String.fromCharCode(typeof c === 'number' ? c : 0);
+                if (encoding === 'base64') {
+                  var b64 = __lxBufferBytesB64(input);
+                  var o = new Uint8Array(b64.length);
+                  for (var j = 0; j < b64.length; j++) o[j] = b64[j];
+                  return o;
                 }
+                var u = __lxBufferUtf8(input);
+                var o2 = new Uint8Array(u.length);
+                for (var k = 0; k < u.length; k++) o2[k] = u[k];
+                return o2;
               }
-              
-              var b = {
-                _str: str,
-                _isBuffer: true,
-                length: str.length,
-                toString: function(enc) {
-                  if (enc === 'hex') {
-                    var hex = '';
-                    for (var i = 0; i < this._str.length; i++) {
-                      var h = this._str.charCodeAt(i).toString(16);
-                      hex += h.length === 1 ? '0' + h : h;
-                    }
-                    return hex;
-                  }
-                  if (enc === 'base64') return globalThis.btoa(this._str);
-                  if (enc === 'utf8' || enc === 'utf-8' || !enc) {
-                    try {
-                      return decodeURIComponent(escape(this._str));
-                    } catch (e) {
-                      return this._str;
-                    }
-                  }
-                  return this._str;
-                },
-                slice: function(s, e) { return globalThis.lx.utils.buffer.from(this._str.slice(s, e)); },
-                equals: function(other) { return other && other._str === this._str; },
-                toJSON: function() { return this.toString('base64'); }
-              };
-              // 添加索引访问支持
-              for (var i = 0; i < str.length; i++) {
-                (function(idx) {
-                  Object.defineProperty(b, idx, {
-                    get: function() { return str.charCodeAt(idx); },
-                    enumerable: true,
-                    configurable: true
-                  });
-                })(i);
-              }
-              return b;
+              throw new Error('Unsupported input type: ' + input + ' encoding: ' + encoding);
             },
             alloc: function(size, fill) {
-              var str = '';
-              var fillChar = "\0";
+              var out = new Uint8Array(size);
               if (fill !== undefined) {
-                if (typeof fill === 'string') fillChar = fill[0] || "\0";
-                else if (typeof fill === 'number') fillChar = String.fromCharCode(fill);
+                var f = typeof fill === 'string' ? (fill.charCodeAt(0) || 0) : (typeof fill === 'number' ? fill : 0);
+                for (var i = 0; i < size; i++) out[i] = f;
               }
-              for (var i = 0; i < size; i++) str += fillChar;
-              return globalThis.lx.utils.buffer.from(str);
+              return out;
             },
             concat: function(list, totalLength) {
               if (!Array.isArray(list)) throw new TypeError('list must be an Array');
-              var str = '';
+              var bytes = [];
               for (var i = 0; i < list.length; i++) {
                 var item = list[i];
-                if (typeof item === 'string') str += item;
-                else if (item && (item._str !== undefined)) str += item._str;
+                if (typeof item === 'string') {
+                  var u = __lxBufferUtf8(item);
+                  for (var j = 0; j < u.length; j++) bytes.push(u[j]);
+                } else if (item && (ArrayBuffer.isView(item) || Array.isArray(item))) {
+                  for (var j2 = 0; j2 < item.length; j2++) bytes.push(item[j2] & 255);
+                }
               }
-              if (totalLength !== undefined && str.length > totalLength) str = str.slice(0, totalLength);
-              return globalThis.lx.utils.buffer.from(str);
+              if (totalLength !== undefined && bytes.length > totalLength) bytes = bytes.slice(0, totalLength);
+              var out = new Uint8Array(bytes.length);
+              for (var k = 0; k < bytes.length; k++) out[k] = bytes[k];
+              return out;
             },
-            bufToString: function(buffer, encoding) { return (buffer && buffer.toString) ? buffer.toString(encoding) : buffer; }
+            bufToString: function(buf, format) {
+              if (Array.isArray(buf) || ArrayBuffer.isView(buf)) {
+                if (format === 'hex') {
+                  var hex = '';
+                  for (var i = 0; i < buf.length; i++) {
+                    var x = buf[i].toString(16);
+                    hex += x.length === 1 ? '0' + x : x;
+                  }
+                  return hex;
+                }
+                if (format === 'base64') return __lxBufferB64(buf);
+                return __lxBufferUtf8Str(buf);
+              }
+              throw new Error('Input is not a valid buffer: ' + buf + ' format: ' + format);
+            }
           },
           crypto: {
             md5: function(str) {
@@ -864,8 +894,8 @@ class CustomSourceEngine {
         env: 'mobile', version: '2.0.0', currentScriptInfo: { rawScript: '' }
       };
       globalThis.lx.utils.zlib = {
-        inflate: function(buf) { return Promise.resolve(sendMessage('lx_zlib', JSON.stringify({ method: 'inflate', data: buf.toString('base64') }))).then(function(data) { return globalThis.lx.utils.buffer.from(data, 'base64'); }); },
-        deflate: function(data) { return Promise.resolve(sendMessage('lx_zlib', JSON.stringify({ method: 'deflate', data: data.toString('base64') }))).then(function(result) { return globalThis.lx.utils.buffer.from(result, 'base64'); }); }
+        inflate: function(buf) { return Promise.resolve(sendMessage('lx_zlib', JSON.stringify({ method: 'inflate', data: globalThis.lx.utils.buffer.bufToString(buf, 'base64') }))).then(function(data) { return globalThis.lx.utils.buffer.from(data, 'base64'); }); },
+        deflate: function(data) { return Promise.resolve(sendMessage('lx_zlib', JSON.stringify({ method: 'deflate', data: globalThis.lx.utils.buffer.bufToString(data, 'base64') }))).then(function(result) { return globalThis.lx.utils.buffer.from(result, 'base64'); }); }
       };
       globalThis.lx.utils.crypto.randomBytes = function(size) {
         // 对齐官方移动版：纯 JS 生成随机字节并返回 Uint8Array，避免同步
@@ -1739,7 +1769,17 @@ class CustomSourceEngine {
     }
 
     dynamic body = options['body'];
-    if (options['form'] != null) {
+    if (options['_binaryBodyBase64'] != null) {
+      body = base64Decode(options['_binaryBodyBase64'] as String);
+      options['Content-Type'] = options['Content-Type'] ??
+          options['content-type'] ??
+          'application/octet-stream';
+    } else if (options['_formDataBase64'] != null) {
+      body = base64Decode(options['_formDataBase64'] as String);
+      options['Content-Type'] = options['Content-Type'] ??
+          options['content-type'] ??
+          'multipart/form-data';
+    } else if (options['form'] != null) {
       body = options['form'];
       if (!headers.keys.any((k) => k.toLowerCase() == 'content-type')) {
         headers['Content-Type'] = 'application/x-www-form-urlencoded';
