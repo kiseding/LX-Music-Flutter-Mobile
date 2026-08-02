@@ -456,7 +456,8 @@ class CustomSourceEngine {
           return md5.convert(utf8.encode(input.toString())).toString();
         }
         if (method == 'randomBytes') {
-          final size = input is num ? input.toInt() : int.parse(input.toString());
+          final size =
+              input is num ? input.toInt() : int.parse(input.toString());
           return base64Encode(secureRandomBytes(size));
         }
         if (method == 'aesEncrypt') {
@@ -751,7 +752,7 @@ class CustomSourceEngine {
                 // length===2 → (err, response)  —— 脚本写 (err, resp)=>{ if(err) reject; const {body}=resp }
                 // length===3 → (err, response, body)
                 try {
-                  if (cb.length === 1) cb(body || (res ? res.body : null));
+                  if (cb.length === 1) cb(body !== undefined ? body : (res ? res.body : null));
                   else if (cb.length === 2) cb(err, res);
                   else cb(err, res, body);
                 }
@@ -762,6 +763,26 @@ class CustomSourceEngine {
               options.headers = options.headers || {};
               if (!options.headers.Accept && !options.headers.accept) {
                 options.headers.Accept = 'application/json';
+              }
+              if (options.method && String(options.method).toUpperCase() === 'GET') {
+                delete options.headers['Content-Type'];
+                delete options.headers['content-type'];
+              }
+              if (options.body && typeof URLSearchParams !== 'undefined' && options.body instanceof URLSearchParams) {
+                options.body = options.body.toString();
+                if (!options.headers['Content-Type'] && !options.headers['content-type']) {
+                  options.headers['Content-Type'] = 'application/x-www-form-urlencoded';
+                }
+              }
+              if (options.body && options.body._data instanceof Array) {
+                options.formData = {};
+                options.body._data.forEach(function(pair) { options.formData[pair[0]] = pair[1]; });
+                options.body = undefined;
+              }
+              if (options.formData && options.formData._data instanceof Array) {
+                var fd = {};
+                options.formData._data.forEach(function(pair) { fd[pair[0]] = pair[1]; });
+                options.formData = fd;
               }
               // 二进制 body/formData 不能直接 JSON 序列化（Uint8Array 会变成索引对象），
               // 转 base64 标记后由 Dart 侧解码，对齐官方 fetchData 的 binary body 处理。
@@ -1761,8 +1782,18 @@ class CustomSourceEngine {
       });
     }
 
+    bool hasHeader(String name) =>
+        headers.keys.any((k) => k.toString().toLowerCase() == name);
+
+    void setHeaderIfMissing(String name, String value) {
+      if (!hasHeader(name.toLowerCase())) headers[name] = value;
+    }
+
+    // 对齐官方移动端 fetchData：默认声明 JSON 响应，但脚本显式设置优先。
+    setHeaderIfMissing('Accept', 'application/json');
+
     // 确保 User-Agent 存在
-    bool hasUA = headers.keys.any((k) => k.toLowerCase() == 'user-agent');
+    bool hasUA = hasHeader('user-agent');
     if (!hasUA) {
       headers['User-Agent'] =
           'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
@@ -1771,34 +1802,25 @@ class CustomSourceEngine {
     dynamic body = options['body'];
     if (options['_binaryBodyBase64'] != null) {
       body = base64Decode(options['_binaryBodyBase64'] as String);
-      options['Content-Type'] = options['Content-Type'] ??
-          options['content-type'] ??
-          'application/octet-stream';
+      setHeaderIfMissing('Content-Type', 'application/octet-stream');
     } else if (options['_formDataBase64'] != null) {
       body = base64Decode(options['_formDataBase64'] as String);
-      options['Content-Type'] = options['Content-Type'] ??
-          options['content-type'] ??
-          'multipart/form-data';
+      setHeaderIfMissing('Content-Type', 'multipart/form-data');
     } else if (options['form'] != null) {
       body = options['form'];
-      if (!headers.keys.any((k) => k.toLowerCase() == 'content-type')) {
-        headers['Content-Type'] = 'application/x-www-form-urlencoded';
-      }
+      setHeaderIfMissing('Content-Type', 'application/x-www-form-urlencoded');
       if (body is Map) {
-        // Dio 对于 x-www-form-urlencoded 接收 Map
-        body = Map<String, dynamic>.from(body);
+        body = _encodeFormBody(Map<dynamic, dynamic>.from(body));
       }
     } else if (body != null && (body is Map || body is List)) {
       body = json.encode(body);
-      if (!headers.keys.any((k) => k.toLowerCase() == 'content-type')) {
-        headers['Content-Type'] = 'application/json';
-      }
+      setHeaderIfMissing('Content-Type', 'application/json');
     }
 
     if (options['formData'] != null) {
-      final formData = options['formData'];
-      if (formData is Map) {
-        body = FormData.fromMap(Map<String, dynamic>.from(formData));
+      final formData = _normalizeFormDataMap(options['formData']);
+      if (formData != null) {
+        body = FormData.fromMap(formData);
       }
     }
 
@@ -1814,6 +1836,37 @@ class CustomSourceEngine {
       },
       cancellation: cancellation,
     );
+  }
+
+  String _encodeFormBody(Map<dynamic, dynamic> form) {
+    final parts = <String>[];
+    form.forEach((key, value) {
+      if (value == null) return;
+      final name = Uri.encodeQueryComponent(key.toString());
+      if (value is Iterable && value is! String) {
+        for (final item in value) {
+          parts.add('$name=${Uri.encodeQueryComponent(item.toString())}');
+        }
+      } else {
+        parts.add('$name=${Uri.encodeQueryComponent(value.toString())}');
+      }
+    });
+    return parts.join('&');
+  }
+
+  Map<String, dynamic>? _normalizeFormDataMap(dynamic formData) {
+    if (formData is! Map) return null;
+    final rawPairs = formData['_data'];
+    if (rawPairs is List) {
+      final out = <String, dynamic>{};
+      for (final pair in rawPairs) {
+        if (pair is List && pair.isNotEmpty) {
+          out[pair[0].toString()] = pair.length > 1 ? pair[1] : '';
+        }
+      }
+      return out;
+    }
+    return Map<String, dynamic>.from(formData);
   }
 
   Uri _mergeRequestUri(String url, Map<String, dynamic>? queryParams) {

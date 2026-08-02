@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lx_music_flutter/features/custom_source/domain/custom_source_engine.dart';
+import 'package:lx_music_flutter/features/custom_source/domain/source_runtime_polyfill.dart';
 
 void main() {
   test('LX bridge exposes the Desktop event contract', () {
@@ -26,7 +27,8 @@ void main() {
     expect(bridge, contains('if (cb.length === 1)'));
     expect(bridge, contains('else if (cb.length === 2)'));
     expect(bridge, contains('cb(err, res);'));
-    expect(bridge, contains('cb(body || (res ? res.body : null));'));
+    expect(bridge,
+        contains('cb(body !== undefined ? body : (res ? res.body : null));'));
     expect(bridge, contains('else cb(err, res, body);'));
 
     expect(bridge, contains("eventName !== globalThis.lx.EVENT_NAMES.request"));
@@ -52,6 +54,10 @@ void main() {
     expect(bridge, contains('_applyStoredCookies'));
     expect(bridge, contains('_storeCookiesFromResponse'));
     expect(bridge, contains('_formatRequestError'));
+    expect(
+        bridge, contains("setHeaderIfMissing('Accept', 'application/json')"));
+    expect(bridge, contains('_encodeFormBody'));
+    expect(bridge, contains('_normalizeFormDataMap'));
     expect(bridge, contains('maximumRedirects: 10'));
     expect(bridge, contains('_supportsAction'));
     expect(bridge, contains('_validateCapabilities'));
@@ -81,7 +87,8 @@ void main() {
     );
   });
 
-  test('secureRandomBytes returns independent bytes with the requested shape', () {
+  test('secureRandomBytes returns independent bytes with the requested shape',
+      () {
     final first = secureRandomBytes(32);
     final second = secureRandomBytes(32);
 
@@ -105,5 +112,21 @@ void main() {
     expect(randomBytesBlock, contains('new Uint8Array(size)'));
     expect(randomBytesBlock, contains('Math.random'));
     expect(randomBytesBlock, isNot(contains("sendMessage('lx_crypto'")));
+  });
+
+  test('source runtime polyfill keeps official-style web primitives', () {
+    final polyfill = SourceRuntimePolyfill.js();
+
+    expect(polyfill, contains("action === 'md5_compute'"));
+    expect(polyfill, contains('new TextEncoder().encode(input)'));
+    expect(polyfill, contains('input instanceof ArrayBuffer'));
+    expect(polyfill, contains('new TextDecoder().decode'));
+    expect(polyfill, contains('options.headers._map'));
+    expect(polyfill, contains('body instanceof URLSearchParams'));
+    expect(polyfill, contains('URLSearchParams.prototype.entries'));
+    expect(polyfill, contains('FormData.prototype.entries'));
+    expect(polyfill, contains('body._data instanceof Array'));
+    expect(polyfill, contains('formData._data instanceof Array'));
+    expect(polyfill, contains('isBuffer:function'));
   });
 }

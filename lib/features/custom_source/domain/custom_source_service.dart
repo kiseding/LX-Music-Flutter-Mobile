@@ -160,7 +160,8 @@ class CustomSourceService {
   Future<bool> toggleSource(String id) async {
     final int index = _sources.indexWhere((source) => source.id == id);
     final CustomSource? target = index >= 0 ? _sources[index] : null;
-    final bool willEnable = target != null && !target.isEnabled;
+    if (target == null) return true;
+    final bool willEnable = !target.isEnabled;
     await _mutate<void>((current) {
       final curIndex = current.indexWhere((source) => source.id == id);
       if (curIndex >= 0) {
@@ -179,7 +180,7 @@ class CustomSourceService {
     });
     // 启用时立即初始化引擎（真实加载脚本并注册 handler），
     // 而不是等到第一次请求才懒加载。
-    if (willEnable && target != null) {
+    if (willEnable) {
       final engine = _getEngine(id);
       try {
         return await engine.loadSource(target);
