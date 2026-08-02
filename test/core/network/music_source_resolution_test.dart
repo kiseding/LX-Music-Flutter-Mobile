@@ -21,6 +21,31 @@ void main() {
         platform: 'tx',
       );
 
+  test('unknown platform is not remapped to another platform', () {
+    final service = MusicSourceService(CustomSourceService());
+
+    expect(
+      service.resolvePlatform(MusicItem(
+        id: 'unknown',
+        name: 'Song',
+        singer: 'Singer',
+        platform: 'custom',
+        source: 'custom',
+      )),
+      isEmpty,
+    );
+    expect(
+      service.resolvePlatform(MusicItem(
+        id: 'kg',
+        name: 'Song',
+        singer: 'Singer',
+        platform: 'kg',
+        source: 'kg',
+      )),
+      'kg',
+    );
+  });
+
   test('each quality is attempted once and actual downgrade is reported',
       () async {
     final calls = <String>[];

@@ -186,28 +186,26 @@ class MusicSourceService {
 
   String resolvePlatform(MusicItem music) {
     var platform = music.platform;
-    if (platform.isEmpty ||
-        platform == 'custom' ||
-        platform == 'test' ||
-        platform.startsWith('default_') ||
-        (platform != 'kw' &&
-            platform != 'tx' &&
-            platform != 'wy' &&
-            platform != 'kg' &&
-            platform != 'mg')) {
+    if (!_isScriptPlatform(platform)) {
       final metaSrc = music.meta?['source']?.toString();
-      if (metaSrc == 'kw' || metaSrc == 'tx' || metaSrc == 'wy') {
+      if (_isScriptPlatform(metaSrc)) {
         platform = metaSrc!;
-      } else if (music.source == 'kw' ||
-          music.source == 'tx' ||
-          music.source == 'wy') {
+      } else if (_isScriptPlatform(music.source)) {
         platform = music.source;
       } else {
-        platform = 'tx';
+        platform = '';
       }
     }
     return platform;
   }
+
+  bool _isScriptPlatform(String? platform) =>
+      platform == 'kw' ||
+      platform == 'tx' ||
+      platform == 'wy' ||
+      platform == 'kg' ||
+      platform == 'mg' ||
+      platform == 'local';
 
   Future<String?> getPlayUrl(MusicItem music, {String quality = '320k'}) async {
     final result = await resolvePlayableUrl(
@@ -284,17 +282,7 @@ class MusicSourceService {
           '[getPlayUrl] 使用偏低但可播结果 actual=${bestBelow.result.actualQuality}');
       return bestBelow.result;
     }
-    final fallback = await _resolveCrossPlatformFallback(
-      music,
-      resolvedQuality,
-      cancelToken,
-    );
-    if (fallback != null) {
-      debugPrint(
-          '[getPlayUrl] 跨平台兜底成功: platform=${fallback.platform}, songId=${fallback.songId}');
-      return fallback;
-    }
-    debugPrint('[getPlayUrl] 所有源均失败');
+    debugPrint('[getPlayUrl] 当前平台解析失败，未进行跨平台兜底');
     return null;
   }
 
@@ -358,7 +346,11 @@ class MusicSourceService {
         _throwIfCancelled(cancelToken);
         final rawUrl = detailed?.url;
         final url = rawUrl == null ? null : normalizeOutboundUrl(rawUrl);
-        if (!isPlayableMediaUrl(url)) continue;
+        if (!isPlayableMediaUrl(url)) {
+          debugPrint(
+              '[getPlayUrl] 自定义源 $sourceId q=$quality 返回不可播放URL: ${rawUrl ?? 'null'}');
+          continue;
+        }
         final result = PlayUrlResult(
           url: url!,
           requestedQuality: quality,
@@ -435,69 +427,6 @@ class MusicSourceService {
     if (music.songmid?.isNotEmpty == true) return music.songmid!;
     if (music.hash?.isNotEmpty == true) return music.hash!;
     return music.id;
-  }
-
-  /// 兜底：按 tx → kw → wy 顺序搜索歌名+歌手完全匹配的歌曲并尝试播放。
-  Future<PlayUrlResult?> _resolveCrossPlatformFallback(
-    MusicItem music,
-    String preferredQuality,
-    CancelToken? cancelToken,
-  ) async {
-    const fallbackOrder = ['tx', 'kw', 'wy'];
-    final originalPlatform = resolvePlatform(music);
-    final targetName = music.name.trim().toLowerCase();
-    final targetSinger = music.singer.trim().toLowerCase();
-    if (targetName.isEmpty || targetSinger.isEmpty) return null;
-
-    for (final platformId in fallbackOrder) {
-      if (platformId == originalPlatform) continue;
-      _throwIfCancelled(cancelToken);
-      try {
-        final results = await _builtInSources
-            .search(platformId, music.name, page: 1, limit: 20)
-            .timeout(const Duration(seconds: 12));
-        _throwIfCancelled(cancelToken);
-        MusicItem? matched;
-        for (final candidate in results) {
-          if (candidate.name.trim().toLowerCase() == targetName &&
-              candidate.singer.trim().toLowerCase() == targetSinger) {
-            matched = candidate;
-            break;
-          }
-        }
-        if (matched == null) continue;
-
-        final fallbackMusic = music.copyWith(
-          id: matched.id,
-          source: platformId,
-          platform: platformId,
-          songmid: matched.songmid,
-          hash: matched.hash,
-          meta: matched.meta,
-        );
-        for (final quality in qualityChain(preferredQuality)) {
-          _throwIfCancelled(cancelToken);
-          final detailed = await _builtInSources
-              .getMusicUrlExactDetailed(platformId, fallbackMusic,
-                  quality: quality)
-              .timeout(const Duration(seconds: 8));
-          _throwIfCancelled(cancelToken);
-          final url = detailed == null ? null : normalizeOutboundUrl(detailed.url);
-          if (!isPlayableMediaUrl(url)) continue;
-          return PlayUrlResult(
-            url: url!,
-            requestedQuality: preferredQuality,
-            actualQuality: detailed!.actualQuality,
-            platform: platformId,
-            songId: songIdOf(matched),
-          );
-        }
-      } catch (error) {
-        if (error is DioException && CancelToken.isCancel(error)) rethrow;
-        debugPrint('[getPlayUrl] 平台 $platformId 兜底失败: $error');
-      }
-    }
-    return null;
   }
 
   void _throwIfCancelled(CancelToken? cancelToken) {
