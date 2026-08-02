@@ -59,13 +59,14 @@ void main() {
 
     expect(bridge, contains('_cookieJar.clear()'));
     expect(bridge, contains("_applyStoredCookies(uri, headers)"));
-    expect(bridge, contains('_storeCookiesFromResponse(url, response.headers)'));
+    expect(
+        bridge, contains('_storeCookiesFromResponse(url, response.headers)'));
     expect(bridge, contains('base.queryParametersAll'));
     expect(bridge, contains("'rawData': rawB64"));
     expect(
       bridge,
       contains(
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/69.0.3497.100 Safari/537.36',
       ),
     );
   });

@@ -747,14 +747,11 @@ class CustomSourceEngine {
                 if (err) console.error('[JS Debug] Request Error: ' + url + ' -> ' + (err.message || err));
                 else if (res) console.log('[JS Debug] Request Success: ' + url + ' [' + res.statusCode + ']');
 
-                // 与 LX Desktop / Node 约定一致：每次请求只回调一次。
-                // length===1 → body
-                // length===2 → (err, response)  —— 脚本写 (err, resp)=>{ if(err) reject; const {body}=resp }
-                // length===3 → (err, response, body)
+                // 对齐官方移动端 UserApi preload：无论 callback 的声明形状如何，
+                // 始终调用 (err, response, body)。混淆器常会改变 Function.length，
+                // 基于 arity 重排参数会让源将 body 当成 error 或 response。
                 try {
-                  if (cb.length === 1) cb(body !== undefined ? body : (res ? res.body : null));
-                  else if (cb.length === 2) cb(err, res);
-                  else cb(err, res, body);
+                  cb(err, res, body);
                 }
                 finally { globalThis._pendingRequests--; }
               };
@@ -1140,6 +1137,66 @@ class CustomSourceEngine {
           }
           globalThis._frozenMessages.push({ channel: channel, message: message });
         };
+      ''');
+      // 对齐官方 UserApi preload：在执行用户脚本前递归冻结 lx，并按属性
+      // 描述符呈现宿主函数。globalThis 仍需保留消息桥所需的可写属性。
+      _runtime!.evaluate(r'''
+        (function() {
+          var freezeObject = function(obj, seen) {
+            if (!obj || typeof obj !== 'object' || seen.indexOf(obj) !== -1) return;
+            seen.push(obj);
+            Object.freeze(obj);
+            Object.keys(obj).forEach(function(key) {
+              freezeObject(obj[key], seen);
+            });
+          };
+          freezeObject(globalThis.lx, []);
+
+          var nativeToString = Function.prototype.toString;
+          Function.prototype.toString = function() {
+            var descriptor = Object.getOwnPropertyDescriptor(this, 'name');
+            if (descriptor && !descriptor.configurable) {
+              return 'function ' + this.name + '() { [native code] }';
+            }
+            return nativeToString.call(this);
+          };
+          globalThis.eval = function() {
+            throw new Error('eval is not available');
+          };
+          var blockedFunction = new Proxy(Function.prototype.constructor, {
+            apply: function() { throw new Error('Dynamic code execution is not allowed.'); },
+            construct: function() { throw new Error('Dynamic code execution is not allowed.'); }
+          });
+          Object.defineProperty(Function.prototype, 'constructor', {
+            value: blockedFunction,
+            writable: false,
+            configurable: false,
+            enumerable: false
+          });
+          globalThis.Function = blockedFunction;
+
+          var lockProperties = function(obj, seen) {
+            if (obj == null || (typeof obj !== 'object' && typeof obj !== 'function')) return;
+            if (seen.indexOf(obj) !== -1) return;
+            seen.push(obj);
+            Object.getOwnPropertyNames(obj).forEach(function(name) {
+              var descriptor;
+              try { descriptor = Object.getOwnPropertyDescriptor(obj, name); } catch (_) { return; }
+              if (!descriptor) return;
+              var changed = false;
+              if (descriptor.writable || descriptor.configurable) {
+                if (descriptor.writable) descriptor.writable = false;
+                if (descriptor.configurable) descriptor.configurable = false;
+                changed = true;
+              }
+              if (changed) {
+                try { Object.defineProperty(obj, name, descriptor); } catch (_) {}
+              }
+              if ('value' in descriptor) lockProperties(descriptor.value, seen);
+            });
+          };
+          lockProperties(globalThis.lx, []);
+        })();
       ''');
 
       final evalStopwatch = Stopwatch()..start();
@@ -1796,7 +1853,7 @@ class CustomSourceEngine {
     bool hasUA = hasHeader('user-agent');
     if (!hasUA) {
       headers['User-Agent'] =
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+          'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/69.0.3497.100 Safari/537.36';
     }
 
     dynamic body = options['body'];

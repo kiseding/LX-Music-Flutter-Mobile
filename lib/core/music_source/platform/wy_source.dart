@@ -197,6 +197,8 @@ class WySource extends MusicPlatform {
         songmid: id,
         duration: Duration(milliseconds: dt),
         album: al?['name'] as String? ?? '',
+        // 保留 fee、privilege、h/m/l 等原始字段，避免自定义源丢失版权信息。
+        meta: Map<String, dynamic>.from(songData),
       ));
     }
     return list;
@@ -643,6 +645,7 @@ class WySource extends MusicPlatform {
         platform: 'wy',
         songmid: id,
         artwork: artwork,
+        meta: Map<String, dynamic>.from(item),
       ));
     }
     return list;

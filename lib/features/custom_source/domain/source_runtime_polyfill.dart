@@ -597,7 +597,7 @@ globalThis.__aesCore = (function() {
             return result;
         }
 
-        // http://ixti.net/development/javascript/2011/11/11/base64-encodedecode-of-utf8-in-browser-with-js.html
+        // Browser-compatible UTF-8 conversion.
         var Hex = '0123456789abcdef';
 
         function fromBytes(bytes) {

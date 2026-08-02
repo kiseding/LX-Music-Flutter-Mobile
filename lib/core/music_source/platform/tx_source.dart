@@ -89,6 +89,8 @@ class TxSource extends MusicPlatform {
         songmid: songmid,
         duration: Duration(seconds: interval),
         album: albumName,
+        // 自定义洛雪源会读取 strMediaMid、file、pay 等平台原始字段来签发 URL。
+        meta: Map<String, dynamic>.from(map),
       ));
     }
     return list;
@@ -343,7 +345,10 @@ class TxSource extends MusicPlatform {
 
   Future<int?> _getSongId(String songmid) async {
     final dio = createDioForService(
-      headers: {'User-Agent': 'Mozilla/5.0 (compatible; MSIE 9.0; Windows NT 6.1; WOW64; Trident/5.0)'},
+      headers: {
+        'User-Agent':
+            'Mozilla/5.0 (compatible; MSIE 9.0; Windows NT 6.1; WOW64; Trident/5.0)'
+      },
     );
     final resp = await dio.post(
       'https://u.y.qq.com/cgi-bin/musicu.fcg',
@@ -566,6 +571,7 @@ class TxSource extends MusicPlatform {
       hash: null,
       artwork: artwork,
       meta: {
+        ...item,
         if (mediaMid.isNotEmpty) 'strMediaMid': mediaMid,
         if (mediaMid.isNotEmpty) 'media_mid': mediaMid,
         if (file != null) 'file': file,

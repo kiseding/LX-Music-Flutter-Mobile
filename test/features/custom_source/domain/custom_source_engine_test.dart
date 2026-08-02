@@ -20,16 +20,16 @@ void main() {
         contains(
             "globalThis._requestHandlers = globalThis._requestHandlers || [];"));
     expect(bridge, contains('globalThis._requestHandlers.push(handler);'));
+    expect(bridge, contains('freezeObject(globalThis.lx, []);'));
+    expect(bridge, contains('lockProperties(globalThis.lx, []);'));
+    expect(bridge, contains("throw new Error('eval is not available');"));
+    expect(bridge, contains("Dynamic code execution is not allowed."));
 
-    // lx.request 按 callback.length 做 arity 嗅探。
-    // 2-arg 必须是 (err, response)：脚本写 request(url, opts, (err, resp) => { if (err) reject; const {body}=resp })
+    // 官方移动端始终回调 (err, response, body)，不能依赖混淆后不稳定的
+    // Function.length 来重排参数。
     expect(bridge, contains("if (typeof callback === 'function')"));
-    expect(bridge, contains('if (cb.length === 1)'));
-    expect(bridge, contains('else if (cb.length === 2)'));
-    expect(bridge, contains('cb(err, res);'));
-    expect(bridge,
-        contains('cb(body !== undefined ? body : (res ? res.body : null));'));
-    expect(bridge, contains('else cb(err, res, body);'));
+    expect(bridge, contains('cb(err, res, body);'));
+    expect(bridge, isNot(contains('cb.length ===')));
 
     expect(bridge, contains("eventName !== globalThis.lx.EVENT_NAMES.request"));
     expect(bridge, contains("eventName !== globalThis.lx.EVENT_NAMES.inited"));

@@ -143,6 +143,8 @@ class KwSource extends MusicPlatform {
       duration: Duration(seconds: duration),
       album:
           (item['ALBUM'] as String? ?? item['album'] as String? ?? '').trim(),
+      // 保留 MUSICRID、rid、formats 等字段，供自定义源按平台协议解析。
+      meta: Map<String, dynamic>.from(item),
     );
   }
 
