@@ -30,6 +30,12 @@ void main() {
     expect(bridge, contains("if (typeof callback === 'function')"));
     expect(bridge, contains('cb(err, res, body);'));
     expect(bridge, isNot(contains('cb.length ===')));
+    expect(
+      bridge,
+      contains('var input = unescape(encodeURIComponent(string));'),
+    );
+    expect(bridge, contains('globalThis._md5 = md5Utf8;'));
+    expect(bridge, contains('Math.abs(Math.sin(i + 1)) * 4294967296'));
 
     expect(bridge, contains("eventName !== globalThis.lx.EVENT_NAMES.request"));
     expect(bridge, contains("eventName !== globalThis.lx.EVENT_NAMES.inited"));
