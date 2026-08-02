@@ -20,6 +20,17 @@ void main() {
     expect(normalizeOutboundUrl('not a url'), 'not a url');
   });
 
+  test('preserves the scheme of signed media URLs', () {
+    expect(
+      normalizeMediaUrl(' http://media.example.com/a.mp3?token=1 '),
+      'http://media.example.com/a.mp3?token=1',
+    );
+    expect(
+      normalizeMediaUrl('https://media.example.com/a.mp3?token=1'),
+      'https://media.example.com/a.mp3?token=1',
+    );
+  });
+
   group('validateHttpsServiceUrl', () {
     test('normalizes whitespace and trailing slashes', () {
       expect(

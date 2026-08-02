@@ -191,6 +191,7 @@ class DownloadService {
       _processQueue();
     }
   }
+
   Future<void> get idle async {
     while (_activeTaskIds.isNotEmpty) {
       await Future<void>.delayed(Duration.zero);
@@ -299,7 +300,8 @@ class DownloadService {
       ..addAll(valid);
     _emitTasks();
 
-    if (tasksChanged || quarantine.length != _storage!.loadQuarantine().length) {
+    if (tasksChanged ||
+        quarantine.length != _storage!.loadQuarantine().length) {
       await _storage!.saveQuarantine(quarantine);
       await _saveToStorage();
     }
@@ -586,7 +588,7 @@ class DownloadService {
           cancelToken: cancelToken,
         ),
         download: (resolved) async {
-          final downloadUrl = normalizeOutboundUrl(resolved.url);
+          final downloadUrl = normalizeMediaUrl(resolved.url);
           _updateCurrent(
             attempt,
             url: resolved.url,
@@ -630,7 +632,7 @@ class DownloadService {
       );
 
       if (resolved != null) {
-        final downloadUrl = normalizeOutboundUrl(resolved.url);
+        final downloadUrl = normalizeMediaUrl(resolved.url);
         final after = _taskById(task.id);
         if (!_isCurrent(attempt) ||
             after == null ||

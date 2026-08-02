@@ -46,6 +46,28 @@ void main() {
     );
   });
 
+  test('custom source keeps an HTTP media URL unchanged', () async {
+    final service = MusicSourceService(
+      CustomSourceService(),
+      hasEnabledCustomSources: () => true,
+      customQualityResolver: (music, quality, cancelToken) async {
+        return PlayUrlResult(
+          url: 'http://media.example.test/song.mp3?token=signature',
+          requestedQuality: quality,
+          actualQuality: quality,
+          platform: 'tx',
+        );
+      },
+    );
+
+    final result = await service.resolvePlayableUrl(
+      item,
+      preferredQuality: '320k',
+    );
+
+    expect(result?.url, 'http://media.example.test/song.mp3?token=signature');
+  });
+
   test('each quality is attempted once and actual downgrade is reported',
       () async {
     final calls = <String>[];

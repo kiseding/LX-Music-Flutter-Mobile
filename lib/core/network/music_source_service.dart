@@ -345,7 +345,7 @@ class MusicSourceService {
             .timeout(const Duration(seconds: 20));
         _throwIfCancelled(cancelToken);
         final rawUrl = detailed?.url;
-        final url = rawUrl == null ? null : normalizeOutboundUrl(rawUrl);
+        final url = rawUrl == null ? null : normalizeMediaUrl(rawUrl);
         if (!isPlayableMediaUrl(url)) {
           debugPrint(
               '[getPlayUrl] 自定义源 $sourceId q=$quality 返回不可播放URL: ${rawUrl ?? 'null'}');
@@ -404,7 +404,7 @@ class MusicSourceService {
           .getMusicUrlExactDetailed(platform, music, quality: quality)
           .timeout(const Duration(seconds: 8));
       _throwIfCancelled(cancelToken);
-      final url = detailed == null ? null : normalizeOutboundUrl(detailed.url);
+      final url = detailed == null ? null : normalizeMediaUrl(detailed.url);
       if (!isPlayableMediaUrl(url)) return null;
       return _QualityAttempt(
         result: PlayUrlResult(

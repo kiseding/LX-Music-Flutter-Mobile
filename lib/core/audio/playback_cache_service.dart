@@ -1013,7 +1013,7 @@ class PlaybackCacheService {
       if (safePartPath == null || !_isCurrentOperation(operation)) {
         return null;
       }
-      final downloadUrl = normalizeOutboundUrl(remoteUrl);
+      final downloadUrl = normalizeMediaUrl(remoteUrl);
       debugPrint(
           '[PlaybackCache] download key=$key host=${Uri.tryParse(downloadUrl)?.host} path=${Uri.tryParse(downloadUrl)?.path}');
       if (_downloader != null) {

@@ -7,6 +7,13 @@ String normalizeOutboundUrl(String value) {
   return value;
 }
 
+/// Leaves audio media URLs on their original scheme.
+///
+/// Source scripts may issue signed HTTP-only CDN URLs. iOS permits those URLs
+/// for media through `NSAllowsArbitraryLoadsForMedia`; upgrading them to HTTPS
+/// changes the origin and commonly invalidates the request.
+String normalizeMediaUrl(String value) => value.trim();
+
 /// Validates a user-configured remote service endpoint under strict ATS.
 String validateHttpsServiceUrl(String value) {
   final trimmed = value.trim();

@@ -1709,16 +1709,16 @@ class CustomSourceEngine {
     }
   }
 
-  /// 脚本里的 source 是平台 id（kw/tx/wy），不是自定义源的脚本 id
+  /// 脚本里的 source 是平台 id，不是自定义源的脚本 id。
   String _resolveScriptSource(MusicItem music) {
-    const platforms = {'kw', 'tx', 'wy', 'kg', 'mg'};
+    const platforms = {'kw', 'tx', 'wy', 'kg', 'mg', 'local'};
     final p = music.platform.toLowerCase();
     if (platforms.contains(p)) return p;
     final meta = music.meta?['source']?.toString().toLowerCase();
     if (meta != null && platforms.contains(meta)) return meta;
     final s = music.source.toLowerCase();
     if (platforms.contains(s)) return s;
-    return 'tx';
+    return '';
   }
 
   Future<String?> getLyric(MusicItem music) async {

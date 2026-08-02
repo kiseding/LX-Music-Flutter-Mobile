@@ -84,8 +84,7 @@ void main() {
     expect(downloadCount, 1);
   });
 
-  test('normalizes arbitrary dynamic HTTP media URLs before download',
-      () async {
+  test('preserves arbitrary dynamic HTTP media URLs before download', () async {
     await cache.getOrDownload(
       remoteUrl: 'http://media.example.com/a.mp3?token=1',
       platform: 'custom',
@@ -93,7 +92,7 @@ void main() {
       quality: '128k',
     );
 
-    expect(downloadedUrl, 'https://media.example.com/a.mp3?token=1');
+    expect(downloadedUrl, 'http://media.example.com/a.mp3?token=1');
   });
 
   test('expired entries are deleted and re-downloaded', () async {

@@ -58,6 +58,9 @@ void main() {
         bridge, contains("setHeaderIfMissing('Accept', 'application/json')"));
     expect(bridge, contains('_encodeFormBody'));
     expect(bridge, contains('_normalizeFormDataMap'));
+    expect(bridge,
+        contains("const platforms = {'kw', 'tx', 'wy', 'kg', 'mg', 'local'}"));
+    expect(bridge, contains("return '';"));
     expect(bridge, contains('maximumRedirects: 10'));
     expect(bridge, contains('_supportsAction'));
     expect(bridge, contains('_validateCapabilities'));
