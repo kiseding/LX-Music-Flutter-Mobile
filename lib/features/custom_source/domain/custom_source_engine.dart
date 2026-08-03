@@ -1576,8 +1576,13 @@ class CustomSourceEngine {
 
   MusicItem _parseMusicItem(Map<String, dynamic> item,
       {String platform = 'kw'}) {
+    final rawSongmid = item['songmid']?.toString().trim() ?? '';
+    final rawId = item['id']?.toString().trim() ?? '';
+    final id = rawSongmid.isNotEmpty
+        ? rawSongmid
+        : (rawId.isNotEmpty ? rawId : _uuid.v4());
     return MusicItem(
-      id: item['songmid']?.toString() ?? item['id']?.toString() ?? _uuid.v4(),
+      id: id,
       name: item['name']?.toString() ?? '未知歌名',
       singer: item['singer']?.toString() ?? '未知歌手',
       album: item['album']?.toString() ?? '',
@@ -1585,7 +1590,7 @@ class CustomSourceEngine {
       source: _currentSource?.id ?? 'custom',
       platform: item['source']?.toString() ?? platform,
       artwork: item['img']?.toString() ?? '',
-      songmid: item['songmid']?.toString(),
+      songmid: rawSongmid.isNotEmpty ? rawSongmid : id,
       hash: item['hash']?.toString(),
       meta: item, // 保存完整的原始数据，供后续 getMusicUrl 使用
     );
@@ -1600,7 +1605,8 @@ class CustomSourceEngine {
       {String type = '320k'}) {
     final meta =
         Map<String, dynamic>.from(music.meta ?? const <String, dynamic>{});
-    final String songmid = music.songmid ?? music.id;
+    final String songmid =
+        music.songmid?.isNotEmpty == true ? music.songmid! : music.id;
     final String hash =
         (music.hash == null || music.hash!.isEmpty) ? songmid : music.hash!;
     final String interval = music.duration.inSeconds > 0

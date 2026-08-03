@@ -702,12 +702,19 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   }
 
   LxAudioHandler({AudioPlayer? player})
-      : _player = player ?? AudioPlayer(useProxyForRequestHeaders: false) {
+      : _player = player ??
+            AudioPlayer(
+              handleInterruptions: false,
+              useProxyForRequestHeaders: false,
+            ) {
     _commands = PlaybackCommandCoordinator(
       _player,
       onStateChanged: _publishPlaybackState,
-      onError: (operation, error, _) {
+      onError: (operation, error, stackTrace) {
         debugPrint('[AudioHandler] $operation failed: $error');
+        if (operation == 'play') {
+          _handleAuthoritativePlaybackError(error, stackTrace);
+        }
       },
     );
     _publishPlaybackState();
@@ -877,6 +884,41 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         );
       } catch (e) {
         debugPrint('[AudioHandler] auto-next failed: $e');
+      }
+    });
+  }
+
+  void _handleAuthoritativePlaybackError(
+    Object error,
+    StackTrace stackTrace,
+  ) {
+    if (_disposed) return;
+    final generation = _playGeneration;
+    final occurrenceId = _activeOccurrenceId;
+    final itemId = _activeItemId;
+    _installedPlaybackGeneration = -1;
+    _installedMediaId = null;
+    _publishPlaybackState(
+      override: AudioProcessingState.idle,
+      playingOverride: false,
+    );
+    onError?.call('播放歌曲失败，正在重新加载');
+    Future(() async {
+      if (_disposed ||
+          generation != _playGeneration ||
+          occurrenceId == null ||
+          occurrenceId != _activeOccurrenceId ||
+          itemId == null ||
+          itemId != _activeItemId ||
+          !_userWantsPlay) {
+        return;
+      }
+      try {
+        await _recoverAuthoritativeSource(
+          provenance: _captureStartProvenance(),
+        );
+      } catch (recoveryError) {
+        debugPrint('[AudioHandler] playback recovery failed: $recoveryError');
       }
     });
   }
@@ -2000,14 +2042,6 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
           await _discardStagedLease(occurrenceId, stagedLease);
           return;
         }
-        final refreshed = _queue[transactionIndex].extras?['url']?.toString();
-        if ((url == null || url.isEmpty) &&
-            refreshed != null &&
-            refreshed.isNotEmpty &&
-            !refreshed.startsWith('data:')) {
-          url = refreshed;
-        }
-
         if (url != null &&
             url.isNotEmpty &&
             stagedLease == null &&

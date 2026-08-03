@@ -634,6 +634,13 @@ class WySource extends MusicPlatform {
       }
 
       final dt = item['dt'] as int? ?? 0;
+      final meta = Map<String, dynamic>.from(item);
+      if (privileges != null && i < privileges.length) {
+        final privilege = privileges[i];
+        if (privilege is Map) {
+          meta['privilege'] = Map<String, dynamic>.from(privilege);
+        }
+      }
 
       list.add(MusicItem(
         id: id,
@@ -645,7 +652,7 @@ class WySource extends MusicPlatform {
         platform: 'wy',
         songmid: id,
         artwork: artwork,
-        meta: Map<String, dynamic>.from(item),
+        meta: meta,
       ));
     }
     return list;

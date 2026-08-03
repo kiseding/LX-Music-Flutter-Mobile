@@ -41,6 +41,7 @@ class PlaybackCommandCoordinator {
   final AudioPlayer _player;
   final VoidCallback? _onStateChanged;
   final PlaybackMutationError? _onError;
+  final Duration _sourceLoadTimeout;
 
   Future<void> _tail = Future<void>.value();
   int _pendingReconciliations = 0;
@@ -84,8 +85,10 @@ class PlaybackCommandCoordinator {
     this._player, {
     VoidCallback? onStateChanged,
     PlaybackMutationError? onError,
+    Duration sourceLoadTimeout = const Duration(seconds: 20),
   })  : _onStateChanged = onStateChanged,
-        _onError = onError;
+        _onError = onError,
+        _sourceLoadTimeout = sourceLoadTimeout;
 
   int get sourceToken => _sourceToken;
   int? get desiredSourceToken => _desiredSource?.token;
@@ -158,8 +161,15 @@ class PlaybackCommandCoordinator {
       await previous;
       if (_shutdown || _desiredSource?.token != token) return false;
       try {
-        await _player.setAudioSource(source, initialPosition: Duration.zero);
+        await _player
+            .setAudioSource(source, initialPosition: Duration.zero)
+            .timeout(_sourceLoadTimeout);
       } catch (error, stackTrace) {
+        if (error is TimeoutException) {
+          try {
+            await _player.stop();
+          } catch (_) {}
+        }
         _onError?.call('temporarySource', error, stackTrace);
         return false;
       }
@@ -470,22 +480,29 @@ class PlaybackCommandCoordinator {
           _failedSourceToken != desiredSource.token &&
           _installedSourceToken != desiredSource.token) {
         try {
-          await _player.setAudioSource(
-            desiredSource.source!,
-            initialPosition: desiredSource.position,
-          );
+          await _player
+              .setAudioSource(
+                desiredSource.source!,
+                initialPosition: desiredSource.position,
+              )
+              .timeout(_sourceLoadTimeout);
         } catch (error, stackTrace) {
-          // AVPlayer can report an item error after the native player has
-          // already adopted the replacement source. Treat that source as
-          // installed so a stale -11800 does not surface as a failed skip.
-          if (!identical(_player.audioSource, desiredSource.source)) {
-            _failedSourceToken = desiredSource.token;
-            _failedSourceCommit = SourceCommitFailed(error, stackTrace);
-            if (_desiredSource?.token == desiredSource.token) {
-              _onStateChanged?.call();
-            }
-            return;
+          // just_audio assigns audioSource before native loading completes, so
+          // object identity cannot prove that AVPlayer accepted the media.
+          _failedSourceToken = desiredSource.token;
+          _failedSourceCommit = SourceCommitFailed(error, stackTrace);
+          if (_installedSourceToken == desiredSource.token) {
+            _installedSourceToken = null;
           }
+          if (error is TimeoutException) {
+            try {
+              await _player.stop();
+            } catch (_) {}
+          }
+          if (_desiredSource?.token == desiredSource.token) {
+            _onStateChanged?.call();
+          }
+          return;
         }
         _installedSourceToken = desiredSource.token;
         _temporarySourceToken = null;
@@ -606,8 +623,16 @@ class PlaybackCommandCoordinator {
     }
     _playSourceTokens.remove(token);
     _activePlayCommandToken = null;
+    final failedSourceToken = _installedSourceToken ?? _temporarySourceToken;
     _failedPlayIntentRevision = _intentRevision;
-    _failedPlaySourceToken = _installedSourceToken ?? _temporarySourceToken;
+    _failedPlaySourceToken = failedSourceToken;
+    _failedSourceToken = failedSourceToken;
+    if (_installedSourceToken == failedSourceToken) {
+      _installedSourceToken = null;
+    }
+    if (_temporarySourceToken == failedSourceToken) {
+      _temporarySourceToken = null;
+    }
     _onError?.call('play', error, stackTrace);
     _onStateChanged?.call();
     _markDirty();

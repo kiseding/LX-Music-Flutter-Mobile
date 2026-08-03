@@ -438,7 +438,7 @@ void main() {
       'lib/core/audio/playback_command_coordinator.dart',
     ).readAsStringSync();
     final transaction = source.substring(
-      source.indexOf('await _player.setAudioSource('),
+      source.indexOf('.setAudioSource('),
       source.indexOf('_desiredSeek != null'),
     );
     final validation = transaction.indexOf('_installedSourceToken');

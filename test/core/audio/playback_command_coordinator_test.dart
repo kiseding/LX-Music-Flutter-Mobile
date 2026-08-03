@@ -581,6 +581,7 @@ void main() {
     await pumpEventQueue();
 
     expect(errors, ['play']);
+    expect(coordinator.installedSourceToken, isNull);
   });
 
   test('source commit reports installed and stale outcomes', () async {
@@ -631,7 +632,8 @@ void main() {
     expect((result as SourceCommitFailed).error, same(error));
   });
 
-  test('authoritative source commit accepts an installed source after a late error',
+  test(
+      'authoritative source commit rejects a native load error after assignment',
       () async {
     final player = _LifecycleAudioPlayer()
       ..sourceInstallError = StateError('late source error')
@@ -648,8 +650,40 @@ void main() {
       AudioSource.uri(Uri.parse('file:///tmp/A.mp3')),
     );
 
-    expect(result, isA<SourceCommitInstalled>());
-    expect(coordinator.installedSourceToken, request);
+    expect(result, isA<SourceCommitFailed>());
+    expect(coordinator.installedSourceToken, isNull);
+  });
+
+  test('source load timeout fails the commit and lets a newer source install',
+      () async {
+    final player = _LifecycleAudioPlayer();
+    final coordinator = PlaybackCommandCoordinator(
+      player,
+      sourceLoadTimeout: const Duration(milliseconds: 20),
+    );
+    addTearDown(player.dispose);
+    player.hangNextSourceInstall = true;
+    final first = coordinator.requestSource(
+      occurrenceId: 1,
+      position: Duration.zero,
+    );
+
+    final failed = await coordinator.commitSource(
+      first,
+      AudioSource.uri(Uri.parse('file:///tmp/A.mp3')),
+    );
+    final second = coordinator.requestSource(
+      occurrenceId: 2,
+      position: Duration.zero,
+    );
+    final installed = await coordinator.commitSource(
+      second,
+      AudioSource.uri(Uri.parse('file:///tmp/B.mp3')),
+    );
+
+    expect(failed, isA<SourceCommitFailed>());
+    expect(installed, isA<SourceCommitInstalled>());
+    expect(coordinator.installedSourceToken, second);
   });
 
   test('failed seek is consumed before a later interruption pause', () async {
@@ -801,6 +835,7 @@ class _LifecycleAudioPlayer extends AudioPlayer {
   bool failNextSeek = false;
   Object? sourceInstallError;
   bool sourceInstallErrorAfterSet = false;
+  bool hangNextSourceInstall = false;
   final calls = <String>[];
 
   @override
@@ -820,6 +855,10 @@ class _LifecycleAudioPlayer extends AudioPlayer {
     Duration? initialPosition,
   }) async {
     calls.add('source');
+    if (hangNextSourceInstall) {
+      hangNextSourceInstall = false;
+      await Completer<void>().future;
+    }
     final error = sourceInstallError;
     if (error != null && !sourceInstallErrorAfterSet) throw error;
     _audioSource = source;

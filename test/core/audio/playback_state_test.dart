@@ -184,6 +184,28 @@ void main() {
     expect(handler.playbackState.value.playing, player.playing);
   });
 
+  test('failed fresh resolution never resurrects an expired remote url',
+      () async {
+    final player = _PlaybackStateAudioPlayer();
+    final handler = LxAudioHandler(player: player);
+    addTearDown(player.dispose);
+    handler.urlResolver = (id, [extras]) async => null;
+
+    await handler.setPlaylist(const [
+      MediaItem(
+        id: 'A',
+        title: 'A',
+        extras: {
+          'url': 'https://cdn.example/A.mp3?token=expired',
+          'requestedQuality': '320k',
+        },
+      ),
+    ]);
+
+    expect(player.loadedSource, isNull);
+    expect(handler.playbackState.value.playing, isFalse);
+  });
+
   test('single-item resolver error restores actual engine state', () async {
     final player = _PlaybackStateAudioPlayer();
     final handler = LxAudioHandler(player: player);
@@ -608,7 +630,8 @@ void main() {
     expect(player.playing, isTrue);
   });
 
-  test('authoritative play failure reconciles forced playing state', () async {
+  test('authoritative play failure reloads the source with a new token',
+      () async {
     final player = _PlaybackStateAudioPlayer()
       ..sourceInstallProcessingState = ProcessingState.ready;
     final playFailure = player.gateNextPlayFailure();
@@ -623,13 +646,14 @@ void main() {
     playFailure.release.complete();
     await pumpEventQueue();
 
-    expect(player.playing, isFalse);
-    expect(handler.playbackState.value.playing, isFalse);
+    expect(player.sourceLoadCalls, 2);
+    expect(player.playing, isTrue);
+    expect(handler.playbackState.value.playing, isTrue);
     expect(
       handler.playbackState.value.processingState,
       AudioProcessingState.ready,
     );
-    expect(handler.playbackState.value.controls, contains(MediaControl.play));
+    expect(handler.playbackState.value.controls, contains(MediaControl.pause));
   });
 
   test('stale play failure cannot overwrite newer source state', () async {
