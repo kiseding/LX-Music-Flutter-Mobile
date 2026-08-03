@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../network/app_http_client.dart';
@@ -18,6 +19,17 @@ typedef PlaybackDownloader = Future<void> Function(
   CancelToken? cancelToken,
 });
 typedef PlaybackCacheKeyHook = Future<void> Function(String key);
+typedef BackgroundFileProtector = Future<void> Function(String path);
+
+const _fileProtectionChannel = MethodChannel('lx_music/file_protection');
+
+Future<void> ensureBackgroundReadable(String path) async {
+  if (!Platform.isIOS) return;
+  await _fileProtectionChannel.invokeMethod<void>(
+    'ensureBackgroundReadable',
+    {'path': path},
+  );
+}
 
 const mediaUserAgent = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) '
     'AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 '
@@ -451,6 +463,7 @@ class PlaybackCacheService {
   final DateTime Function() _clock;
   final PlaybackCacheKeyHook? _beforeLeaseValidation;
   final PlaybackCacheKeyHook? _beforeExistingLeaseValidation;
+  final BackgroundFileProtector _protectFile;
   final Duration ttl;
   final int maxBytes;
 
@@ -479,6 +492,7 @@ class PlaybackCacheService {
     DateTime Function()? clock,
     PlaybackCacheKeyHook? beforeLeaseValidation,
     @visibleForTesting PlaybackCacheKeyHook? beforeExistingLeaseValidation,
+    BackgroundFileProtector? protectFile,
     this.ttl = defaultTtl,
     this.maxBytes = defaultMaxBytes,
   })  : _dio = dio ?? _createDownloadDio(),
@@ -486,7 +500,8 @@ class PlaybackCacheService {
         _indexStore = indexStore ?? PrefsPlaybackCacheIndexStore(),
         _clock = clock ?? DateTime.now,
         _beforeLeaseValidation = beforeLeaseValidation,
-        _beforeExistingLeaseValidation = beforeExistingLeaseValidation;
+        _beforeExistingLeaseValidation = beforeExistingLeaseValidation,
+        _protectFile = protectFile ?? ensureBackgroundReadable;
 
   static Dio _createDownloadDio() {
     return AppHttpClient.create(
@@ -557,6 +572,7 @@ class PlaybackCacheService {
     final directory = Directory(requestedRoot);
     await directory.create(recursive: true);
     _root = _normalizeAbsolute(await directory.resolveSymbolicLinks());
+    await _protectFile(_root!);
     await _loadIndex();
     if (_loadIntegrity) await _cleanupUnindexedStableFiles();
     _initialized = true;
@@ -1081,7 +1097,13 @@ class PlaybackCacheService {
         header,
         fallback: urlExt == '.audio' ? _qualityExt(quality) : urlExt,
       );
-      if (detectedExt == '.audio') {
+      final isNativeFlac = header.length >= 4 &&
+          header[0] == 0x66 &&
+          header[1] == 0x4c &&
+          header[2] == 0x61 &&
+          header[3] == 0x43;
+      if (detectedExt == '.audio' ||
+          (detectedExt == '.flac' && !isNativeFlac)) {
         await _deleteSafe(safePart);
         return null;
       }
@@ -1192,6 +1214,7 @@ class PlaybackCacheService {
       }
       await File(safeStage).rename(stablePath);
       installed = true;
+      await _protectFile(stablePath);
       final stableType =
           await FileSystemEntity.type(stablePath, followLinks: false);
       if (stableType != FileSystemEntityType.file ||
@@ -1387,9 +1410,15 @@ class PlaybackCacheService {
           FileSystemEntityType.file) {
         return null;
       }
-      final length = await File(lexical).length();
+      await _protectFile(lexical);
+      final file = File(lexical);
+      final length = await file.length();
+      if (length < 16) return null;
+      await file.openRead(0, 16).drain<void>();
       return entry.copyWith(path: lexical, sizeBytes: length);
     } on FileSystemException {
+      return null;
+    } on PlatformException {
       return null;
     }
   }

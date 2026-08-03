@@ -26,7 +26,7 @@ void main() {
         downloadedUrl = url;
         final file = File(savePath);
         await file.parent.create(recursive: true);
-        final bytes = url.contains('no-extension')
+        final bytes = url.contains('no-extension') || url.endsWith('.flac')
             ? <int>[0x66, 0x4c, 0x61, 0x43, ...List<int>.filled(28, 0)]
             : List<int>.filled(32, downloadCount);
         await file.writeAsBytes(bytes);
@@ -93,6 +93,37 @@ void main() {
     );
 
     expect(downloadedUrl, 'http://media.example.com/a.mp3?token=1');
+  });
+
+  test('protects cache directory and stable media before leasing', () async {
+    final protected = <String>[];
+    await cache.dispose();
+    cache = PlaybackCacheService(
+      cacheRootOverride: tempDir.path,
+      indexStore: MemoryPlaybackCacheIndexStore(),
+      protectFile: (path) async => protected.add(path),
+      downloader: (url, savePath, {cancelToken}) async {
+        await File(savePath).writeAsBytes([
+          0x66,
+          0x4c,
+          0x61,
+          0x43,
+          ...List<int>.filled(28, 0),
+        ]);
+      },
+    );
+
+    final lease = await cache.acquireOrDownload(
+      remoteUrl: 'https://cdn.example/song.flac',
+      platform: 'tx',
+      songId: 'protected',
+      quality: 'flac',
+    );
+
+    expect(lease, isNotNull);
+    expect(protected.first, tempDir.path);
+    expect(protected.any((path) => path.endsWith('.flac')), isTrue);
+    await lease!.release();
   });
 
   test('media request headers are shared across cache and streaming', () {
@@ -177,7 +208,7 @@ void main() {
     expect(path, endsWith('.flac'));
   });
 
-  test('flac quality supplies extension when the header is non-standard',
+  test('flac quality rejects content without a native FLAC signature',
       () async {
     final path = await cache.getOrDownload(
       remoteUrl: 'https://cdn.example.com/opaque-stream',
@@ -185,7 +216,7 @@ void main() {
       songId: 'opaque-flac',
       quality: 'flac',
     );
-    expect(path, endsWith('.flac'));
+    expect(path, isNull);
   });
 
   test('cachedPlayableUri never falls back to a remote URL', () {
