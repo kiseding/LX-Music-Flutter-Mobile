@@ -205,17 +205,20 @@ void main() {
       expect(result!.playableUrl, 'https://cdn.example/320k.mp3');
     });
 
-    test('invalid remote URL fails without streaming', () async {
+    test('root media endpoint reaches response validation', () async {
+      var acquireCalls = 0;
       final resolver = PlaybackUrlResolver<MusicItem>(
         resolvePlayableUrl: (music, {required preferredQuality}) async =>
-            _playResult(url: 'https://wx.music.tc.qq.com/'),
+            _playResult(url: 'https://media.example/?token=signed'),
         acquireOrDownload: ({
           required remoteUrl,
           required platform,
           required songId,
           required quality,
-        }) async =>
-            fail('cache must not run for invalid remote'),
+        }) async {
+          acquireCalls++;
+          return null;
+        },
         songIdFor: (music) => music.songmid ?? music.id,
       );
 
@@ -224,7 +227,9 @@ void main() {
         preferredQuality: '320k',
       );
 
-      expect(result, isNull);
+      expect(acquireCalls, 1);
+      expect(result, isA<StreamingPlayback>());
+      expect(result!.playableUrl, 'https://media.example/?token=signed');
     });
 
     test('null quality resolution fails without streaming', () async {

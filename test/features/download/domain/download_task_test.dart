@@ -141,10 +141,10 @@ void main() {
     );
   });
 
-  test('isPlayableMediaUrl rejects QQ root fake success', () {
-    expect(isPlayableMediaUrl('http://wx.music.tc.qq.com/'), isFalse);
+  test('isPlayableMediaUrl leaves media content validation to downloader', () {
+    expect(isPlayableMediaUrl('https://media.example.com/?token=signed'), isTrue);
     expect(
-      isPlayableMediaUrl('https://wx.music.tc.qq.com/abc/file.mp3'),
+      isPlayableMediaUrl('https://media.example.com/abc/file.mp3'),
       isTrue,
     );
   });

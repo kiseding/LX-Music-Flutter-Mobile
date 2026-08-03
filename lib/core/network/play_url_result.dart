@@ -56,8 +56,10 @@ String platformLabel(String p) {
   }
 }
 
-/// 判断源返回的播放地址是否可下载/播放。
-/// 聆澜等源会在部分歌曲上返回 `http://wx.music.tc.qq.com/` 这种假成功根路径。
+/// 判断源返回的播放地址是否能作为远程媒体请求。
+///
+/// 不能根据 path 形状预判内容：部分签名媒体端点在根路径或 query 中标识
+/// 资源。响应状态、长度和文件头由实际下载阶段继续验证。
 bool isPlayableMediaUrl(String? url) {
   if (url == null) return false;
   final s = url.trim();
@@ -66,11 +68,7 @@ bool isPlayableMediaUrl(String? url) {
   if (uri == null) return false;
   if (uri.scheme != 'http' && uri.scheme != 'https') return false;
   if (uri.host.isEmpty) return false;
-  final path = uri.path;
-  if (path.isEmpty || path == '/') return false;
-  // 至少要有一段非空 path segment（文件名或资源路径）
-  final segments = uri.pathSegments.where((p) => p.isNotEmpty).toList();
-  return segments.isNotEmpty;
+  return true;
 }
 
 /// 规范化脚本返回的音质字段。
