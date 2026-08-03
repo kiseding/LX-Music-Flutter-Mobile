@@ -69,10 +69,21 @@ export function requireJsonContentType(request: Request): Response | null {
 }
 
 /** Parse a JSON request body into a non-null object, returning a 400 on invalid input. */
+const MAX_JSON_BODY_BYTES = 256 * 1024;
+
 export async function readJsonBody(request: Request): Promise<{ body: Record<string, unknown> } | Response> {
+  const contentLength = Number(request.headers.get('Content-Length'));
+  if (Number.isFinite(contentLength) && contentLength > MAX_JSON_BODY_BYTES) {
+    return jsonResponse({ error: '请求体过大' }, 413);
+  }
+
   let parsed: unknown;
   try {
-    parsed = await request.json();
+    const bytes = await request.arrayBuffer();
+    if (bytes.byteLength > MAX_JSON_BODY_BYTES) {
+      return jsonResponse({ error: '请求体过大' }, 413);
+    }
+    parsed = JSON.parse(new TextDecoder().decode(bytes));
   } catch {
     return jsonResponse({ error: '无效请求' }, 400);
   }

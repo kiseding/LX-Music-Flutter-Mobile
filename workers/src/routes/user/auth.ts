@@ -318,7 +318,7 @@ export async function handleAdminUsers(request: Request, env: Env): Promise<Resp
     const parsed = await readJsonBody(request);
     if (parsed instanceof Response) return parsed;
     const body = parsed.body as { username?: unknown; password?: unknown };
-    const username = String(body.username || '');
+    const username = normalizeUsername(String(body.username || ''));
     const password = String(body.password || '');
     if (!username || !password) return jsonResponse({ error: '缺少参数' }, 400);
     if (username.length < 2 || username.length > 32) return jsonResponse({ error: '用户名长度需2-32字符' }, 400);

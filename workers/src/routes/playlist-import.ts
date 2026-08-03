@@ -106,7 +106,8 @@ export async function handlePlaylistImport(request: Request, env: Env, ctx: Exec
   const limiter = new RateLimiter(env.RATE_LIMITER);
   try {
     const rateCheck = await limiter.check(ip, [
-      { key: `import:${userId}`, max: IMPORT_IP_MAX, windowSeconds: IMPORT_WINDOW_SECONDS },
+      { key: 'ip', max: IMPORT_IP_MAX, windowSeconds: IMPORT_WINDOW_SECONDS },
+      { key: `account:${userId}`, max: IMPORT_IP_MAX, windowSeconds: IMPORT_WINDOW_SECONDS },
     ]);
     if (!rateCheck.allowed) {
       return jsonResponse({ error: '导入过于频繁，请稍后再试', retryAfter: Math.ceil((rateCheck.resetAt - Date.now()) / 1000) }, 429);

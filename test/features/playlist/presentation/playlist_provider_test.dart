@@ -15,7 +15,6 @@ const playlistConsumerPaths = [
   'lib/features/player/presentation/player_provider.dart',
   'lib/features/player/presentation/player_screen.dart',
   'lib/features/search/presentation/search_screen.dart',
-  'lib/features/sync/presentation/sync_provider.dart',
   'lib/features/sync/presentation/sync_screen.dart',
   'lib/features/settings/presentation/settings_screen.dart',
 ];

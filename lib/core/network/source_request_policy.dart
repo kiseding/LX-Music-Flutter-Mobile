@@ -164,6 +164,26 @@ class SourceRequestCancellation {
 }
 
 class SourceRequestPolicy {
+  static const _ipv4DeniedPrefixes = <(List<int>, int)>[
+    ([0, 0, 0, 0], 8),
+    ([10, 0, 0, 0], 8),
+    ([100, 64, 0, 0], 10),
+    ([127, 0, 0, 0], 8),
+    ([169, 254, 0, 0], 16),
+    ([172, 16, 0, 0], 12),
+    ([192, 0, 0, 0], 24),
+    ([192, 0, 2, 0], 24),
+    ([192, 31, 196, 0], 24),
+    ([192, 52, 193, 0], 24),
+    ([192, 88, 99, 0], 24),
+    ([192, 168, 0, 0], 16),
+    ([192, 175, 48, 0], 24),
+    ([198, 18, 0, 0], 15),
+    ([198, 51, 100, 0], 24),
+    ([203, 0, 113, 0], 24),
+    ([224, 0, 0, 0], 4),
+    ([240, 0, 0, 0], 4),
+  ];
   static const _ipv6DeniedPrefixes = <(List<int>, int)>[
     ([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 96),
     ([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff], 96),
@@ -281,9 +301,9 @@ class SourceRequestPolicy {
 
   static bool _isPublic(InternetAddress address) {
     final bytes = address.rawAddress;
-    // IPv4 不做私网拦截（按需求放开）
     if (address.type == InternetAddressType.IPv4) {
-      return true;
+      return !_ipv4DeniedPrefixes
+          .any((prefix) => _matchesPrefix(bytes, prefix.$1, prefix.$2));
     }
     final globallyRoutable = (bytes[0] & 0xe0) == 0x20;
     return globallyRoutable &&
@@ -395,7 +415,11 @@ class SourceRequestSandbox {
                   'too_many_redirects', 'Redirect limit exceeded');
             }
             next = current.resolve(location);
-            currentOptions = _redirectOptions(request, redirectStatus);
+            currentOptions = _redirectOptions(
+              request,
+              redirectStatus,
+              crossOrigin: !_sameOrigin(current, next),
+            );
           } finally {
             response.close();
           }
@@ -442,8 +466,9 @@ class SourceRequestSandbox {
 
   Map<String, dynamic> _redirectOptions(
     ValidatedSourceRequest request,
-    int status,
-  ) {
+    int status, {
+    required bool crossOrigin,
+  }) {
     var method = request.method;
     var body = request.body;
     final dropsBody = status == 303 ||
@@ -460,7 +485,9 @@ class SourceRequestSandbox {
     for (final entry in request.headers.entries) {
       final lower = entry.key.toLowerCase();
       if (lower.startsWith('content-')) continue;
-      // 按需求放开重定向：跨域重定向也保留原请求头。
+      if (crossOrigin && (lower == 'authorization' || lower == 'cookie')) {
+        continue;
+      }
       headers[entry.key] = entry.value;
     }
     if (body != null) {
@@ -474,6 +501,11 @@ class SourceRequestSandbox {
       'timeout': request.timeout.inMilliseconds,
     };
   }
+
+  bool _sameOrigin(Uri left, Uri right) =>
+      left.scheme.toLowerCase() == right.scheme.toLowerCase() &&
+      left.host.toLowerCase() == right.host.toLowerCase() &&
+      left.port == right.port;
 
   String? _headerValue(Map<String, String> headers, String name) {
     for (final entry in headers.entries) {

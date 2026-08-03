@@ -172,6 +172,7 @@ class PlayHistoryStore extends ChangeNotifier {
     final artist = _currentArtist;
     final album = _currentAlbum;
     final source = _currentSource;
+    final listenedSec = _maxElapsedSec;
     _currentSongId = null;
     _startedAt = null;
     _maxElapsedSec = 0;
@@ -179,7 +180,7 @@ class PlayHistoryStore extends ChangeNotifier {
     _currentArtist = null;
     _currentAlbum = null;
     _currentSource = null;
-    if (_maxElapsedSec < thresholdSec) return;
+    if (listenedSec < thresholdSec) return;
     record(
       songId: songId,
       songTitle: title ?? '',
@@ -187,7 +188,7 @@ class PlayHistoryStore extends ChangeNotifier {
       albumTitle: album ?? '',
       source: source ?? '',
       startedAt: startedAt,
-      listenedSec: _maxElapsedSec,
+      listenedSec: listenedSec,
     );
   }
 

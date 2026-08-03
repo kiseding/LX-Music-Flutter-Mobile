@@ -58,7 +58,7 @@ void main() {
       expect(httpRequest.uri.scheme, 'http');
     });
 
-    test('allows IPv4 destinations regardless of reserved/private ranges',
+    test('rejects reserved and private IPv4 destinations',
         () async {
       final policy = policyWith({});
       for (final address in [
@@ -77,9 +77,9 @@ void main() {
         '240.0.0.1',
         '255.255.255.255',
       ]) {
-        expect(
-          await policy.validate(Uri.parse('https://$address/a'), {}),
-          isA<ValidatedSourceRequest>(),
+        await expectLater(
+          policy.validate(Uri.parse('https://$address/a'), {}),
+          throwsA(isA<SourceRequestPolicyException>()),
           reason: address,
         );
       }
@@ -104,7 +104,7 @@ void main() {
       }
     });
 
-    test('allows every IPv4 special-purpose prefix at its boundaries',
+    test('rejects every IPv4 special-purpose prefix at its boundaries',
         () async {
       final policy = policyWith({});
       const prefixes = <List<String>>[
@@ -130,9 +130,9 @@ void main() {
 
       for (final prefix in prefixes) {
         for (final address in prefix) {
-          expect(
-            await policy.validate(Uri.parse('https://$address'), {}),
-            isA<ValidatedSourceRequest>(),
+          await expectLater(
+            policy.validate(Uri.parse('https://$address'), {}),
+            throwsA(isA<SourceRequestPolicyException>()),
             reason: '$prefix boundary $address',
           );
         }
@@ -218,7 +218,7 @@ void main() {
       // IPv4 不再拦截；::1 仍被 IPv6 拦截。
       expect(
         request.addresses.map((a) => a.address),
-        ['127.0.0.1', '93.184.216.34'],
+        ['93.184.216.34'],
       );
     });
 
@@ -237,17 +237,14 @@ void main() {
       expect(request.addresses, [publicAddress, ipv6]);
     });
 
-    test('allows DNS results with private IPv4 addresses', () async {
+    test('rejects DNS results containing only private IPv4 addresses', () async {
       final policy = policyWith({
         'private.example': ['127.0.0.1', '10.0.0.1'],
       });
 
-      final request =
-          await policy.validate(Uri.parse('https://private.example/a'), {});
-
-      expect(
-        request.addresses.map((a) => a.address),
-        ['127.0.0.1', '10.0.0.1'],
+      await expectLater(
+        policy.validate(Uri.parse('https://private.example/a'), {}),
+        throwsA(isA<SourceRequestPolicyException>()),
       );
     });
 
@@ -433,7 +430,7 @@ void main() {
       });
     }
 
-    test('cross-origin redirect forwards all caller headers', () async {
+    test('cross-origin redirect strips credentials', () async {
       final requests = await followRedirect(
         status: 307,
         location: 'https://two.example/done',
@@ -455,8 +452,8 @@ void main() {
       expect(requests.last.headers['Accept-Language'], 'en');
       expect(requests.last.headers['User-Agent'], 'source-agent');
       expect(requests.last.headers['Content-Type'], 'text/plain');
-      expect(requests.last.headers['Authorization'], 'Bearer sponsor-token');
-      expect(requests.last.headers['Cookie'], 'session=secret');
+      expect(requests.last.headers, isNot(contains('Authorization')));
+      expect(requests.last.headers, isNot(contains('Cookie')));
       expect(requests.last.headers['X-Api-Key'], 'secret');
       expect(requests.last.headers['X-Custom'], 'private');
     });

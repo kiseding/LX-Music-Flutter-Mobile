@@ -3,6 +3,7 @@ import '../../../core/network/music_source_service.dart';
 import '../../../core/storage/storage_service.dart';
 import '../../player/domain/music_item.dart';
 import '../../custom_source/presentation/custom_source_provider.dart';
+import '../../settings/presentation/settings_provider.dart';
 
 final musicSourceServiceProvider = Provider<MusicSourceService>((ref) {
   final customSourceService = ref.watch(customSourceServiceProvider);
@@ -29,7 +30,9 @@ final allSearchSourcesProvider = Provider<List<SearchSourceItem>>((ref) {
 
 final searchQueryProvider = StateProvider<String>((ref) => '');
 // 默认腾讯；设置页可改 defaultSearchPlatform 并同步到此
-final selectedSourceIdProvider = StateProvider<String>((ref) => 'tx');
+final selectedSourceIdProvider = StateProvider<String>(
+  (ref) => ref.watch(defaultSearchPlatformProvider),
+);
 
 // 搜索状态类
 class SearchState {

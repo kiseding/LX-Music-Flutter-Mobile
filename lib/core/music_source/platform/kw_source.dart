@@ -209,13 +209,11 @@ class KwSource extends MusicPlatform {
       // 从 Set-Cookie 中提取 Hm_Iuvt_* cookie
       if (response.headers.map['set-cookie'] != null) {
         for (final cookie in response.headers.map['set-cookie']!) {
-          debugPrint('[KW] Cookie: $cookie');
           final cookieMatch =
               RegExp(r'(Hm_Iuvt_\w+)=([^;]+)').firstMatch(cookie);
           if (cookieMatch != null) {
             final name = cookieMatch.group(1)!;
             final value = cookieMatch.group(2)!;
-            debugPrint('[KW] 提取 CSRF: $name=$value');
             return _KwToken(name: name, value: value);
           }
         }
@@ -223,10 +221,9 @@ class KwSource extends MusicPlatform {
       // 兜底从 body 搜 Hm_Iuvt
       final idx = body.indexOf('Hm_Iuvt');
       if (idx >= 0) {
-        debugPrint(
-            '[KW] 页面中找到 Hm_Iuvt, 上下文: ${body.substring(idx, (idx + 100).clamp(0, body.length))}');
+        debugPrint('[KW] 页面中找到 Hm_Iuvt');
       }
-      debugPrint('[KW] 未能提取 CSRF token, body length=${body.length}');
+      debugPrint('[KW] 未能提取 CSRF token');
       return null;
     } catch (e) {
       debugPrint('[KW] 获取 CSRF token 失败: $e');
@@ -295,7 +292,7 @@ class KwSource extends MusicPlatform {
         if (data is Map && data['code'] == 200) {
           final url = data['data']?['url'] as String?;
           if (url != null && url.isNotEmpty) {
-            debugPrint('[KW] playInfo 接口成功: $url');
+            debugPrint('[KW] playInfo 接口成功');
             return url;
           }
           debugPrint('[KW] playInfo 接口: url为空, code=${data["code"]}');
@@ -342,10 +339,10 @@ class KwSource extends MusicPlatform {
           url = url.substring(0, url.length - 5);
         }
         if (url.startsWith('http')) {
-          debugPrint('[KW] antiserver 接口(rid=$ridFormat)成功: $url');
+          debugPrint('[KW] antiserver 接口(rid=$ridFormat)成功');
           return url;
         }
-        debugPrint('[KW] antiserver 接口(rid=$ridFormat): 返回非 URL 内容: "$url"');
+        debugPrint('[KW] antiserver 接口(rid=$ridFormat): 返回非 URL 内容');
       } catch (e) {
         debugPrint('[KW] antiserver 接口(rid=$ridFormat)失败: $e');
       }
@@ -374,7 +371,7 @@ class KwSource extends MusicPlatform {
         final data = response.data;
         if (data is Map && data['url'] != null) {
           final url = data['url'] as String;
-          debugPrint('[KW] convert_url3 接口(rid=$ridFormat)成功: $url');
+          debugPrint('[KW] convert_url3 接口(rid=$ridFormat)成功');
           return url;
         }
         debugPrint('[KW] convert_url3 接口: 非期望响应, type=${data.runtimeType}');
@@ -648,7 +645,7 @@ class KwSource extends MusicPlatform {
 
       final url =
           'https://wbd.kuwo.cn/api/bd/bang/bang_info?${WbdCrypto.buildParam(requestBody)}';
-      debugPrint('[KW] Request URL: $url');
+      debugPrint('[KW] Request completed');
 
       final response = await _dio
           .get(

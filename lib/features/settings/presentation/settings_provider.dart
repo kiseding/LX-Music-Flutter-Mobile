@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/audio/audio_handler.dart';
 import '../../../core/storage/storage_service.dart';
-import '../../../core/network/outbound_url.dart';
 
 // 音质选择
 enum AudioQualityOption {
@@ -40,11 +39,6 @@ final wifiOnlyDownloadProvider =
 final autoResumePlaybackProvider =
     StateNotifierProvider<AutoResumePlaybackNotifier, bool>((ref) {
   return AutoResumePlaybackNotifier();
-});
-
-final syncServerUrlProvider =
-    StateNotifierProvider<SyncServerUrlNotifier, String?>((ref) {
-  return SyncServerUrlNotifier();
 });
 
 /// 默认搜索平台：tx / kw / wy
@@ -236,92 +230,6 @@ class AutoResumePlaybackNotifier extends _PersistedSettingNotifier<bool> {
 
   void applyCommitted(bool value) {
     applyCommittedValue(value);
-  }
-}
-
-class SyncServerUrlNotifier extends StateNotifier<String?> {
-  SyncServerUrlNotifier({StorageLoader? storage, String? initialValue})
-      : _storage = storage ?? (() => StorageService.instance),
-        super(
-          initialValue == null ? null : validateHttpsServiceUrl(initialValue),
-        ) {
-    if (initialValue == null) {
-      _load();
-    }
-  }
-
-  final StorageLoader _storage;
-  int _generation = 0;
-  Future<void> _writeTail = Future.value();
-
-  Future<void> _load() async {
-    final generation = _generation;
-    try {
-      final storage = await _storage();
-      final saved = storage.getString('sync_server_url');
-      if (generation != _generation) return;
-      if (saved == null || saved.isEmpty) return;
-      try {
-        state = validateHttpsServiceUrl(saved);
-      } on ArgumentError {
-        state = null;
-      }
-    } catch (_) {}
-  }
-
-  Future<void> _persist(
-    int generation,
-    String? previous,
-    String? attemptedValue,
-    Future<bool> Function(StorageService storage) write,
-  ) async {
-    try {
-      final storage = await _storage();
-      if (generation != _generation) return;
-
-      final pendingWrite = _writeTail.then<void>((_) async {
-        if (generation != _generation) return;
-        await write(storage);
-      });
-      _writeTail = pendingWrite.then<void>(
-        (_) {},
-        onError: (_, __) {},
-      );
-      await pendingWrite;
-    } catch (_) {
-      if (generation == _generation && state == attemptedValue) {
-        state = previous;
-      }
-      rethrow;
-    }
-  }
-
-  Future<void> setUrl(String? url) async {
-    final generation = ++_generation;
-    final previous = state;
-    if (url != null) {
-      final validated = validateHttpsServiceUrl(url);
-      state = validated;
-      await _persist(
-        generation,
-        previous,
-        validated,
-        (storage) => storage.setString('sync_server_url', validated),
-      );
-    } else {
-      state = null;
-      await _persist(
-        generation,
-        previous,
-        null,
-        (storage) => storage.remove('sync_server_url'),
-      );
-    }
-  }
-
-  void applyCommitted(String? url) {
-    ++_generation;
-    state = url;
   }
 }
 

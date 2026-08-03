@@ -44,7 +44,6 @@ void main() {
       'audio_quality': AudioQualityOption.low.index,
       'download_quality': AudioQualityOption.low.index,
       'wifi_only_download': true,
-      'sync_server_url': 'https://old.example',
       'default_search_platform': 'tx',
     });
     final prefs = await SharedPreferences.getInstance();
@@ -53,7 +52,6 @@ void main() {
       'audio',
       'download',
       'wifi',
-      'syncUrl',
       'platform',
     ]) {
       final gate = Completer<StorageService>();
@@ -80,12 +78,6 @@ void main() {
           expected = false;
           mutation = value.setWifiOnly(false);
           break;
-        case 'syncUrl':
-          final value = SyncServerUrlNotifier(storage: loader);
-          readState = () => value.state;
-          expected = 'https://new.example';
-          mutation = value.setUrl('https://new.example');
-          break;
         case 'platform':
           final value = DefaultSearchPlatformNotifier(storage: loader);
           readState = () => value.state;
@@ -104,7 +96,6 @@ void main() {
     expect(prefs.getInt('audio_quality'), AudioQualityOption.hires.index);
     expect(prefs.getInt('download_quality'), AudioQualityOption.lossless.index);
     expect(prefs.getBool('wifi_only_download'), isFalse);
-    expect(prefs.getString('sync_server_url'), 'https://new.example');
     expect(prefs.getString('default_search_platform'), 'wy');
   });
 
@@ -219,37 +210,6 @@ void main() {
       preferences.getInt('download_quality'),
       AudioQualityOption.hires.index,
     );
-  });
-
-  test('stale delayed loader cannot persist over a newer sync URL', () async {
-    SharedPreferences.setMockInitialValues({
-      'sync_server_url': 'https://old.example',
-    });
-    final preferences = await SharedPreferences.getInstance();
-    final storage = StorageService.forTesting(preferences);
-    final firstMutationLoaderRequested = Completer<void>();
-    final firstMutationStorage = Completer<StorageService>();
-    var loadCount = 0;
-    final notifier = SyncServerUrlNotifier(storage: () {
-      loadCount++;
-      if (loadCount == 2) {
-        firstMutationLoaderRequested.complete();
-        return firstMutationStorage.future;
-      }
-      return Future.value(storage);
-    });
-    await Future<void>.delayed(Duration.zero);
-
-    final staleWrite = notifier.setUrl('https://first.example');
-    await firstMutationLoaderRequested.future;
-    await notifier.setUrl('https://second.example');
-    expect(preferences.getString('sync_server_url'), 'https://second.example');
-
-    firstMutationStorage.complete(storage);
-    await staleWrite;
-
-    expect(notifier.state, 'https://second.example');
-    expect(preferences.getString('sync_server_url'), 'https://second.example');
   });
 
   test('stale audio quality completion cannot apply the old quality', () async {

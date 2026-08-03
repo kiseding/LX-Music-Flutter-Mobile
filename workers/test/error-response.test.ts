@@ -62,4 +62,16 @@ describe('readJsonBody', () => {
       password: 'secret',
     });
   });
+
+  it('rejects JSON bodies larger than 256 KiB', async () => {
+    const request = new Request('https://example.com/api/user/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value: 'x'.repeat(256 * 1024) }),
+    });
+
+    const result = await readJsonBody(request);
+    expect(result).toBeInstanceOf(Response);
+    expect((result as Response).status).toBe(413);
+  });
 });

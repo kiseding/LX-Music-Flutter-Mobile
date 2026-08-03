@@ -691,6 +691,7 @@ class SettingsScreen extends ConsumerWidget {
           ref
               .read(wifiOnlyDownloadProvider.notifier)
               .applyCommitted(data.wifiOnlyDownload);
+          ref.read(setWifiOnlyDownloadProvider)(data.wifiOnlyDownload);
         },
       ).restore(data);
 
