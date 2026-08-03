@@ -928,6 +928,10 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     _userIntentGeneration++;
     _userWantsPlay = true;
     final currentOccurrenceId = _activeOccurrenceId;
+    final pendingOccurrenceId = _commands.desiredSourceOccurrenceId;
+    final selectionTransferPending = currentOccurrenceId != null &&
+        pendingOccurrenceId != null &&
+        pendingOccurrenceId != currentOccurrenceId;
     final hasInstalledCurrentSource =
         currentOccurrenceId != null &&
         _currentIndex >= 0 &&
@@ -937,6 +941,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     if (_player.processingState == ProcessingState.idle ||
         !hasInstalledCurrentSource) {
       unawaited(_commands.recordExplicitPlayIntent());
+      if (selectionTransferPending) return;
       if (currentOccurrenceId != null &&
           _currentIndex >= 0 &&
           _currentIndex < _queue.length) {
@@ -2233,6 +2238,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
           await _commands.discardTemporarySource(commandToken);
           if (_nativeTransitionSourceToken == commandToken) {
             _nativeTransitionSourceToken = null;
+            _publishPlaybackState();
           }
         }
         if (!sourceInstallAttempted &&
@@ -2251,6 +2257,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   Future<void> _recoverAuthoritativeSource({
     required PlaybackStartProvenance provenance,
   }) async {
+    if (_commands.desiredSourceOccurrenceId != _activeOccurrenceId) return;
     final authoritativeItem = mediaItem.value;
     final authoritativeIndex = _currentIndex;
     if (authoritativeItem == null ||

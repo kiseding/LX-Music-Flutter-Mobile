@@ -89,6 +89,7 @@ class PlaybackCommandCoordinator {
 
   int get sourceToken => _sourceToken;
   int? get desiredSourceToken => _desiredSource?.token;
+  int? get desiredSourceOccurrenceId => _desiredSource?.occurrenceId;
   int? get installedSourceToken => _installedSourceToken;
   bool get installedSourceIsAuthoritative =>
       _installedSourceToken != null &&
@@ -152,6 +153,7 @@ class PlaybackCommandCoordinator {
   Future<bool> installTemporarySource(int token, AudioSource source) async {
     if (_shutdown || _desiredSource?.token != token) return false;
     final previous = _tail;
+    _pendingReconciliations++;
     final next = () async {
       await previous;
       if (_shutdown || _desiredSource?.token != token) return false;
@@ -195,16 +197,18 @@ class PlaybackCommandCoordinator {
       _onStateChanged?.call();
       return true;
     }();
-    _tail = next.then<void>(
+    final tracked = next.whenComplete(() => _pendingReconciliations--);
+    _tail = tracked.then<void>(
       (_) {},
       onError: (Object _, StackTrace __) {},
     );
-    return next;
+    return tracked;
   }
 
   Future<void> discardTemporarySource(int token) async {
     if (_shutdown || _temporarySourceToken != token) return;
     final previous = _tail;
+    _pendingReconciliations++;
     final next = () async {
       await previous;
       if (_shutdown || _temporarySourceToken != token) return;
@@ -217,8 +221,9 @@ class PlaybackCommandCoordinator {
       _activePlayCommandToken = null;
       _onStateChanged?.call();
     }();
-    _tail = next.catchError((Object _, StackTrace __) {});
-    await next;
+    final tracked = next.whenComplete(() => _pendingReconciliations--);
+    _tail = tracked.catchError((Object _, StackTrace __) {});
+    await tracked;
   }
 
   Future<void> recordExplicitPlayIntent() {
@@ -488,6 +493,10 @@ class PlaybackCommandCoordinator {
         _lastPlayAttemptRevision = -1;
         sourceChanged = true;
         _notifyIfCurrent(commandRevision);
+        if (_desiredSource?.token != desiredSource.token) {
+          await _reconcile(_revision);
+          return;
+        }
       }
 
       if (_desiredSeek != null &&
