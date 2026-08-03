@@ -27,6 +27,14 @@ void main() {
     );
     expect(
       shouldReuseCachedPlayUrl(
+        cachedUrl: 'https://cdn.example/song.mp3?token=expired',
+        cachedRequestedQuality: '320k',
+        currentRequestedQuality: '320k',
+      ),
+      isFalse,
+    );
+    expect(
+      shouldReuseCachedPlayUrl(
         cachedUrl: 'file:///tmp/a.mp3',
         cachedRequestedQuality: null,
         currentRequestedQuality: '320k',
@@ -48,6 +56,22 @@ void main() {
         currentRequestedQuality: 'flac',
       ),
       isFalse,
+    );
+  });
+
+  test('remote audio source carries media request headers', () {
+    final source = audioSourceFor(
+      'https://cdn.example/song.mp3',
+      headers: const {
+        'User-Agent': 'source-agent',
+        'Referer': 'https://music.example/',
+      },
+    );
+
+    expect(source, isA<ProgressiveAudioSource>());
+    expect(
+      (source as ProgressiveAudioSource).headers,
+      containsPair('Referer', 'https://music.example/'),
     );
   });
 

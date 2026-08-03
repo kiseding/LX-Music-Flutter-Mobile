@@ -95,6 +95,19 @@ void main() {
     expect(downloadedUrl, 'http://media.example.com/a.mp3?token=1');
   });
 
+  test('media request headers are shared across cache and streaming', () {
+    final tx = mediaRequestHeaders('https://cdn.example/song.mp3', 'tx');
+    final detected = mediaRequestHeaders(
+      'https://m801.music.126.net/song.mp3',
+      'custom',
+    );
+
+    expect(tx['User-Agent'], mediaUserAgent);
+    expect(tx['Referer'], 'https://y.qq.com/');
+    expect(tx['Accept'], '*/*');
+    expect(detected['Referer'], 'https://music.163.com/');
+  });
+
   test('expired entries are deleted and re-downloaded', () async {
     final path1 = await cache.getOrDownload(
       remoteUrl: 'https://cdn.example.com/old.flac',

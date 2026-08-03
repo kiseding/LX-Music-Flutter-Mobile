@@ -19,6 +19,30 @@ typedef PlaybackDownloader = Future<void> Function(
 });
 typedef PlaybackCacheKeyHook = Future<void> Function(String key);
 
+const mediaUserAgent = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) '
+    'AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 '
+    'Mobile/15E148 Safari/604.1';
+
+Map<String, String> mediaRequestHeaders(String url, String platform) {
+  final value = platform.toLowerCase();
+  final referer = switch (value) {
+    'tx' => 'https://y.qq.com/',
+    'wy' => 'https://music.163.com/',
+    'kw' => 'https://www.kuwo.cn/',
+    _ when url.contains('qq.com') || url.contains('gtimg') =>
+      'https://y.qq.com/',
+    _ when url.contains('163.com') || url.contains('music.126') =>
+      'https://music.163.com/',
+    _ when url.contains('kuwo') => 'https://www.kuwo.cn/',
+    _ => 'https://www.google.com/',
+  };
+  return {
+    'User-Agent': mediaUserAgent,
+    'Referer': referer,
+    'Accept': '*/*',
+  };
+}
+
 abstract class PlaybackCacheIndexStore {
   Future<String?> read();
   Future<void> write(String raw);
@@ -1024,12 +1048,7 @@ class PlaybackCacheService {
           safePartPath,
           cancelToken: token,
           options: Options(
-            headers: {
-              'User-Agent':
-                  'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
-              'Referer': _refererFor(downloadUrl, platform),
-              'Accept': '*/*',
-            },
+            headers: mediaRequestHeaders(downloadUrl, platform),
             responseType: ResponseType.bytes,
             receiveTimeout: const Duration(minutes: 5),
             sendTimeout: const Duration(seconds: 30),
@@ -1601,18 +1620,6 @@ class PlaybackCacheService {
       onError: (Object _, StackTrace __) {},
     );
     return write;
-  }
-
-  String _refererFor(String url, String platform) {
-    final value = platform.toLowerCase();
-    if (value == 'tx' || url.contains('qq.com') || url.contains('gtimg')) {
-      return 'https://y.qq.com/';
-    }
-    if (value == 'wy' || url.contains('163.com') || url.contains('music.126')) {
-      return 'https://music.163.com/';
-    }
-    if (value == 'kw' || url.contains('kuwo')) return 'https://www.kuwo.cn/';
-    return 'https://www.google.com/';
   }
 
   bool _looksLikeNonAudio(List<int> header) {

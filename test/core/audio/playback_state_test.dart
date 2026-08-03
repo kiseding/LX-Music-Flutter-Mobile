@@ -75,6 +75,36 @@ void main() {
     expect(state.controls, isNot(contains(MediaControl.play)));
   });
 
+  test('expired remote queue url is re-resolved before source install',
+      () async {
+    final player = _PlaybackStateAudioPlayer();
+    final handler = LxAudioHandler(player: player);
+    addTearDown(player.dispose);
+    var resolveCalls = 0;
+    handler.urlResolver = (id, [extras]) async {
+      resolveCalls++;
+      return 'https://cdn.example/$id.mp3?token=fresh';
+    };
+
+    await handler.setPlaylist(const [
+      MediaItem(
+        id: 'A',
+        title: 'A',
+        extras: {
+          'url': 'https://cdn.example/A.mp3?token=expired',
+          'requestedQuality': '320k',
+          'platform': 'tx',
+        },
+      ),
+    ]);
+
+    expect(resolveCalls, 1);
+    final source = player.loadedSource as ProgressiveAudioSource;
+    expect(source.uri.queryParameters['token'], 'fresh');
+    expect(source.headers?['Referer'], 'https://y.qq.com/');
+    expect(source.headers?['User-Agent'], mediaUserAgent);
+  });
+
   test('engine state recovers manual buffering to ready and completed',
       () async {
     final player = _PlaybackStateAudioPlayer();
