@@ -238,15 +238,54 @@ class MusicSourceService {
         _customSourceQualityResolver != null ||
         (_hasEnabledCustomSources?.call() ??
             _customSourceService.enabledSources.isNotEmpty);
-    final qualities = hasCustom || _builtInQualityResolver != null
+    final customResult = hasCustom
+        ? await _resolveQualityChain(
+            music,
+            resolvedQuality,
+            qualityChain(resolvedQuality),
+            _resolveCustomQuality,
+            cancelToken,
+          )
+        : null;
+    if (customResult != null) return customResult;
+
+    if (platform != 'kw' && platform != 'tx' && platform != 'wy') return null;
+    final builtInQualities = _builtInQualityResolver != null
         ? qualityChain(resolvedQuality)
         : uniqueQualityCandidates(
             resolvedQuality,
             attemptKey: (quality) =>
                 _builtInSources.exactAttemptKey(platform, quality),
           );
+    final builtInResult = await _resolveQualityChain(
+      music,
+      resolvedQuality,
+      builtInQualities,
+      _resolveBuiltInQuality,
+      cancelToken,
+    );
+    if (builtInResult != null) return builtInResult;
+
+    debugPrint('[getPlayUrl] 当前平台解析失败，未进行跨平台兜底');
+    return null;
+  }
+
+  Future<PlayUrlResult?> _resolveQualityChain(
+    MusicItem music,
+    String requestedQuality,
+    List<String> qualities,
+    Future<_QualityAttempt?> Function(
+      MusicItem music,
+      String quality,
+      CancelToken? cancelToken, {
+      required int candidateIndex,
+    }) resolver,
+    CancelToken? cancelToken,
+  ) async {
+    final songId = (music.songmid?.isNotEmpty == true)
+        ? music.songmid!
+        : (music.hash?.isNotEmpty == true ? music.hash! : music.id);
     _QualityAttempt? bestBelow;
-    final resolver = hasCustom ? _resolveCustomQuality : _resolveBuiltInQuality;
 
     for (var candidateIndex = 0;
         candidateIndex < qualities.length;
@@ -260,7 +299,7 @@ class MusicSourceService {
 
       final normalized = PlayUrlResult(
         url: attempt.result.url,
-        requestedQuality: resolvedQuality,
+        requestedQuality: requestedQuality,
         actualQuality: attempt.result.actualQuality,
         platform: attempt.result.platform,
         songId: attempt.songId.isNotEmpty ? attempt.songId : songId,
@@ -282,7 +321,6 @@ class MusicSourceService {
           '[getPlayUrl] 使用偏低但可播结果 actual=${bestBelow.result.actualQuality}');
       return bestBelow.result;
     }
-    debugPrint('[getPlayUrl] 当前平台解析失败，未进行跨平台兜底');
     return null;
   }
 

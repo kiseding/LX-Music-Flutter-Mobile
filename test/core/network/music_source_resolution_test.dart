@@ -135,7 +135,7 @@ void main() {
     expect(result?.actualQuality, '128k');
   });
 
-  test('enabled custom sources retain priority over built-in fallback',
+  test('built-in source is used when every custom attempt fails',
       () async {
     var builtInCalls = 0;
     final service = MusicSourceService(
@@ -153,7 +153,29 @@ void main() {
       preferredQuality: '320k',
     );
 
-    expect(result, isNull);
+    expect(result?.url, 'https://media.example/320k.mp3');
+    expect(builtInCalls, 1);
+  });
+
+  test('successful custom source still prevents built-in fallback', () async {
+    var builtInCalls = 0;
+    final service = MusicSourceService(
+      CustomSourceService(),
+      hasEnabledCustomSources: () => true,
+      customQualityResolver: (music, quality, cancelToken) async =>
+          playable(quality),
+      builtInQualityResolver: (music, quality, cancelToken) async {
+        builtInCalls++;
+        return playable(quality);
+      },
+    );
+
+    final result = await service.resolvePlayableUrl(
+      item,
+      preferredQuality: '320k',
+    );
+
+    expect(result?.url, 'https://media.example/320k.mp3');
     expect(builtInCalls, 0);
   });
 
