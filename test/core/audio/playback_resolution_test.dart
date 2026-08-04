@@ -230,6 +230,79 @@ void main() {
       expect(result, isNull);
     });
 
+    test('range-validated lossy URL streams when local caching fails',
+        () async {
+      final validated = <String>[];
+      final resolver = PlaybackUrlResolver<MusicItem>(
+        resolvePlayableUrl: (music, {required preferredQuality}) async =>
+            _playResult(
+          url: 'https://cdn.example/$preferredQuality.mp3',
+          quality: preferredQuality,
+        ),
+        acquireOrDownload: ({
+          required remoteUrl,
+          required platform,
+          required songId,
+          required quality,
+        }) async =>
+            null,
+        validateStream: ({
+          required remoteUrl,
+          required platform,
+          required quality,
+        }) async {
+          validated.add(quality);
+          return true;
+        },
+        songIdFor: (music) => music.songmid ?? music.id,
+      );
+
+      final result = await resolver.resolve(
+        _item(),
+        preferredQuality: '320k',
+      );
+
+      expect(validated, ['320k']);
+      expect(result, isA<StreamingPlayback>());
+      expect(result!.playableUrl, 'https://cdn.example/320k.mp3');
+    });
+
+    test('lossless URL never streams even when range validation would pass',
+        () async {
+      var validationCalls = 0;
+      final resolver = PlaybackUrlResolver<MusicItem>(
+        resolvePlayableUrl: (music, {required preferredQuality}) async =>
+            preferredQuality == 'flac'
+                ? _playResult(
+                    url: 'https://cdn.example/song.flac',
+                    quality: 'flac',
+                  )
+                : null,
+        acquireOrDownload: ({
+          required remoteUrl,
+          required platform,
+          required songId,
+          required quality,
+        }) async =>
+            null,
+        validateStream: ({
+          required remoteUrl,
+          required platform,
+          required quality,
+        }) async {
+          validationCalls++;
+          return true;
+        },
+        songIdFor: (music) => music.songmid ?? music.id,
+      );
+
+      expect(
+        await resolver.resolve(_item(), preferredQuality: 'flac'),
+        isNull,
+      );
+      expect(validationCalls, 0);
+    });
+
     test('root media endpoint reaches response validation', () async {
       var acquireCalls = 0;
       final resolver = PlaybackUrlResolver<MusicItem>(

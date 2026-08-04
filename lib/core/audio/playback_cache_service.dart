@@ -186,6 +186,11 @@ typedef PlaybackLeaseAcquirer = Future<PlaybackCacheLease?> Function({
   required String songId,
   required String quality,
 });
+typedef PlaybackStreamValidator = Future<bool> Function({
+  required String remoteUrl,
+  required String platform,
+  required String quality,
+});
 
 /// Resolves quality once, then cache-or-stream with generation-safe cancel.
 class PlaybackUrlResolver<T> {
@@ -194,6 +199,7 @@ class PlaybackUrlResolver<T> {
     required String preferredQuality,
   }) resolvePlayableUrl;
   final PlaybackLeaseAcquirer acquireOrDownload;
+  final PlaybackStreamValidator? validateStream;
   final void Function(String key)? cancelCacheKey;
   final String Function(T music) songIdFor;
   final bool Function(String? url) isPlayableUrl;
@@ -205,6 +211,7 @@ class PlaybackUrlResolver<T> {
     required this.resolvePlayableUrl,
     required this.acquireOrDownload,
     required this.songIdFor,
+    this.validateStream,
     this.cancelCacheKey,
     this.isPlayableUrl = isPlayableMediaUrl,
   });
@@ -223,6 +230,11 @@ class PlaybackUrlResolver<T> {
     final index = _qualityChain.indexOf(value);
     if (index < 0) return [value, ..._qualityChain.where((q) => q != value)];
     return _qualityChain.sublist(index);
+  }
+
+  bool _mayStream(String quality) {
+    final value = quality.toLowerCase();
+    return value == '320k' || value == '192k' || value == '128k';
   }
 
   int beginGeneration({bool cancelPrevious = false}) {
@@ -329,7 +341,29 @@ class PlaybackUrlResolver<T> {
         }
         // A failed download may be an expired signature, denied range request,
         // or non-media response. Never hand the same unverified URL to AVPlayer.
-        if (lease == null) continue;
+        if (lease == null) {
+          final validator = validateStream;
+          if (!_mayStream(qualityKey) ||
+              validator == null ||
+              !await validator(
+                remoteUrl: result.url,
+                platform: result.platform,
+                quality: qualityKey,
+              )) {
+            continue;
+          }
+          if (!_generationKeys.containsKey(gen)) return null;
+          final qualityExtras = <String, dynamic>{
+            'remoteUrl': result.url,
+            'actualQuality': result.actualQuality,
+            'requestedQuality': preferredQuality,
+            'platform': result.platform,
+            'cacheKey': key,
+            'songId': resolvedSongId,
+            'url': result.url,
+          };
+          return StreamingPlayback(result.url, qualityExtras);
+        }
 
         final qualityExtras = <String, dynamic>{
           'remoteUrl': result.url,
@@ -662,6 +696,67 @@ class PlaybackCacheService {
       disposedResult: null,
       releaseLate: (lease) => lease?.release() ?? Future<void>.value(),
     );
+  }
+
+  /// Confirms that a lossy URL supports the byte-range reads AVPlayer uses.
+  /// This is only a fallback when full-file caching could not complete.
+  Future<bool> validateStream({
+    required String remoteUrl,
+    required String platform,
+    required String quality,
+  }) async {
+    if (_disposed) return false;
+    final url = normalizeMediaUrl(remoteUrl);
+    try {
+      final response = await _dio.get<List<int>>(
+        url,
+        options: Options(
+          headers: {
+            ...mediaRequestHeaders(url, platform),
+            'Range': 'bytes=0-65535',
+            'Accept-Encoding': 'identity',
+          },
+          responseType: ResponseType.bytes,
+          followRedirects: true,
+          maxRedirects: 5,
+          validateStatus: (status) => status == 206,
+          receiveTimeout: const Duration(seconds: 15),
+          sendTimeout: const Duration(seconds: 15),
+        ),
+      );
+      if (_disposed || response.statusCode != 206) return false;
+      final contentRange = response.headers.value('content-range');
+      final range = contentRange == null
+          ? null
+          : RegExp(r'^bytes 0-(\d+)/(\d+)$').firstMatch(contentRange.trim());
+      if (range == null) return false;
+      final end = int.tryParse(range.group(1)!);
+      final total = int.tryParse(range.group(2)!);
+      final bytes = response.data;
+      if (end == null ||
+          total == null ||
+          total <= 0 ||
+          end < 0 ||
+          bytes == null ||
+          bytes.isEmpty ||
+          bytes.length != end + 1 ||
+          _looksLikeNonAudio(bytes.take(64).toList(growable: false))) {
+        return false;
+      }
+      return extensionFromBytes(
+            bytes.take(64).toList(growable: false),
+            fallback: '.audio',
+          ) !=
+          '.audio';
+    } on DioException catch (error) {
+      if (!CancelToken.isCancel(error)) {
+        debugPrint('[PlaybackCache] stream validation failed: $error');
+      }
+      return false;
+    } catch (error) {
+      debugPrint('[PlaybackCache] stream validation error: $error');
+      return false;
+    }
   }
 
   Future<T> _trackAcquisition<T>(

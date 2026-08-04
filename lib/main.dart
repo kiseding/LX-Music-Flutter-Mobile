@@ -101,6 +101,7 @@ void main() async {
           );
         },
         acquireOrDownload: playbackCache.acquireOrDownload,
+        validateStream: playbackCache.validateStream,
         cancelCacheKey: playbackCache.cancelKey,
         songIdFor: (music) {
           if (music.songmid?.isNotEmpty == true) return music.songmid!;

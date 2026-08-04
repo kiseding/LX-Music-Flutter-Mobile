@@ -1,10 +1,29 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lx_music_flutter/core/audio/playback_cache_service.dart';
+
+class _RangeResponseAdapter implements HttpClientAdapter {
+  _RangeResponseAdapter(this.response);
+
+  final ResponseBody Function(RequestOptions options) response;
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    return response(options);
+  }
+
+  @override
+  void close({bool force = false}) {}
+}
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -61,6 +80,65 @@ void main() {
     expect(a, b);
     expect(a, isNot(c));
     expect(a.length, 40);
+  });
+
+  test('stream validation requires a ranged audio response', () async {
+    final mp3 = <int>[0x49, 0x44, 0x33, ...List<int>.filled(61, 0)];
+
+    Future<bool> validate(
+        ResponseBody Function(RequestOptions) response) async {
+      final dio = Dio();
+      dio.httpClientAdapter = _RangeResponseAdapter(response);
+      final service = PlaybackCacheService(
+        dio: dio,
+        cacheRootOverride: tempDir.path,
+        indexStore: MemoryPlaybackCacheIndexStore(),
+      );
+      try {
+        return await service.validateStream(
+          remoteUrl: 'https://cdn.example/song.mp3',
+          platform: 'tx',
+          quality: '320k',
+        );
+      } finally {
+        await service.dispose();
+      }
+    }
+
+    expect(
+      await validate((options) {
+        expect(options.headers['Range'], 'bytes=0-65535');
+        expect(options.headers['Referer'], 'https://y.qq.com/');
+        return ResponseBody.fromBytes(
+          mp3,
+          206,
+          headers: {
+            'content-range': ['bytes 0-63/4096'],
+          },
+        );
+      }),
+      isTrue,
+    );
+    expect(
+      await validate((_) => ResponseBody.fromBytes(mp3, 403)),
+      isFalse,
+    );
+    expect(
+      await validate((_) => ResponseBody.fromBytes(mp3, 200)),
+      isFalse,
+    );
+    expect(
+      await validate(
+        (_) => ResponseBody.fromString(
+          '<html>denied</html>',
+          206,
+          headers: {
+            'content-range': ['bytes 0-18/19'],
+          },
+        ),
+      ),
+      isFalse,
+    );
   });
 
   test('getOrDownload downloads once and reuses local file', () async {
