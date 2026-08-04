@@ -7,10 +7,11 @@ void main() {
       TxSource.exactFilenames('song', 'media', 'flac'),
       ['F000media.flac', 'F000song.flac'],
     );
-    expect(TxSource.exactFilenames('song', 'media', '320k'), ['M800song.mp3']);
+    expect(TxSource.exactFilenames('song', 'media', '320k'),
+        ['M800media.mp3', 'M800song.mp3']);
     expect(TxSource.exactFilenames('song', 'media', '192k'), isEmpty);
     expect(TxSource.exactFilenames('song', 'media', '128k'),
-        ['M500song.mp3', 'C400song.m4a']);
+        ['M500media.mp3', 'C400media.m4a', 'M500song.mp3', 'C400song.m4a']);
   });
 
   test('Tx exact attempt keys collapse aliases and reject unsupported quality',

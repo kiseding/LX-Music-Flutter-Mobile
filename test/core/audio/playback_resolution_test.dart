@@ -60,7 +60,7 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   group('PlaybackUrlResolver', () {
-    test('validated remote URL streams when cache write fails', () async {
+    test('failed media validation never streams the same remote URL', () async {
       final cancelled = <String>[];
       final resolver = PlaybackUrlResolver<MusicItem>(
         resolvePlayableUrl: (music, {required preferredQuality}) async =>
@@ -81,22 +81,49 @@ void main() {
         preferredQuality: '320k',
       );
 
-      expect(result, isA<StreamingPlayback>());
-      expect(
-          (result as StreamingPlayback).remoteUrl, 'https://cdn.example/a.mp3');
-      expect(result.playableUrl, 'https://cdn.example/a.mp3');
-      expect(result.qualityExtras['remoteUrl'], 'https://cdn.example/a.mp3');
-      expect(result.qualityExtras['actualQuality'], '320k');
+      expect(result, isNull);
     });
 
-    test('lossless cache failure continues to a cached lossy candidate',
-        () async {
+    test('source-resolved quality downgrade is cached once', () async {
       final qualities = <String>[];
       final resolver = PlaybackUrlResolver<MusicItem>(
         resolvePlayableUrl: (music, {required preferredQuality}) async {
           qualities.add(preferredQuality);
           return _playResult(
-            url: 'https://cdn.example/$preferredQuality.mp3',
+            url: 'https://cdn.example/320k.mp3',
+            quality: '320k',
+          );
+        },
+        acquireOrDownload: ({
+          required remoteUrl,
+          required platform,
+          required songId,
+          required quality,
+        }) async {
+          return _FakeLease('/tmp/$quality.mp3', 'key-$quality', (_) {})
+              .asLease();
+        },
+        songIdFor: (music) => music.songmid ?? music.id,
+      );
+
+      final result = await resolver.resolve(
+        _item(),
+        preferredQuality: 'flac',
+      );
+
+      expect(qualities, ['flac']);
+      expect(result, isA<CachedPlayback>());
+      expect(result!.playableUrl, 'file:///tmp/320k.mp3');
+      expect(result.qualityExtras['requestedQuality'], 'flac');
+    });
+
+    test('denied FLAC fetch re-resolves and caches a lower quality', () async {
+      final qualities = <String>[];
+      final resolver = PlaybackUrlResolver<MusicItem>(
+        resolvePlayableUrl: (music, {required preferredQuality}) async {
+          qualities.add(preferredQuality);
+          return _playResult(
+            url: 'https://cdn.example/$preferredQuality',
             quality: preferredQuality,
           );
         },
@@ -121,7 +148,6 @@ void main() {
       expect(qualities, ['flac', '320k']);
       expect(result, isA<CachedPlayback>());
       expect(result!.playableUrl, 'file:///tmp/320k.mp3');
-      expect(result.qualityExtras['requestedQuality'], 'flac');
     });
 
     test('lossless cache failure never streams the lossless URL', () async {
@@ -179,7 +205,7 @@ void main() {
       }
     });
 
-    test('lossy cache failure may stream the validated remote URL', () async {
+    test('lossy cache failure also requires a fresh candidate', () async {
       final resolver = PlaybackUrlResolver<MusicItem>(
         resolvePlayableUrl: (music, {required preferredQuality}) async =>
             _playResult(
@@ -201,8 +227,7 @@ void main() {
         preferredQuality: '320k',
       );
 
-      expect(result, isA<StreamingPlayback>());
-      expect(result!.playableUrl, 'https://cdn.example/320k.mp3');
+      expect(result, isNull);
     });
 
     test('root media endpoint reaches response validation', () async {
@@ -228,8 +253,7 @@ void main() {
       );
 
       expect(acquireCalls, 1);
-      expect(result, isA<StreamingPlayback>());
-      expect(result!.playableUrl, 'https://media.example/?token=signed');
+      expect(result, isNull);
     });
 
     test('null quality resolution fails without streaming', () async {
@@ -380,7 +404,9 @@ void main() {
 
       final resolver = PlaybackUrlResolver<MusicItem>(
         resolvePlayableUrl: (music, {required preferredQuality}) async =>
-            _playResult(url: 'https://cdn.example/${music.id}.mp3'),
+            preferredQuality == '320k'
+                ? _playResult(url: 'https://cdn.example/${music.id}.mp3')
+                : null,
         acquireOrDownload: ({
           required remoteUrl,
           required platform,
@@ -409,8 +435,8 @@ void main() {
       await startedB.future;
       gateA.complete();
       gateB.complete();
-      expect(await first, isA<StreamingPlayback>());
-      expect(await second, isA<StreamingPlayback>());
+      expect(await first, isNull);
+      expect(await second, isNull);
       expect(cancelled, isEmpty);
     });
   });

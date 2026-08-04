@@ -219,9 +219,17 @@ class TxSource extends MusicPlatform {
           if (mediaMid != songmid) 'F000$songmid.flac'
         ];
       case '320k':
-        return ['M800$songmid.mp3'];
+        return [
+          'M800$mediaMid.mp3',
+          if (mediaMid != songmid) 'M800$songmid.mp3'
+        ];
       case '128k':
-        return ['M500$songmid.mp3', 'C400$songmid.m4a'];
+        return [
+          'M500$mediaMid.mp3',
+          'C400$mediaMid.m4a',
+          if (mediaMid != songmid) 'M500$songmid.mp3',
+          if (mediaMid != songmid) 'C400$songmid.m4a',
+        ];
       default:
         return [];
     }

@@ -218,11 +218,6 @@ class PlaybackUrlResolver<T> {
     '128k',
   ];
 
-  bool _requiresLocalCache(String quality) {
-    final value = quality.toLowerCase();
-    return value == 'flac' || value == 'flac24bit' || value == 'hires';
-  }
-
   List<String> _qualityCandidates(String preferred) {
     final value = preferred.isEmpty ? '320k' : preferred;
     final index = _qualityChain.indexOf(value);
@@ -289,64 +284,68 @@ class PlaybackUrlResolver<T> {
       _generationKeys[gen] = <String>{};
     }
 
-    final songId = songIdFor(music);
-    for (final candidateQuality in _qualityCandidates(preferredQuality)) {
-      if (!_generationKeys.containsKey(gen)) return null;
-      final result = await resolvePlayableUrl(
-        music,
-        preferredQuality: candidateQuality,
-      );
-      if (!_generationKeys.containsKey(gen)) return null;
-      if (result == null || !isPlayableUrl(result.url)) continue;
+    try {
+      final songId = songIdFor(music);
+      final attemptedUrls = <String>{};
+      for (final candidateQuality in _qualityCandidates(preferredQuality)) {
+        if (!_generationKeys.containsKey(gen)) return null;
+        final result = await resolvePlayableUrl(
+          music,
+          preferredQuality: candidateQuality,
+        );
+        if (!_generationKeys.containsKey(gen)) return null;
+        if (result == null ||
+            !isPlayableUrl(result.url) ||
+            !attemptedUrls.add(result.url)) {
+          continue;
+        }
 
-      final qualityKey = result.actualQuality.isNotEmpty
-          ? result.actualQuality
-          : candidateQuality;
-      final resolvedSongId = result.songId.isNotEmpty ? result.songId : songId;
-      final key = PlaybackCacheService.cacheKey(
-        platform: result.platform,
-        songId: resolvedSongId,
-        quality: qualityKey,
-      );
-      noteCacheKey(gen, key);
-      if (!_generationKeys.containsKey(gen)) {
-        cancelCacheKey?.call(key);
-        return null;
-      }
+        final qualityKey = result.actualQuality.isNotEmpty
+            ? result.actualQuality
+            : candidateQuality;
+        final resolvedSongId =
+            result.songId.isNotEmpty ? result.songId : songId;
+        final key = PlaybackCacheService.cacheKey(
+          platform: result.platform,
+          songId: resolvedSongId,
+          quality: qualityKey,
+        );
+        noteCacheKey(gen, key);
+        if (!_generationKeys.containsKey(gen)) {
+          cancelCacheKey?.call(key);
+          return null;
+        }
 
-      final lease = await acquireOrDownload(
-        remoteUrl: result.url,
-        platform: result.platform,
-        songId: resolvedSongId,
-        quality: qualityKey,
-      );
-      if (!_generationKeys.containsKey(gen)) {
-        if (lease != null) await lease.release();
-        cancelCacheKey?.call(key);
-        return null;
-      }
-      if (lease == null && _requiresLocalCache(candidateQuality)) {
-        continue;
-      }
+        final lease = await acquireOrDownload(
+          remoteUrl: result.url,
+          platform: result.platform,
+          songId: resolvedSongId,
+          quality: qualityKey,
+        );
+        if (!_generationKeys.containsKey(gen)) {
+          if (lease != null) await lease.release();
+          cancelCacheKey?.call(key);
+          return null;
+        }
+        // A failed download may be an expired signature, denied range request,
+        // or non-media response. Never hand the same unverified URL to AVPlayer.
+        if (lease == null) continue;
 
-      // Resolution completed; stop tracking this generation for cancellation.
-      _generationKeys.remove(gen);
-      final qualityExtras = <String, dynamic>{
-        'remoteUrl': result.url,
-        'actualQuality': result.actualQuality,
-        'requestedQuality': preferredQuality,
-        'platform': result.platform,
-        'cacheKey': key,
-        'songId': resolvedSongId,
-      };
-      if (lease != null) {
-        qualityExtras['url'] = lease.playableUri;
+        final qualityExtras = <String, dynamic>{
+          'remoteUrl': result.url,
+          'actualQuality': result.actualQuality,
+          'requestedQuality': preferredQuality,
+          'platform': result.platform,
+          'cacheKey': key,
+          'songId': resolvedSongId,
+          'url': lease.playableUri,
+        };
         return CachedPlayback(lease, qualityExtras);
       }
-      qualityExtras['url'] = result.url;
-      return StreamingPlayback(result.url, qualityExtras);
+      return null;
+    } finally {
+      _generationKeys.remove(gen);
     }
-    return null;
   }
 }
 
