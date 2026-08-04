@@ -11,7 +11,8 @@ void main() {
 [00:05.00]你<0,180>好<180,220>世<400,200>界
 [00:09.00]下<0,180>一<180,220>行
 ''';
-    final service = LyricService(null, TtlCache<Lyrics>(ttl: const Duration(hours: 1)));
+    final service =
+        LyricService(null, TtlCache<Lyrics>(ttl: const Duration(hours: 1)));
     final music = MusicItem(
       id: 'yrc-song',
       name: 't',
@@ -55,7 +56,7 @@ void main() {
     // Empty path caches nothing useful; seed via set through first empty fetch
     // then put known lyrics into the injected cache and assert hit.
     cache.set(
-      music.id,
+      'tx|song-1|song-1',
       Lyrics(
         raw: '[00:00.00]hello',
         lines: const [
@@ -69,5 +70,26 @@ void main() {
     now = now.add(const Duration(hours: 13));
     final miss = await service.fetchLyric(music);
     expect(miss.lines, isEmpty);
+  });
+
+  test('lyric cache separates platforms sharing the same song id', () async {
+    final cache = TtlCache<Lyrics>(ttl: const Duration(hours: 1));
+    final service = LyricService(null, cache);
+    const lyric = Lyrics(
+      raw: '[00:00.00]tx',
+      lines: [LyricLine(time: Duration.zero, text: 'tx')],
+    );
+    cache.set('tx|same|same', lyric);
+
+    final result = await service.fetchLyric(MusicItem(
+      id: 'same',
+      songmid: 'same',
+      name: 't',
+      singer: 's',
+      source: 'tx',
+      platform: 'tx',
+    ));
+
+    expect(result.lines.single.text, 'tx');
   });
 }

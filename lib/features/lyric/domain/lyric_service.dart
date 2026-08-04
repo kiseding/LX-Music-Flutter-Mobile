@@ -15,15 +15,15 @@ class LyricService {
   LyricService([
     this._musicSourceService,
     TtlCache<Lyrics>? cache,
-  ]) : _cache = cache ??
-            TtlCache<Lyrics>(ttl: TtlCache.defaultTtl);
+  ]) : _cache = cache ?? TtlCache<Lyrics>(ttl: TtlCache.defaultTtl);
 
   Future<Lyrics> fetchLyric(MusicItem music) async {
     debugPrint(
         '[LyricService] fetchLyric: ${music.name}, platform=${music.platform}, songmid=${music.songmid}, source=${music.source}');
 
-    final cached = _cache.get(music.id);
-    if (cached != null) {
+    final cacheKey = _cacheKey(music);
+    final cached = _cache.get(cacheKey);
+    if (cached != null && _hasWordTiming(cached)) {
       debugPrint('[LyricService] 命中缓存');
       return cached;
     }
@@ -35,7 +35,7 @@ class LyricService {
         if (response.statusCode == 200 && response.data is String) {
           final lyrics = _parseLyricString(response.data);
           debugPrint('[LyricService] lyricsUrl 获取成功, ${lyrics.lines.length} 行');
-          _cache.set(music.id, lyrics);
+          _cache.set(cacheKey, lyrics);
           return lyrics;
         }
       } catch (e) {
@@ -51,7 +51,7 @@ class LyricService {
           final lyrics = _parseLyricString(lyricStr);
           debugPrint(
               '[LyricService] MusicSourceService 获取成功, ${lyrics.lines.length} 行');
-          _cache.set(music.id, lyrics);
+          _cache.set(cacheKey, lyrics);
           return lyrics;
         } else {
           debugPrint('[LyricService] MusicSourceService 返回空');
@@ -62,8 +62,19 @@ class LyricService {
     }
 
     debugPrint('[LyricService] 所有途径均失败，返回空歌词');
+    if (cached != null) return cached;
     return Lyrics.empty();
   }
+
+  String _cacheKey(MusicItem music) {
+    final platform = music.platform.isNotEmpty ? music.platform : music.source;
+    final songId =
+        music.songmid?.isNotEmpty == true ? music.songmid! : music.id;
+    return '$platform|$songId|${music.id}';
+  }
+
+  bool _hasWordTiming(Lyrics lyrics) =>
+      lyrics.lines.any((line) => line.hasWordTiming);
 
   void clearCache() {
     _cache.clear();
