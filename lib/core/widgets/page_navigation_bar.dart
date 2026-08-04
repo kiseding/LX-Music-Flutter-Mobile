@@ -7,11 +7,13 @@ class PageNavigationBar extends StatelessWidget {
     required this.pageIndex,
     required this.pageCount,
     required this.onPageChanged,
+    this.enabled = true,
   });
 
   final int pageIndex;
   final int pageCount;
   final ValueChanged<int> onPageChanged;
+  final bool enabled;
 
   @override
   Widget build(BuildContext context) {
@@ -36,7 +38,7 @@ class PageNavigationBar extends StatelessWidget {
 
   Widget _buildPageTextButton(BuildContext context) {
     return TextButton(
-      onPressed: () => _showPagePickerDialog(context),
+      onPressed: enabled ? () => _showPagePickerDialog(context) : null,
       style: TextButton.styleFrom(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
         minimumSize: const Size(0, 30),
@@ -54,9 +56,10 @@ class PageNavigationBar extends StatelessWidget {
   }
 
   Widget _buildArrowButton(BuildContext context, {required bool isPrevious}) {
-    final enabled = isPrevious ? pageIndex > 0 : pageIndex + 1 < pageCount;
+    final arrowEnabled =
+        enabled && (isPrevious ? pageIndex > 0 : pageIndex + 1 < pageCount);
     final background = AppColors.fill2(context);
-    final foreground = enabled
+    final foreground = arrowEnabled
         ? AppColors.secondaryText(context)
         : AppColors.mutedText(context).withValues(alpha: 0.5);
     return Container(
@@ -69,7 +72,7 @@ class PageNavigationBar extends StatelessWidget {
       ),
       child: IconButton(
         tooltip: isPrevious ? '上一页' : '下一页',
-        onPressed: enabled
+        onPressed: arrowEnabled
             ? () => onPageChanged(pageIndex + (isPrevious ? -1 : 1))
             : null,
         icon: Icon(

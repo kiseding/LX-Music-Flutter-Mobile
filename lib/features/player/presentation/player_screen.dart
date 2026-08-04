@@ -15,6 +15,7 @@ import 'player_provider.dart';
 import 'scrub_session.dart';
 import '../../playlist/presentation/playlist_provider.dart';
 import '../../playlist/presentation/playlist_picker.dart';
+import '../../playlist/data/playlist_repository.dart';
 import '../../download/presentation/download_provider.dart';
 import '../../lyric/presentation/lyric_view.dart';
 import '../../lyric/presentation/lyric_provider.dart';
@@ -1012,7 +1013,6 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       ),
     );
   }
-
 }
 
 class _PlaybackQueueSheet extends ConsumerStatefulWidget {
@@ -1031,7 +1031,8 @@ class _PlaybackQueueSheet extends ConsumerStatefulWidget {
   final String? lazyPlaylistId;
 
   @override
-  ConsumerState<_PlaybackQueueSheet> createState() => _PlaybackQueueSheetState();
+  ConsumerState<_PlaybackQueueSheet> createState() =>
+      _PlaybackQueueSheetState();
 }
 
 class _PlaybackQueueSheetState extends ConsumerState<_PlaybackQueueSheet> {
@@ -1040,13 +1041,16 @@ class _PlaybackQueueSheetState extends ConsumerState<_PlaybackQueueSheet> {
   late int _pageIndex;
   final ScrollController _queueScrollController = ScrollController();
   int? _focusedPageForScroll;
+  PlaylistSongPage? _displayedPage;
+  int? _displayedPageIndex;
 
   @override
   void initState() {
     super.initState();
     _pageIndex = widget.lazyPlaylistId != null
         ? PageRange.pageForItem(index: _lazyCurrentIndex())
-        : PageRange.pageForItem(index: widget.currentIndex >= 0 ? widget.currentIndex : 0);
+        : PageRange.pageForItem(
+            index: widget.currentIndex >= 0 ? widget.currentIndex : 0);
   }
 
   @override
@@ -1062,7 +1066,8 @@ class _PlaybackQueueSheetState extends ConsumerState<_PlaybackQueueSheet> {
     return widget.currentIndex >= 0 ? widget.currentIndex : 0;
   }
 
-  void _scrollToCurrentIfNeeded(int pageIndex, int currentIndex, int pageStart) {
+  void _scrollToCurrentIfNeeded(
+      int pageIndex, int currentIndex, int pageStart) {
     if (currentIndex < pageStart || _focusedPageForScroll == pageIndex) return;
     final offsetInPage = currentIndex - pageStart;
     _focusedPageForScroll = pageIndex;
@@ -1087,7 +1092,7 @@ class _PlaybackQueueSheetState extends ConsumerState<_PlaybackQueueSheet> {
       }
       final position = _queueScrollController.position;
       final target = (offsetInPage * _queueTileHeight -
-          (position.viewportDimension - _queueTileHeight) / 2)
+              (position.viewportDimension - _queueTileHeight) / 2)
           .clamp(0.0, position.maxScrollExtent);
       _queueScrollController.animateTo(
         target,
@@ -1103,16 +1108,14 @@ class _PlaybackQueueSheetState extends ConsumerState<_PlaybackQueueSheet> {
       await widget.playerService.setQueue(
         widget.queue.map((e) => MusicItem.fromJson(e.extras ?? {})).toList(),
         startIndex: globalIndex,
-        manualPlayName:
-            globalIndex >= 0 && globalIndex < widget.queue.length
+        manualPlayName: globalIndex >= 0 && globalIndex < widget.queue.length
             ? widget.queue[globalIndex].title
             : null,
       );
       return;
     }
     await widget.playerService.playPagedPlaylist(
-      songCount:
-          widget.playerService.currentLazyPlaylistSongCount > 0
+      songCount: widget.playerService.currentLazyPlaylistSongCount > 0
           ? widget.playerService.currentLazyPlaylistSongCount
           : widget.queue.length,
       startIndex: globalIndex,
@@ -1127,10 +1130,112 @@ class _PlaybackQueueSheetState extends ConsumerState<_PlaybackQueueSheet> {
     );
   }
 
+  Widget _buildLazyPage(
+    BuildContext context, {
+    required PlaylistSongPage page,
+    required int pageStart,
+    required PageRange range,
+    required int currentIndex,
+    required double screenHeight,
+    required bool loading,
+  }) {
+    final queueItems = page.songs;
+    _scrollToCurrentIfNeeded(
+      _displayedPageIndex ?? range.pageIndex,
+      currentIndex,
+      pageStart,
+    );
+    final contentHeight = (queueItems.length * _queueTileHeight)
+        .clamp(0.0, screenHeight * 2 / 3)
+        .toDouble();
+    return SizedBox(
+      height: contentHeight,
+      child: Column(
+        children: [
+          Expanded(
+            child: Stack(
+              children: [
+                ListView.builder(
+                  controller: _queueScrollController,
+                  itemCount: queueItems.length,
+                  itemExtent: _queueTileHeight,
+                  itemBuilder: (context, index) {
+                    final item = queueItems[index];
+                    final globalIndex = pageStart + index;
+                    final isPlaying = globalIndex == currentIndex;
+                    return ListTile(
+                      dense: true,
+                      minTileHeight: _queueTileHeight,
+                      leading: isPlaying
+                          ? Icon(Icons.play_arrow,
+                              color: AppColors.accentOf(context))
+                          : Text(
+                              '${globalIndex + 1}',
+                              style: TextStyle(
+                                color: AppColors.mutedText(context),
+                                fontSize: 14,
+                              ),
+                            ),
+                      title: Text(
+                        item.name,
+                        style: TextStyle(
+                          color: isPlaying
+                              ? AppColors.accentOf(context)
+                              : AppColors.onScaffold(context),
+                          fontSize: 14,
+                          fontWeight:
+                              isPlaying ? FontWeight.w600 : FontWeight.normal,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      subtitle: Text(
+                        item.singer,
+                        style: TextStyle(
+                          color: AppColors.mutedText(context),
+                          fontSize: 12,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      onTap: loading
+                          ? null
+                          : () async {
+                              await _playAt(globalIndex);
+                              if (context.mounted) Navigator.pop(context);
+                            },
+                    );
+                  },
+                ),
+                if (loading)
+                  const Positioned(
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    child: LinearProgressIndicator(minHeight: 2),
+                  ),
+              ],
+            ),
+          ),
+          PageNavigationBar(
+            pageIndex: range.pageIndex,
+            pageCount: range.pageCount,
+            enabled: !loading,
+            onPageChanged: (pageIndex) {
+              _focusedPageForScroll = null;
+              setState(() => _pageIndex = pageIndex);
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final playlistId = widget.lazyPlaylistId;
-    final currentIndex = playlistId != null ? _lazyCurrentIndex() : widget.currentIndex;
+    final currentIndex =
+        playlistId != null ? _lazyCurrentIndex() : widget.currentIndex;
     final screenHeight = MediaQuery.of(context).size.height;
 
     if (playlistId != null) {
@@ -1141,7 +1246,8 @@ class _PlaybackQueueSheetState extends ConsumerState<_PlaybackQueueSheet> {
       );
       final songsPage = ref.watch(
         playlistSongsPageProvider(
-          PlaylistSongsPageRequest(playlistId: playlistId, pageIndex: range.pageIndex),
+          PlaylistSongsPageRequest(
+              playlistId: playlistId, pageIndex: range.pageIndex),
         ),
       );
 
@@ -1163,7 +1269,8 @@ class _PlaybackQueueSheetState extends ConsumerState<_PlaybackQueueSheet> {
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               child: Row(
                 children: [
-                  Icon(Icons.queue_music, color: AppColors.accentOf(context), size: 20),
+                  Icon(Icons.queue_music,
+                      color: AppColors.accentOf(context), size: 20),
                   const SizedBox(width: 8),
                   Text(
                     '播放列表 (${range.itemCount})',
@@ -1179,10 +1286,25 @@ class _PlaybackQueueSheetState extends ConsumerState<_PlaybackQueueSheet> {
             Divider(color: AppColors.cardBorder(context), height: 1),
             songsPage.when(
               skipLoadingOnRefresh: true,
-              loading: () => const SizedBox(
-                height: 160,
-                child: Center(child: CircularProgressIndicator()),
-              ),
+              loading: () {
+                final page = _displayedPage;
+                if (page == null) {
+                  return SizedBox(
+                    height: screenHeight * 2 / 3,
+                    child: const Center(child: CircularProgressIndicator()),
+                  );
+                }
+                final displayedIndex = _displayedPageIndex ?? range.pageIndex;
+                return _buildLazyPage(
+                  context,
+                  page: page,
+                  pageStart: displayedIndex * PageRange.defaultPageSize,
+                  range: range,
+                  currentIndex: currentIndex,
+                  screenHeight: screenHeight,
+                  loading: true,
+                );
+              },
               error: (error, stackTrace) => _buildShortQueue(
                 context,
                 currentIndex,
@@ -1193,74 +1315,16 @@ class _PlaybackQueueSheetState extends ConsumerState<_PlaybackQueueSheet> {
                 if (page.songs.isEmpty) {
                   return _buildShortQueue(context, currentIndex, screenHeight);
                 }
-                final queueItems = page.songs;
-                _scrollToCurrentIfNeeded(range.pageIndex, currentIndex, range.start);
-                final contentHeight = (queueItems.length * _queueTileHeight)
-                    .clamp(0.0, screenHeight * 2 / 3)
-                    .toDouble();
-                return SizedBox(
-                  height: contentHeight,
-                  child: Column(
-                    children: [
-                      Expanded(
-                        child: ListView.builder(
-                          itemCount: queueItems.length,
-                          itemExtent: _queueTileHeight,
-                          itemBuilder: (context, index) {
-                            final item = queueItems[index];
-                            final globalIndex = range.start + index;
-                            final isPlaying = globalIndex == currentIndex;
-                            return ListTile(
-                              dense: true,
-                              minTileHeight: _queueTileHeight,
-                              leading: isPlaying
-                                  ? Icon(Icons.play_arrow, color: AppColors.accentOf(context))
-                                  : Text(
-                                      '${globalIndex + 1}',
-                                      style: TextStyle(
-                                        color: AppColors.mutedText(context),
-                                        fontSize: 14,
-                                      ),
-                                    ),
-                              title: Text(
-                                item.name,
-                                style: TextStyle(
-                                  color: isPlaying
-                                      ? AppColors.accentOf(context)
-                                      : AppColors.onScaffold(context),
-                                  fontSize: 14,
-                                  fontWeight: isPlaying ? FontWeight.w600 : FontWeight.normal,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              subtitle: Text(
-                                item.singer,
-                                style: TextStyle(
-                                  color: AppColors.mutedText(context),
-                                  fontSize: 12,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              onTap: () async {
-                                await _playAt(globalIndex);
-                                if (context.mounted) Navigator.pop(context);
-                              },
-                            );
-                          },
-                        ),
-                      ),
-                      PageNavigationBar(
-                        pageIndex: range.pageIndex,
-                        pageCount: range.pageCount,
-                        onPageChanged: (pageIndex) {
-                          _focusedPageForScroll = null;
-                          setState(() => _pageIndex = pageIndex);
-                        },
-                      ),
-                    ],
-                  ),
+                _displayedPage = page;
+                _displayedPageIndex = range.pageIndex;
+                return _buildLazyPage(
+                  context,
+                  page: page,
+                  pageStart: range.start,
+                  range: range,
+                  currentIndex: currentIndex,
+                  screenHeight: screenHeight,
+                  loading: false,
                 );
               },
             ),
@@ -1285,9 +1349,10 @@ class _PlaybackQueueSheetState extends ConsumerState<_PlaybackQueueSheet> {
     final queue = pageSlice(widget.queue, range);
     _scrollToCurrentIfNeeded(range.pageIndex, currentIndex, range.start);
     final hasMultiplePages = range.pageCount > 1;
-    final contentHeight = (queue.length * _queueTileHeight + (hasMultiplePages ? 24.0 : 0.0))
-        .clamp(0.0, screenHeight * 2 / 3)
-        .toDouble();
+    final contentHeight =
+        (queue.length * _queueTileHeight + (hasMultiplePages ? 24.0 : 0.0))
+            .clamp(0.0, screenHeight * 2 / 3)
+            .toDouble();
 
     return SafeArea(
       bottom: false,
@@ -1307,7 +1372,8 @@ class _PlaybackQueueSheetState extends ConsumerState<_PlaybackQueueSheet> {
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: Row(
               children: [
-                Icon(Icons.queue_music, color: AppColors.accentOf(context), size: 20),
+                Icon(Icons.queue_music,
+                    color: AppColors.accentOf(context), size: 20),
                 const SizedBox(width: 8),
                 Text(
                   '播放列表 (${widget.queue.length})',
@@ -1326,7 +1392,8 @@ class _PlaybackQueueSheetState extends ConsumerState<_PlaybackQueueSheet> {
               padding: const EdgeInsets.all(32),
               child: Text(
                 fallbackReason == null ? '播放列表为空' : '完整列表加载失败，显示当前队列',
-                style: TextStyle(color: AppColors.mutedText(context), fontSize: 14),
+                style: TextStyle(
+                    color: AppColors.mutedText(context), fontSize: 14),
               ),
             )
           else
@@ -1346,7 +1413,8 @@ class _PlaybackQueueSheetState extends ConsumerState<_PlaybackQueueSheet> {
                           dense: true,
                           minTileHeight: _queueTileHeight,
                           leading: isPlaying
-                              ? Icon(Icons.play_arrow, color: AppColors.accentOf(context))
+                              ? Icon(Icons.play_arrow,
+                                  color: AppColors.accentOf(context))
                               : Text(
                                   '${queueIndex + 1}',
                                   style: TextStyle(
@@ -1361,7 +1429,9 @@ class _PlaybackQueueSheetState extends ConsumerState<_PlaybackQueueSheet> {
                                   ? AppColors.accentOf(context)
                                   : AppColors.onScaffold(context),
                               fontSize: 14,
-                              fontWeight: isPlaying ? FontWeight.w600 : FontWeight.normal,
+                              fontWeight: isPlaying
+                                  ? FontWeight.w600
+                                  : FontWeight.normal,
                             ),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
