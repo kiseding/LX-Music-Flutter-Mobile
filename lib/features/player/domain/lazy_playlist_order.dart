@@ -9,11 +9,11 @@ final class LazyPlaylistOrder {
     required bool shuffle,
     Random? random,
   }) : _indices = _buildIndices(
-         length: length,
-         initialIndex: initialIndex,
-         shuffle: shuffle,
-         random: random ?? Random(),
-       );
+          length: length,
+          initialIndex: initialIndex,
+          shuffle: shuffle,
+          random: random ?? Random(),
+        );
 
   final List<int> _indices;
   int _cursor = 0;
@@ -61,9 +61,9 @@ final class LazyPlaylistWindow {
     this.pageSize = 100,
     this.maxCachedPages = 4,
     Random? random,
-  }) : assert(pageSize > 0),
-       assert(maxCachedPages > 0),
-       _random = random ?? Random() {
+  })  : assert(pageSize > 0),
+        assert(maxCachedPages > 0),
+        _random = random ?? Random() {
     _restart(
       initialIndex: initialIndex,
       shuffle: shuffle,
@@ -151,9 +151,7 @@ final class LazyPlaylistWindow {
   Future<MusicItem> _songAt(int index) async {
     final offset = (index ~/ pageSize) * pageSize;
     var page = _pages.remove(offset);
-    if (page == null) {
-      page = await loadPage(offset, pageSize);
-    }
+    page ??= await loadPage(offset, pageSize);
     _pages[offset] = page;
     while (_pages.length > maxCachedPages) {
       _pages.remove(_pages.keys.first);

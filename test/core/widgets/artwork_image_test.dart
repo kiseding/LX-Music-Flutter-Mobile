@@ -208,6 +208,7 @@ class _FakeHttpClientRequest implements HttpClientRequest {
   });
 
   final int statusCode;
+  @override
   final int contentLength;
   final List<List<int>> chunks;
   final _FakeHttpHeaders _headers = _FakeHttpHeaders();

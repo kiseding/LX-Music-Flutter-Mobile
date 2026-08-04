@@ -30,7 +30,7 @@ void main() {
       expect(border, isA<OutlineInputBorder>());
       final side = (border as OutlineInputBorder).borderSide;
       expect(side.style, isNot(BorderStyle.none));
-      expect(side.color.alpha, greaterThan(0));
+      expect(side.color.a, greaterThan(0));
     });
   });
 }

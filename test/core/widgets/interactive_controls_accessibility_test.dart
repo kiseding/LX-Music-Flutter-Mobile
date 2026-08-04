@@ -1,5 +1,6 @@
+import 'dart:ui' show Tristate;
+
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lx_music_flutter/core/widgets/play_pulse_button.dart';
@@ -18,7 +19,7 @@ void main() {
     ))));
 
     final semantics = tester.getSemantics(find.bySemanticsLabel('下一首'));
-    expect(semantics.hasFlag(SemanticsFlag.isButton), isTrue);
+    expect(semantics.flagsCollection.isButton, isTrue);
     await tester.tap(find.bySemanticsLabel('下一首'));
     await tester.pump();
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
@@ -36,8 +37,8 @@ void main() {
     ))));
 
     final semantics = tester.getSemantics(find.bySemanticsLabel('暂停'));
-    expect(semantics.hasFlag(SemanticsFlag.isButton), isTrue);
-    expect(semantics.hasFlag(SemanticsFlag.isToggled), isTrue);
+    expect(semantics.flagsCollection.isButton, isTrue);
+    expect(semantics.flagsCollection.isToggled, Tristate.isTrue);
     await tester.tap(find.bySemanticsLabel('暂停'));
     await tester.pump();
     await tester.sendKeyEvent(LogicalKeyboardKey.space);

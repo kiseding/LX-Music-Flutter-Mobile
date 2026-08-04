@@ -25,20 +25,13 @@ void main() {
     test('搜索', () async {
       final results = await source.search('周杰伦', page: 1, limit: 3);
       expect(results, isNotEmpty);
-      print('KW 搜索: ${results.length} 条');
-      final item = results.first;
-      print('  首条: ${item.name} - ${item.singer} (id: ${item.id})');
     });
 
     test('歌词', () async {
       final results = await source.search('周杰伦', page: 1, limit: 1);
       if (results.isNotEmpty) {
         final lyric = await source.getLyric(results.first);
-        if (lyric != null) {
-          print('KW 歌词: ${lyric.substring(0, lyric.length > 100 ? 100 : lyric.length)}...');
-        } else {
-          print('KW 歌词: null');
-        }
+        if (lyric != null) {}
       }
     });
   });
@@ -51,20 +44,13 @@ void main() {
     test('搜索', () async {
       final results = await source.search('周杰伦', page: 1, limit: 3);
       expect(results, isNotEmpty);
-      print('TX 搜索: ${results.length} 条');
-      final item = results.first;
-      print('  首条: ${item.name} - ${item.singer} (id: ${item.id})');
     });
 
     test('歌词', () async {
       final results = await source.search('周杰伦', page: 1, limit: 1);
       if (results.isNotEmpty) {
         final lyric = await source.getLyric(results.first);
-        if (lyric != null) {
-          print('TX 歌词: ${lyric.substring(0, lyric.length > 100 ? 100 : lyric.length)}...');
-        } else {
-          print('TX 歌词: null');
-        }
+        if (lyric != null) {}
       }
     });
   });
@@ -77,20 +63,13 @@ void main() {
     test('搜索', () async {
       final results = await source.search('周杰伦', page: 1, limit: 3);
       expect(results, isNotEmpty);
-      print('WY 搜索: ${results.length} 条');
-      final item = results.first;
-      print('  首条: ${item.name} - ${item.singer} (id: ${item.id})');
     });
 
     test('歌词', () async {
       final results = await source.search('周杰伦', page: 1, limit: 1);
       if (results.isNotEmpty) {
         final lyric = await source.getLyric(results.first);
-        if (lyric != null) {
-          print('WY 歌词: ${lyric.substring(0, lyric.length > 100 ? 100 : lyric.length)}...');
-        } else {
-          print('WY 歌词: null');
-        }
+        if (lyric != null) {}
       }
     });
   });

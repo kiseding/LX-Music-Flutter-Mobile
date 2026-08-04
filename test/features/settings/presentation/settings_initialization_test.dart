@@ -10,7 +10,8 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   test('late theme load cannot overwrite a user mutation', () async {
-    SharedPreferences.setMockInitialValues({'theme_mode': ThemeMode.dark.index});
+    SharedPreferences.setMockInitialValues(
+        {'theme_mode': ThemeMode.dark.index});
     final gate = Completer<StorageService>();
     final notifier = ThemeModeNotifier(storage: () => gate.future);
 
@@ -25,7 +26,9 @@ void main() {
   });
 
   test('late history load cannot resurrect entries after clear', () async {
-    SharedPreferences.setMockInitialValues({'search_history': ['old']});
+    SharedPreferences.setMockInitialValues({
+      'search_history': ['old']
+    });
     final gate = Completer<StorageService>();
     final notifier = SearchHistoryNotifier(storage: () => gate.future);
 
@@ -39,7 +42,8 @@ void main() {
     expect(prefs.getStringList('search_history'), isEmpty);
   });
 
-  test('late settings loads cannot overwrite public setter mutations', () async {
+  test('late settings loads cannot overwrite public setter mutations',
+      () async {
     SharedPreferences.setMockInitialValues({
       'audio_quality': AudioQualityOption.low.index,
       'download_quality': AudioQualityOption.low.index,
@@ -55,7 +59,7 @@ void main() {
       'platform',
     ]) {
       final gate = Completer<StorageService>();
-      final StorageLoader loader = () => gate.future;
+      Future<StorageService> loader() => gate.future;
       late final Object? Function() readState;
       late final Future<void> mutation;
       late final Object expected;
@@ -100,7 +104,8 @@ void main() {
   });
 
   test('failed load does not overwrite a user mutation', () async {
-    SharedPreferences.setMockInitialValues({'theme_mode': ThemeMode.dark.index});
+    SharedPreferences.setMockInitialValues(
+        {'theme_mode': ThemeMode.dark.index});
     final prefs = await SharedPreferences.getInstance();
     final loadReady = Completer<void>();
     var calls = 0;
@@ -248,7 +253,9 @@ void main() {
   });
 
   test('failed history load does not overwrite clear mutation', () async {
-    SharedPreferences.setMockInitialValues({'search_history': ['old']});
+    SharedPreferences.setMockInitialValues({
+      'search_history': ['old']
+    });
     final prefs = await SharedPreferences.getInstance();
     final loadReady = Completer<void>();
     var calls = 0;
@@ -271,7 +278,8 @@ void main() {
   });
 
   test('applyCommitted updates memory and blocks late load', () async {
-    SharedPreferences.setMockInitialValues({'theme_mode': ThemeMode.dark.index});
+    SharedPreferences.setMockInitialValues(
+        {'theme_mode': ThemeMode.dark.index});
     final gate = Completer<StorageService>();
     final notifier = ThemeModeNotifier(storage: () => gate.future);
 

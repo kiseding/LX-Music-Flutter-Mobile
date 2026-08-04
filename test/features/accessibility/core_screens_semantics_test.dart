@@ -1,7 +1,8 @@
 import 'dart:io';
 
+import 'dart:ui' show Tristate;
+
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lx_music_flutter/core/widgets/pressable.dart';
@@ -20,8 +21,8 @@ void main() {
     ))));
 
     final node = tester.getSemantics(find.bySemanticsLabel('歌单'));
-    expect(node.hasFlag(SemanticsFlag.isButton), isTrue);
-    expect(node.hasFlag(SemanticsFlag.isSelected), isTrue);
+    expect(node.flagsCollection.isButton, isTrue);
+    expect(node.flagsCollection.isSelected, Tristate.isTrue);
     await tester.tap(find.bySemanticsLabel('歌单'));
     await tester.pump();
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
@@ -45,7 +46,7 @@ void main() {
       ),
     ))));
     final node = tester.getSemantics(find.byType(Switch));
-    expect(node.hasFlag(SemanticsFlag.hasToggledState), isTrue);
+    expect(node.flagsCollection.isToggled, isNot(Tristate.none));
     await tester.tap(find.byType(Switch));
     await tester.pump();
     expect(value, isTrue);

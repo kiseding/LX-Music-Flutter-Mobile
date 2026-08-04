@@ -9,7 +9,8 @@ abstract final class AppTheme {
       brightness: Brightness.dark,
       scaffoldBackgroundColor: AppColors.bg,
       canvasColor: AppColors.bg,
-      dialogBackgroundColor: AppColors.surfaceDark,
+      dialogTheme:
+          const DialogThemeData(backgroundColor: AppColors.surfaceDark),
       colorScheme: const ColorScheme.dark(
         primary: AppColors.amber,
         onPrimary: Color(0xFF000000),
@@ -111,7 +112,8 @@ abstract final class AppTheme {
       brightness: Brightness.light,
       scaffoldBackgroundColor: AppColors.lightBg,
       canvasColor: AppColors.lightBg,
-      dialogBackgroundColor: AppColors.lightSurface,
+      dialogTheme:
+          const DialogThemeData(backgroundColor: AppColors.lightSurface),
       colorScheme: const ColorScheme.light(
         primary: AppColors.lightAccent,
         onPrimary: Color(0xFFFFFFFF),

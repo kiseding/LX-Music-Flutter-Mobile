@@ -517,12 +517,9 @@ class _DownloadScreenState extends ConsumerState<DownloadScreen> {
     }).toList();
 
     final currentIndex = completedTasks.indexWhere((t) => t.id == task.id);
-    ref
-        .read(playerServiceProvider)
-        .setQueue(items,
-            startIndex: currentIndex >= 0 ? currentIndex : 0,
-            manualPlayName:
-                currentIndex >= 0 ? items[currentIndex].name : null);
+    ref.read(playerServiceProvider).setQueue(items,
+        startIndex: currentIndex >= 0 ? currentIndex : 0,
+        manualPlayName: currentIndex >= 0 ? items[currentIndex].name : null);
   }
 
   void _pauseAll(WidgetRef ref) {
@@ -574,8 +571,9 @@ class _DownloadScreenState extends ConsumerState<DownloadScreen> {
   String _formatSpeed(int bytesPerSecond) {
     if (bytesPerSecond <= 0) return '0 B/s';
     if (bytesPerSecond < 1024) return '$bytesPerSecond B/s';
-    if (bytesPerSecond < 1024 * 1024)
+    if (bytesPerSecond < 1024 * 1024) {
       return '${(bytesPerSecond / 1024).toStringAsFixed(1)} KB/s';
+    }
     return '${(bytesPerSecond / (1024 * 1024)).toStringAsFixed(1)} MB/s';
   }
 

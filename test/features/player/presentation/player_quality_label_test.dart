@@ -12,7 +12,7 @@ void main() {
     final actual = extras['actualQuality']?.toString();
     expect(actual, '320k');
     expect(qualityLabel(actual!), '320kbps');
-    expect(qualityLabel(actual!), isNot(qualityLabel('flac')));
+    expect(qualityLabel(actual), isNot(qualityLabel('flac')));
   });
 
   test('falls back to remoteUrl inference when actualQuality missing', () {

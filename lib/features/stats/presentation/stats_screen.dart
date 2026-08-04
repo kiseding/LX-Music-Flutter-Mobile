@@ -82,16 +82,15 @@ class _StatsScreenState extends ConsumerState<StatsScreen> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.bar_chart,
-              size: 56, color: AppColors.mutedText(context)),
+          Icon(Icons.bar_chart, size: 56, color: AppColors.mutedText(context)),
           const SizedBox(height: 12),
           Text('暂无播放数据',
-              style: TextStyle(
-                  color: AppColors.mutedText(context), fontSize: 14)),
+              style:
+                  TextStyle(color: AppColors.mutedText(context), fontSize: 14)),
           const SizedBox(height: 4),
           Text('多听几首歌，这里会生成你的听歌报告',
-              style: TextStyle(
-                  color: AppColors.mutedText(context), fontSize: 12)),
+              style:
+                  TextStyle(color: AppColors.mutedText(context), fontSize: 12)),
         ],
       ),
     );
@@ -104,8 +103,7 @@ class _StatsScreenState extends ConsumerState<StatsScreen> {
           if (range != StatsRange.values.first) const SizedBox(width: 8),
           Expanded(
             child: ChoiceChip(
-              label: Text(range.label,
-                  style: TextStyle(fontSize: 13)),
+              label: Text(range.label, style: TextStyle(fontSize: 13)),
               selected: _range == range,
               onSelected: (_) => setState(() => _range = range),
               selectedColor: Theme.of(context).colorScheme.primaryContainer,
@@ -117,8 +115,12 @@ class _StatsScreenState extends ConsumerState<StatsScreen> {
   }
 
   Widget _buildSummaryCards(
-      ({int totalPlays, double totalSec, int activeDays, int uniqueSongs})
-          summary) {
+      ({
+        int totalPlays,
+        double totalSec,
+        int activeDays,
+        int uniqueSongs
+      }) summary) {
     return Row(
       children: [
         _summaryCard('播放次数', '${summary.totalPlays}'),
@@ -151,8 +153,7 @@ class _StatsScreenState extends ConsumerState<StatsScreen> {
             const SizedBox(height: 2),
             Text(label,
                 style: TextStyle(
-                    fontSize: 10,
-                    color: AppColors.mutedText(context))),
+                    fontSize: 10, color: AppColors.mutedText(context))),
           ],
         ),
       ),
@@ -192,15 +193,13 @@ class _StatsScreenState extends ConsumerState<StatsScreen> {
                         decoration: BoxDecoration(
                           color: count == 0
                               ? AppColors.fill(context)
-                              : AppColors.accentOf(context)
-                                  .withValues(alpha: 0.35 + 0.65 * (count / maxCount)),
+                              : AppColors.accentOf(context).withValues(
+                                  alpha: 0.35 + 0.65 * (count / maxCount)),
                           borderRadius: BorderRadius.vertical(
                             top: Radius.circular(3),
                           ),
                         ),
-                        height: count == 0
-                            ? 4
-                            : 8 + 44 * (count / maxCount),
+                        height: count == 0 ? 4 : 8 + 44 * (count / maxCount),
                       ),
                     ),
                   ),
@@ -209,9 +208,8 @@ class _StatsScreenState extends ConsumerState<StatsScreen> {
           ),
           const SizedBox(height: 6),
           Text(
-            '${days.length} 天 · 峰值 ${maxCount} 次',
-            style: TextStyle(
-                fontSize: 10, color: AppColors.mutedText(context)),
+            '${days.length} 天 · 峰值 $maxCount 次',
+            style: TextStyle(fontSize: 10, color: AppColors.mutedText(context)),
           ),
         ],
       ),
@@ -290,8 +288,7 @@ class _StatsScreenState extends ConsumerState<StatsScreen> {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                        fontSize: 13,
-                        color: AppColors.onScaffold(context))),
+                        fontSize: 13, color: AppColors.onScaffold(context))),
                 subtitle: Text(
                   '${item.subtitle} · ${item.playCount}次',
                   maxLines: 1,

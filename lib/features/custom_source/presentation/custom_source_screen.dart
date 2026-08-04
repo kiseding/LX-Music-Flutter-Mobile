@@ -16,8 +16,7 @@ class CustomSourceScreen extends ConsumerStatefulWidget {
   const CustomSourceScreen({super.key});
 
   @override
-  ConsumerState<CustomSourceScreen> createState() =>
-      _CustomSourceScreenState();
+  ConsumerState<CustomSourceScreen> createState() => _CustomSourceScreenState();
 }
 
 class _CustomSourceScreenState extends ConsumerState<CustomSourceScreen> {
@@ -149,6 +148,7 @@ class _CustomSourceScreenState extends ConsumerState<CustomSourceScreen> {
                   value: source.isEnabled,
                   activeThumbColor: AppColors.accentOf(context),
                   onChanged: (value) async {
+                    final messenger = ScaffoldMessenger.of(context);
                     setState(() => _initializingSources.add(source.id));
                     bool ok = true;
                     try {
@@ -157,12 +157,11 @@ class _CustomSourceScreenState extends ConsumerState<CustomSourceScreen> {
                           .toggleSource(source.id);
                     } finally {
                       if (mounted) {
-                        setState(
-                            () => _initializingSources.remove(source.id));
+                        setState(() => _initializingSources.remove(source.id));
                       }
                     }
                     if (!ok && mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
+                      messenger.showSnackBar(
                         SnackBar(
                           content: Text('${source.name} 初始化失败，请检查脚本'),
                           duration: const Duration(seconds: 3),
@@ -382,14 +381,16 @@ class _CustomSourceScreenState extends ConsumerState<CustomSourceScreen> {
             }
 
             setState(() => isLoading = true);
-            final success = await ref
-                .read(importCustomSourceFromUrlProvider)(url);
+            final success =
+                await ref.read(importCustomSourceFromUrlProvider)(url);
             if (!dialogContext.mounted || !pageContext.mounted) return;
             setState(() => isLoading = false);
             Navigator.pop(dialogContext);
             showAppNotification(
               success ? '导入成功' : '导入失败，请检查链接或脚本格式',
-              type: success ? AppNotificationType.success : AppNotificationType.error,
+              type: success
+                  ? AppNotificationType.success
+                  : AppNotificationType.error,
             );
           }
 
@@ -443,13 +444,15 @@ class _CustomSourceScreenState extends ConsumerState<CustomSourceScreen> {
                 onPressed:
                     isLoading ? null : () => Navigator.pop(dialogContext),
                 child: Text('取消',
-                    style: TextStyle(color: AppColors.mutedText(dialogContext))),
+                    style:
+                        TextStyle(color: AppColors.mutedText(dialogContext))),
               ),
               TextButton(
                 onPressed: isLoading
                     ? null
                     : () async {
-                        final content = await Clipboard.getData(Clipboard.kTextPlain);
+                        final content =
+                            await Clipboard.getData(Clipboard.kTextPlain);
                         if (!dialogContext.mounted) return;
                         final url = content?.text?.trim() ?? '';
                         if (url.isEmpty) {
@@ -466,9 +469,8 @@ class _CustomSourceScreenState extends ConsumerState<CustomSourceScreen> {
                     style: TextStyle(color: AppColors.accentOf(dialogContext))),
               ),
               TextButton(
-                onPressed: isLoading
-                    ? null
-                    : () => importUrl(controller.text.trim()),
+                onPressed:
+                    isLoading ? null : () => importUrl(controller.text.trim()),
                 child: Text('导入',
                     style: TextStyle(color: AppColors.accentOf(dialogContext))),
               ),
@@ -589,7 +591,7 @@ class _CustomSourceScreenState extends ConsumerState<CustomSourceScreen> {
         backgroundColor: AppColors.dialogBg(context),
         title: Text('导出自定义源',
             style: TextStyle(color: AppColors.onScaffold(context))),
-        content: Container(
+        content: SizedBox(
           width: double.maxFinite,
           child: SingleChildScrollView(
             child: Text(

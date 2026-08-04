@@ -50,9 +50,9 @@ final defaultSearchPlatformProvider =
 // ---- Notifiers ----
 
 abstract class _PersistedSettingNotifier<T> extends StateNotifier<T> {
-  _PersistedSettingNotifier(T initialState, {StorageLoader? storage})
+  _PersistedSettingNotifier(super.initialState, {StorageLoader? storage})
       : _storage = storage ?? (() => StorageService.instance),
-        super(initialState);
+        super();
 
   final StorageLoader _storage;
   int _generation = 0;
@@ -126,7 +126,7 @@ class AudioQualityNotifier
   AudioQualityNotifier({
     StorageLoader? storage,
     Future<void> Function(String quality)? applyPreferredQuality,
-  }) : _applyPreferredQuality =
+  })  : _applyPreferredQuality =
             applyPreferredQuality ?? _applyPreferredQualityToHandler,
         super(AudioQualityOption.high, storage: storage) {
     _load((storage) {

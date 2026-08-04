@@ -88,9 +88,8 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
 
   Future<void> _loadFocusPage(Playlist playlist, String focusId) async {
     try {
-      final songs = await ref
-          .read(playlistServiceProvider)
-          .getAllSongs(playlist.id);
+      final songs =
+          await ref.read(playlistServiceProvider).getAllSongs(playlist.id);
       final index = songs.indexWhere((song) => song.id == focusId);
       if (!mounted || index < 0) return;
       setState(() => _pageIndex = PageRange.pageForItem(index: index));
@@ -215,9 +214,7 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
               TextButton(
                 onPressed: () async {
                   try {
-                    await ref
-                        .read(playlistServiceProvider)
-                        .updatePlaylist(
+                    await ref.read(playlistServiceProvider).updatePlaylist(
                           id: playlist.id,
                           songs: _reorderedSongs
                               .map((entry) => entry.song)
@@ -354,19 +351,20 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                 ),
               )
             : _isEditing
-            ? _buildEditableList(playlist)
-            : songsPage!.when(
-                skipLoadingOnRefresh: true,
-                data: (page) => _buildNormalList(
-                  playerService,
-                  playlist,
-                  page.songs,
-                  range,
-                  focusId,
-                ),
-                loading: () => const Center(child: CircularProgressIndicator()),
-                error: (error, _) => Center(child: Text('加载歌曲失败: $error')),
-              ),
+                ? _buildEditableList(playlist)
+                : songsPage!.when(
+                    skipLoadingOnRefresh: true,
+                    data: (page) => _buildNormalList(
+                      playerService,
+                      playlist,
+                      page.songs,
+                      range,
+                      focusId,
+                    ),
+                    loading: () =>
+                        const Center(child: CircularProgressIndicator()),
+                    error: (error, _) => Center(child: Text('加载歌曲失败: $error')),
+                  ),
       ),
     );
   }
@@ -379,9 +377,8 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
         Expanded(
           child: ReorderableListView.builder(
             itemCount: songs.length,
-            onReorder: (oldIndex, newIndex) {
+            onReorderItem: (oldIndex, newIndex) {
               setState(() {
-                if (newIndex > oldIndex) newIndex -= 1;
                 final item = _reorderedSongs.removeAt(range.start + oldIndex);
                 _reorderedSongs.insert(range.start + newIndex, item);
               });
@@ -433,9 +430,8 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
               final songIndex = range.start + index;
               final focused = focusId != null && song.id == focusId;
               return Container(
-                color: focused
-                    ? AppColors.accentOf(context).withAlpha(28)
-                    : null,
+                color:
+                    focused ? AppColors.accentOf(context).withAlpha(28) : null,
                 child: ListTile(
                   onTap: () => _playSong(playerService, playlist, songIndex),
                   leading: ClipRRect(
@@ -604,9 +600,7 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
           TextButton(
             onPressed: () async {
               try {
-                await ref
-                    .read(playlistServiceProvider)
-                    .updatePlaylist(
+                await ref.read(playlistServiceProvider).updatePlaylist(
                       id: playlist.id,
                       name: nameController.text,
                       description: descController.text,
