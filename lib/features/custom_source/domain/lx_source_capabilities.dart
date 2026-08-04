@@ -30,6 +30,34 @@ class LxSourceCapabilities {
     return qs.contains(quality.toLowerCase());
   }
 
+  /// Returns the best quality this source actually declares for a request.
+  /// A source may expose only lossy formats while the app preference is FLAC.
+  String? effectiveQuality(String source, String action, String requested) {
+    final platform = source.toLowerCase();
+    if (_actions[platform]?.contains(action) != true) return null;
+    if (action != 'musicUrl') return requested;
+    final declared = _qualities[platform];
+    if (declared == null || declared.isEmpty || declared.contains(requested)) {
+      return requested;
+    }
+    const order = [
+      'hires',
+      'flac24bit',
+      'flac',
+      '320k',
+      '192k',
+      '128k',
+    ];
+    final requestedIndex = order.indexOf(requested);
+    final candidates = order.where(declared.contains).toList(growable: false);
+    if (candidates.isEmpty) return null;
+    if (requestedIndex < 0) return candidates.first;
+    final atOrBelow = candidates
+        .where((quality) => order.indexOf(quality) >= requestedIndex)
+        .toList(growable: false);
+    return atOrBelow.isNotEmpty ? atOrBelow.first : candidates.last;
+  }
+
   static LxSourceCapabilities fromInitData(dynamic data) {
     final actions = <String, Set<String>>{};
     final qualities = <String, Set<String>>{};

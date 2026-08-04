@@ -68,10 +68,10 @@ void main() {
         contains("const platforms = {'kw', 'tx', 'wy', 'kg', 'mg', 'local'}"));
     expect(bridge, contains("return '';"));
     expect(bridge, contains('maximumRedirects: 10'));
-    expect(bridge, contains('_supportsAction'));
     expect(bridge, contains('_validateCapabilities'));
     expect(bridge, contains("'type': 'diagnostic'"));
     expect(bridge, contains("'capability_rejected'"));
+    expect(bridge, contains("'quality_downgraded'"));
     expect(bridge, contains("'empty_result'"));
     expect(bridge, contains("'invalid_result'"));
     expect(bridge, contains("'http_error_response'"));

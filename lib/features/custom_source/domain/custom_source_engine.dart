@@ -925,11 +925,6 @@ class CustomSourceEngine {
     return true;
   }
 
-  bool _supportsAction(String platform, String action, [String? quality]) {
-    return !LxSourceCapabilities.requiresDeclaration(action) ||
-        _capabilities.supports(platform, action, quality);
-  }
-
   void _handleLxSend(Map<String, dynamic> data) {
     final String? event = data['event']?.toString();
     if (event == 'inited' && _validateCapabilities(data['data'])) {
@@ -1240,19 +1235,45 @@ class CustomSourceEngine {
       return null;
     }
     final source = params['source']?.toString() ?? '';
-    final quality = params['info'] is Map
+    final requestedQuality = params['info'] is Map
         ? (params['info'] as Map)['type']?.toString()
         : null;
-    if (!_supportsAction(source, action.toString(), quality)) {
+    if (!_capabilities.supports(source, action.toString())) {
       _emitDiagnostic('capability_rejected', {
         'action': action,
         'platform': source,
-        'quality': quality,
+        'quality': requestedQuality,
+      });
+      return null;
+    }
+    final quality = requestedQuality == null
+        ? null
+        : _capabilities.effectiveQuality(
+            source, action.toString(), requestedQuality.toLowerCase());
+    if (quality == null && requestedQuality != null) {
+      _emitDiagnostic('capability_rejected', {
+        'action': action,
+        'platform': source,
+        'quality': requestedQuality,
       });
       // 能力拒绝是正常回退路径：源未声明 lyric/pic/musicUrl 时直接返回 null，
       // MusicSourceService 会回退到内置源或其它自定义源。不冒充为错误事件，
       // 否则 UI 会刷出“Source does not support lyric for …”红字噪音。
       return null;
+    }
+
+    if (requestedQuality != null && quality != requestedQuality) {
+      final info = params['info'];
+      if (info is Map) {
+        info['type'] = quality;
+        info['quality'] = quality;
+      }
+      _emitDiagnostic('quality_downgraded', {
+        'action': action,
+        'platform': source,
+        'requestedQuality': requestedQuality,
+        'effectiveQuality': quality,
+      });
     }
 
     final String reqId =

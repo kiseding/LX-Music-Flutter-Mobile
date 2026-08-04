@@ -33,6 +33,21 @@ void main() {
     expect(capabilities.supports('tx', 'musicUrl', '320k'), isTrue);
   });
 
+  test('effectiveQuality falls back to the best declared quality', () {
+    final capabilities = LxSourceCapabilities.fromInitData({
+      'sources': {
+        'tx': {
+          'actions': ['musicUrl'],
+          'qualitys': ['128k', '320k'],
+        },
+      },
+    });
+
+    expect(capabilities.effectiveQuality('tx', 'musicUrl', 'flac'), '320k');
+    expect(capabilities.effectiveQuality('tx', 'musicUrl', '192k'), '128k');
+    expect(capabilities.effectiveQuality('tx', 'musicUrl', '128k'), '128k');
+  });
+
   test('only media retrieval actions require a capability declaration', () {
     expect(LxSourceCapabilities.requiresDeclaration('musicUrl'), isTrue);
     expect(LxSourceCapabilities.requiresDeclaration('lyric'), isTrue);
