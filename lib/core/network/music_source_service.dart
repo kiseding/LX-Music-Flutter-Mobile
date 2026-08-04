@@ -491,6 +491,20 @@ class MusicSourceService {
     debugPrint(
         '[MusicSourceService] getLyric: platform=${music.platform}, source=${music.source}, songmid=${music.songmid}');
 
+    final platform = music.platform.isNotEmpty ? music.platform : music.source;
+    if (platform.isNotEmpty && platform != 'custom' && platform != 'test') {
+      // Built-in platform lyrics include QQ QRC/YRC word timing. Prefer them
+      // over a custom source's plain LRC so an enabled source cannot silently
+      // remove the platform's word-by-word rendering.
+      debugPrint('[MusicSourceService] 尝试内置源 platform=$platform');
+      final lyric = await _builtInSources.getLyric(platform, music);
+      if (lyric != null && lyric.isNotEmpty) {
+        debugPrint('[MusicSourceService] 内置源 $platform 返回歌词');
+        return lyric;
+      }
+      debugPrint('[MusicSourceService] 内置源 $platform 返回空');
+    }
+
     final enabledSources = _customSourceService.enabledSources;
     if (enabledSources.isNotEmpty) {
       debugPrint('[MusicSourceService] 尝试 ${enabledSources.length} 个自定义源');
@@ -505,17 +519,6 @@ class MusicSourceService {
         debugPrint('[MusicSourceService] 自定义源 ${source.id} 返回歌词');
         return lyric;
       }
-    }
-
-    final platform = music.platform.isNotEmpty ? music.platform : music.source;
-    debugPrint('[MusicSourceService] 尝试内置源 platform=$platform');
-    if (platform.isNotEmpty && platform != 'custom' && platform != 'test') {
-      final lyric = await _builtInSources.getLyric(platform, music);
-      if (lyric != null && lyric.isNotEmpty) {
-        debugPrint('[MusicSourceService] 内置源 $platform 返回歌词');
-        return lyric;
-      }
-      debugPrint('[MusicSourceService] 内置源 $platform 返回空');
     }
 
     for (final pid in _builtInSources.allIds) {

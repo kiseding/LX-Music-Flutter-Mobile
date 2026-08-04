@@ -53,18 +53,26 @@ class LyricNotifier extends StateNotifier<LyricLoadState> {
   final LyricLoader _load;
   int _generation = 0;
   MusicItem? _selectedMusic;
-  String? _selectedSongId;
+  String? _selectedLyricId;
+
+  String _lyricId(MusicItem music) {
+    final platform = music.platform.isNotEmpty ? music.platform : music.source;
+    final songId =
+        music.songmid?.isNotEmpty == true ? music.songmid! : music.id;
+    return '$platform|$songId|${music.id}';
+  }
 
   Future<void> select(MusicItem? music) async {
     // 同一首歌的元数据刷新（如封面下载后 patchQueueArtUri 触发 mediaItem
     // 变化）不应清空并重新加载歌词，否则逐字歌词会在播放中突然消失。
-    if (music?.id == _selectedSongId && state.lyrics.isNotEmpty) {
+    final lyricId = music == null ? null : _lyricId(music);
+    if (lyricId == _selectedLyricId && state.lyrics.isNotEmpty) {
       _selectedMusic = music;
       return;
     }
     final generation = ++_generation;
     _selectedMusic = music;
-    _selectedSongId = music?.id;
+    _selectedLyricId = lyricId;
     state = LyricLoadState(
       lyrics: Lyrics.empty(),
       isLoading: music != null,
@@ -73,10 +81,10 @@ class LyricNotifier extends StateNotifier<LyricLoadState> {
 
     try {
       final lyrics = await _load(music);
-      if (!_owns(generation, music.id)) return;
+      if (!_owns(generation, lyricId!)) return;
       state = LyricLoadState(lyrics: lyrics);
     } catch (error, stackTrace) {
-      if (!_owns(generation, music.id)) return;
+      if (!_owns(generation, lyricId!)) return;
       state = LyricLoadState(
         lyrics: Lyrics.empty(),
         error: error,
@@ -91,15 +99,15 @@ class LyricNotifier extends StateNotifier<LyricLoadState> {
     await select(music);
   }
 
-  bool _owns(int generation, String songId) {
-    return mounted && generation == _generation && songId == _selectedSongId;
+  bool _owns(int generation, String lyricId) {
+    return mounted && generation == _generation && lyricId == _selectedLyricId;
   }
 
   @override
   void dispose() {
     _generation++;
     _selectedMusic = null;
-    _selectedSongId = null;
+    _selectedLyricId = null;
     super.dispose();
   }
 }

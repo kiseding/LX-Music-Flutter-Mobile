@@ -2,8 +2,44 @@ import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lx_music_flutter/core/network/music_source_service.dart';
 import 'package:lx_music_flutter/core/network/play_url_result.dart';
+import 'package:lx_music_flutter/core/music_source/platform/built_in_source_manager.dart';
+import 'package:lx_music_flutter/core/music_source/platform/music_platform.dart';
 import 'package:lx_music_flutter/features/custom_source/domain/custom_source_service.dart';
 import 'package:lx_music_flutter/features/player/domain/music_item.dart';
+
+class _LyricPlatform extends MusicPlatform {
+  _LyricPlatform(this.lyric);
+
+  final String lyric;
+
+  @override
+  String get id => 'tx';
+
+  @override
+  String get name => 'TX';
+
+  @override
+  Future<String?> getLyric(MusicItem music) async => lyric;
+
+  @override
+  Future<String?> getMusicUrl(MusicItem music,
+          {String quality = '128k'}) async =>
+      null;
+
+  @override
+  MusicItem parseItem(Map<String, dynamic> raw, String source) => MusicItem(
+        id: raw['id']?.toString() ?? '',
+        name: raw['name']?.toString() ?? '',
+        singer: raw['singer']?.toString() ?? '',
+        source: source,
+        platform: id,
+      );
+
+  @override
+  Future<List<MusicItem>> search(String keyword,
+          {int page = 1, int limit = 20}) async =>
+      [];
+}
 
 void main() {
   final item = MusicItem(
@@ -44,6 +80,16 @@ void main() {
       )),
       'kg',
     );
+  });
+
+  test('known platform lyrics prefer built-in word timing', () async {
+    const qrc = '[0,1000]逐(0,500)字(500,500)';
+    final service = MusicSourceService(
+      CustomSourceService(),
+      builtInSources: BuiltInSourceManager(platforms: [_LyricPlatform(qrc)]),
+    );
+
+    expect(await service.getLyric(item), qrc);
   });
 
   test('custom source keeps an HTTP media URL unchanged', () async {
@@ -135,8 +181,7 @@ void main() {
     expect(result?.actualQuality, '128k');
   });
 
-  test('built-in source is used when every custom attempt fails',
-      () async {
+  test('built-in source is used when every custom attempt fails', () async {
     var builtInCalls = 0;
     final service = MusicSourceService(
       CustomSourceService(),

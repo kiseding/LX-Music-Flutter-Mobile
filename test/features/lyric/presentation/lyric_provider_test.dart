@@ -67,6 +67,34 @@ void main() {
     expect(container.read(currentLyricProvider).raw, 'A');
   });
 
+  test('same item reloads when lyric platform identity changes', () async {
+    var calls = 0;
+    final notifier = LyricNotifier((music) async {
+      calls++;
+      return _lyrics(music.platform);
+    });
+    addTearDown(notifier.dispose);
+
+    await notifier.select(MusicItem(
+      id: 'A',
+      name: 'A',
+      singer: 'artist',
+      source: 'custom',
+      platform: 'custom',
+    ));
+    await notifier.select(MusicItem(
+      id: 'A',
+      songmid: 'qq-mid',
+      name: 'A',
+      singer: 'artist',
+      source: 'custom',
+      platform: 'tx',
+    ));
+
+    expect(calls, 2);
+    expect(notifier.state.lyrics.raw, 'tx');
+  });
+
   test('current error is state and retry starts a new successful generation',
       () async {
     final failure = StateError('current failure');
