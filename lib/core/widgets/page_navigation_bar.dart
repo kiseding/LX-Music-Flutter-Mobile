@@ -1,0 +1,147 @@
+import 'package:flutter/material.dart';
+import '../theme/app_colors.dart';
+
+class PageNavigationBar extends StatelessWidget {
+  const PageNavigationBar({
+    super.key,
+    required this.pageIndex,
+    required this.pageCount,
+    required this.onPageChanged,
+    this.enabled = true,
+  });
+
+  final int pageIndex;
+  final int pageCount;
+  final ValueChanged<int> onPageChanged;
+  final bool enabled;
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomInset = MediaQuery.paddingOf(context).bottom;
+    if (pageCount <= 1) return SizedBox(height: bottomInset);
+    return SizedBox(
+      height: 32 + bottomInset,
+      child: Center(
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _buildArrowButton(context, isPrevious: true),
+            const SizedBox(width: 14),
+            _buildPageTextButton(context),
+            const SizedBox(width: 14),
+            _buildArrowButton(context, isPrevious: false),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPageTextButton(BuildContext context) {
+    return TextButton(
+      onPressed: enabled ? () => _showPagePickerDialog(context) : null,
+      style: TextButton.styleFrom(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
+        minimumSize: const Size(0, 30),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
+      child: Text(
+        '第 ${pageIndex + 1} / $pageCount 页',
+        style: TextStyle(
+          fontSize: 15,
+          color: AppColors.secondaryText(context),
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildArrowButton(BuildContext context, {required bool isPrevious}) {
+    final arrowEnabled =
+        enabled && (isPrevious ? pageIndex > 0 : pageIndex + 1 < pageCount);
+    final background = AppColors.fill2(context);
+    final foreground = arrowEnabled
+        ? AppColors.secondaryText(context)
+        : AppColors.mutedText(context).withValues(alpha: 0.5);
+    return Container(
+      width: 32,
+      height: 32,
+      decoration: BoxDecoration(
+        color: background,
+        shape: BoxShape.circle,
+        border: Border.all(color: AppColors.cardBorder(context)),
+      ),
+      child: IconButton(
+        tooltip: isPrevious ? '上一页' : '下一页',
+        onPressed: arrowEnabled
+            ? () => onPageChanged(pageIndex + (isPrevious ? -1 : 1))
+            : null,
+        icon: Icon(
+          isPrevious ? Icons.chevron_left : Icons.chevron_right,
+          size: 19,
+          color: foreground,
+        ),
+        padding: EdgeInsets.zero,
+        constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+        visualDensity: VisualDensity.compact,
+      ),
+    );
+  }
+
+  Future<void> _showPagePickerDialog(BuildContext context) async {
+    final selected = await showDialog<int>(
+      context: context,
+      builder: (context) {
+        final scheme = Theme.of(context).colorScheme;
+        return AlertDialog(
+          title: const Text('选择页码'),
+          content: ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 320, minWidth: 300),
+            child: GridView.builder(
+              shrinkWrap: true,
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 5,
+                mainAxisSpacing: 8,
+                crossAxisSpacing: 8,
+                childAspectRatio: 1.5,
+              ),
+              itemCount: pageCount,
+              itemBuilder: (context, index) {
+                final page = index + 1;
+                final isCurrent = index == pageIndex;
+                return Material(
+                  color: isCurrent
+                      ? scheme.primaryContainer
+                      : scheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(8),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(8),
+                    onTap: () => Navigator.pop(context, page),
+                    child: Center(
+                      child: Text(
+                        '$page',
+                        style: TextStyle(
+                          color: isCurrent
+                              ? scheme.onPrimaryContainer
+                              : scheme.onSurface,
+                          fontWeight: isCurrent ? FontWeight.w600 : null,
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('取消'),
+            ),
+          ],
+        );
+      },
+    );
+    if (selected == null) return;
+    onPageChanged((selected - 1).clamp(0, pageCount - 1).toInt());
+  }
+}

@@ -1,0 +1,182 @@
+name: Deploy Workers API
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'workers/**'
+      - '.github/workflows/deploy-workers.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-workers-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: workers
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: workers/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install; fi
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Batch D structural checks
+        run: npm run check:batch-d
+
+      - name: Stamp build version
+        run: |
+          cat > src/generated/version.ts << EOF
+          export const BUILD_SHA = '${{ github.sha }}'.slice(0, 7);
+          export const BUILD_DATE = '$(date -u +%Y-%m-%d)';
+          EOF
+
+      - name: Replace D1 / KV placeholders in wrangler.toml
+        run: |
+          if [ -z "${{ secrets.D1_DATABASE_ID }}" ] || [ -z "${{ secrets.KV_NAMESPACE_ID }}" ]; then
+            echo "Missing D1_DATABASE_ID or KV_NAMESPACE_ID secret" >&2
+            exit 1
+          fi
+          sed -i "s/REPLACE_WITH_YOUR_D1_DATABASE_ID/${{ secrets.D1_DATABASE_ID }}/g" wrangler.toml
+          sed -i "s/REPLACE_WITH_YOUR_KV_NAMESPACE_ID/${{ secrets.KV_NAMESPACE_ID }}/g" wrangler.toml
+          echo "--- wrangler.toml (ids redacted) ---"
+          sed -E 's/[0-9a-f]{8}-[0-9a-f-]{27}/***/gi' wrangler.toml
+
+      - name: Verify legacy D1 schema and apply migrations
+        run: |
+          set -euo pipefail
+          COLUMNS="$(npx wrangler d1 execute lx-music-api --remote --json --command "PRAGMA table_info('users')")"
+          if printf '%s' "$COLUMNS" | jq -e '.[0].results | length == 0 or any(.name == "token_version")' >/dev/null; then
+            npx wrangler d1 migrations apply lx-music-api --remote
+          else
+            echo "users.token_version is missing; run the approved one-time ALTER TABLE migration before deployment" >&2
+            exit 1
+          fi
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Validate deployment bundle
+        run: npx wrangler deploy --dry-run --outdir .wrangler-dry-run
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Deploy
+        id: deploy
+        run: |
+          set -euo pipefail
+          DEPLOY_OUTPUT="$(npx wrangler deploy 2>&1)"
+          printf '%s\n' "$DEPLOY_OUTPUT"
+          WORKER_URL="$(printf '%s\n' "$DEPLOY_OUTPUT" | grep -Eo 'https://[a-zA-Z0-9.-]+\.workers\.dev' | tail -1 || true)"
+          if [ -z "$WORKER_URL" ]; then
+            echo "Could not parse workers.dev URL from deploy output" >&2
+            exit 1
+          fi
+          echo "WORKER_URL=$WORKER_URL" >> "$GITHUB_ENV"
+          echo "url=$WORKER_URL" >> "$GITHUB_OUTPUT"
+          # 给边缘一点传播时间
+          sleep 5
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Push admin secrets
+        run: |
+          set -euo pipefail
+          if [ -z "${ADMIN_USERNAME:-}" ] || [ -z "${ADMIN_PASSWORD:-}" ]; then
+            echo "ADMIN_USERNAME / ADMIN_PASSWORD secrets are required" >&2
+            exit 1
+          fi
+          printf '%s' "$ADMIN_PASSWORD" | npx wrangler secret put ADMIN_PASSWORD
+          printf '%s' "$ADMIN_USERNAME" | npx wrangler secret put ADMIN_USERNAME
+          sleep 3
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ADMIN_USERNAME: ${{ secrets.ADMIN_USERNAME }}
+          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+
+      - name: Verify health then login
+        run: |
+          set -euo pipefail
+          echo "Probing $WORKER_URL"
+          # 1) 根路径应返回 JSON（不是 HTML 404）
+          for i in 1 2 3 4 5 6 7 8; do
+            CODE="$(curl -sS -o /tmp/root.json -w '%{http_code}' "$WORKER_URL/" || true)"
+            echo "GET / -> HTTP $CODE"
+            head -c 300 /tmp/root.json || true
+            echo
+            if [ "$CODE" = "200" ] && grep -q 'lx-music-api' /tmp/root.json; then
+              break
+            fi
+            if [ "$i" = "8" ]; then
+              echo "Worker root did not become ready (got HTTP $CODE, likely CF HTML 404 or wrong account)" >&2
+              exit 1
+            fi
+            sleep 5
+          done
+
+          # 2) health
+          for i in 1 2 3 4 5; do
+            CODE="$(curl -sS -o /tmp/health.json -w '%{http_code}' "$WORKER_URL/api/health" || true)"
+            echo "GET /api/health -> HTTP $CODE"
+            cat /tmp/health.json || true
+            echo
+            if [ "$CODE" = "200" ] && jq -e '.status == "ok"' /tmp/health.json >/dev/null 2>&1; then
+              break
+            fi
+            if [ "$i" = "5" ]; then
+              echo "health check failed" >&2
+              exit 1
+            fi
+            sleep 3
+          done
+
+          # 3) login（显式 POST）
+          LOGIN_BODY="$(jq -n --arg username "$ADMIN_USERNAME" --arg password "$ADMIN_PASSWORD" '{username:$username,password:$password}')"
+          CODE="$(curl -sS -o /tmp/login.json -w '%{http_code}' \
+            -X POST \
+            -H 'Content-Type: application/json' \
+            -d "$LOGIN_BODY" \
+            "$WORKER_URL/api/user/login" || true)"
+          echo "POST /api/user/login -> HTTP $CODE"
+          cat /tmp/login.json || true
+          echo
+          if [ "$CODE" != "200" ]; then
+            echo "login failed with HTTP $CODE" >&2
+            exit 1
+          fi
+          TOKEN="$(jq -er '.token' /tmp/login.json)"
+
+          CODE="$(curl -sS -o /tmp/verify.json -w '%{http_code}' \
+            -H "Authorization: Bearer $TOKEN" \
+            "$WORKER_URL/api/user/auth/verify" || true)"
+          echo "GET /api/user/auth/verify -> HTTP $CODE"
+          cat /tmp/verify.json || true
+          echo
+          jq -e '.valid == true' /tmp/verify.json
+        env:
+          ADMIN_USERNAME: ${{ secrets.ADMIN_USERNAME }}
+          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}

@@ -1,0 +1,74 @@
+name: Build unsigned IPA
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-ios:
+    runs-on: macos-15
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.44.7'
+          channel: stable
+          cache: true
+
+      - name: Resolve Flutter dependencies
+        run: flutter pub get
+
+      - name: Analyze Dart and Flutter sources
+        run: flutter analyze --no-fatal-infos
+
+      - name: Run deterministic Flutter tests
+        run: flutter test --exclude-tags live
+
+      - name: Install CocoaPods dependencies
+        working-directory: ios
+        run: pod install
+
+      - name: Build unsigned iOS app
+        run: flutter build ios --release --no-codesign
+
+      - name: Package and validate Apple ID sideload IPA
+        run: |
+          set -euo pipefail
+          test -d build/ios/iphoneos/Runner.app
+          test -f build/ios/iphoneos/Runner.app/PrivacyInfo.xcprivacy
+          plutil -lint build/ios/iphoneos/Runner.app/PrivacyInfo.xcprivacy
+          rm -rf build/ios/ipa-sideload
+          mkdir -p build/ios/ipa-sideload/Payload
+          ditto build/ios/iphoneos/Runner.app build/ios/ipa-sideload/Payload/Runner.app
+          rm -rf build/ios/ipa-sideload/Payload/Runner.app/PlugIns
+          test ! -d build/ios/ipa-sideload/Payload/Runner.app/PlugIns
+          (
+            cd build/ios/ipa-sideload
+            ditto -c -k --sequesterRsrc --keepParent Payload ../LX-Music-Apple-ID-Sideload.ipa
+          )
+          unzip -t build/ios/LX-Music-Apple-ID-Sideload.ipa
+          unzip -Z1 build/ios/LX-Music-Apple-ID-Sideload.ipa | grep -qx 'Payload/Runner.app/Info.plist'
+          unzip -Z1 build/ios/LX-Music-Apple-ID-Sideload.ipa | grep -qx 'Payload/Runner.app/PrivacyInfo.xcprivacy'
+          ! unzip -Z1 build/ios/LX-Music-Apple-ID-Sideload.ipa | grep -q '/PlugIns/'
+
+      - name: Upload Apple ID sideload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: LX-Music-Apple-ID-Sideload-IPA
+          path: build/ios/LX-Music-Apple-ID-Sideload.ipa
+          if-no-files-found: error
+          retention-days: 7
