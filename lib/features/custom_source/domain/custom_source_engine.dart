@@ -23,7 +23,7 @@ dynamic _decodeDynamic(String s) => json.decode(s);
 
 /// 保证脚本可见的 types 列表含本次请求音质，避免空 types 触发低码率回退。
 List<String> ensureMusicInfoTypes(Map<String, dynamic> meta, String type) {
-  const official = ['hires', 'flac24bit', 'flac', '320k', '192k', '128k'];
+  const official = ['hires', 'flac24bit', 'flac', '320k', '128k'];
   final raw = meta['types'] ?? meta['qualitys'] ?? meta['quality'];
   final out = <String>[];
   if (raw is List) {

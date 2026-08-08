@@ -221,12 +221,12 @@ class PlaybackUrlResolver<T> {
     'flac24bit',
     'flac',
     '320k',
-    '192k',
     '128k',
   ];
 
   List<String> _qualityCandidates(String preferred) {
     final value = preferred.isEmpty ? '320k' : preferred;
+    if (value == '192k') return ['192k', '128k'];
     final index = _qualityChain.indexOf(value);
     if (index < 0) return [value, ..._qualityChain.where((q) => q != value)];
     return _qualityChain.sublist(index);

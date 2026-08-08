@@ -431,7 +431,7 @@ void main() {
     expect(builtInCalls, 0);
   });
 
-  test('built-in fallback attempts each quality once when custom is absent',
+  test('built-in fallback skips the hidden 192k candidate',
       () async {
     final calls = <String>[];
     final service = MusicSourceService(
@@ -439,7 +439,7 @@ void main() {
       hasEnabledCustomSources: () => false,
       builtInQualityResolver: (music, quality, cancelToken) async {
         calls.add(quality);
-        return quality == '192k' ? playable(quality) : null;
+        return quality == '128k' ? playable(quality) : null;
       },
     );
 
@@ -448,9 +448,9 @@ void main() {
       preferredQuality: '320k',
     );
 
-    expect(calls, ['320k', '192k']);
+    expect(calls, ['320k', '128k']);
     expect(result?.requestedQuality, '320k');
-    expect(result?.actualQuality, '192k');
+    expect(result?.actualQuality, '128k');
   });
 
   test('cancellation stops fallback before another quality attempt', () async {

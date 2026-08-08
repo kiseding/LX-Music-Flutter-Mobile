@@ -4,7 +4,7 @@ import 'package:lx_music_flutter/core/network/music_source_service.dart';
 void main() {
   test('qualityChain prefers requested quality then lower fallbacks', () {
     final chain320 = MusicSourceService.qualityChain('320k');
-    expect(chain320, ['320k', '192k', '128k']);
+    expect(chain320, ['320k', '128k']);
 
     final chainFlac = MusicSourceService.qualityChain('flac');
     expect(chainFlac.first, 'flac');
@@ -16,7 +16,7 @@ void main() {
 
   test('hires degrades through flac before 320k', () {
     final chain = MusicSourceService.qualityChain('hires');
-    expect(chain, ['hires', 'flac24bit', 'flac', '320k', '192k', '128k']);
+    expect(chain, ['hires', 'flac24bit', 'flac', '320k', '128k']);
   });
 
   test('isQualityBelow detects downgrade', () {

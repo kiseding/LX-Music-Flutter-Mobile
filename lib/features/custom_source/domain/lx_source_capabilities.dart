@@ -53,7 +53,7 @@ class LxSourceCapabilities {
     if (declared == null || declared.isEmpty || declared.contains(requested)) {
       return requested;
     }
-    const order = ['hires', 'flac24bit', 'flac', '320k', '192k', '128k'];
+    const order = ['hires', 'flac24bit', 'flac', '320k', '128k'];
     final requestedIndex = order.indexOf(requested);
     final candidates = order.where(declared.contains).toList(growable: false);
     if (candidates.isEmpty) return null;

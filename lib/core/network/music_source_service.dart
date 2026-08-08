@@ -72,13 +72,22 @@ class MusicSourceService {
     '128k',
   ];
 
+  static const _fallbackQualityRank = [
+    'hires',
+    'flac24bit',
+    'flac',
+    '320k',
+    '128k',
+  ];
+
   static List<String> qualityChain(String preferred) {
     final p = preferred.isEmpty ? '320k' : preferred;
-    final start = qualityRank.indexOf(p);
+    if (p == '192k') return ['192k', '128k'];
+    final start = _fallbackQualityRank.indexOf(p);
     if (start < 0) {
-      return [p, ...qualityRank.where((q) => q != p)];
+      return [p, ..._fallbackQualityRank.where((q) => q != p)];
     }
-    return qualityRank.sublist(start);
+    return _fallbackQualityRank.sublist(start);
   }
 
   static int qualityRankIndex(String q) {
