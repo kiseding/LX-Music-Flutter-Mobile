@@ -36,6 +36,7 @@ class _QualityAttempt {
 
 class MusicSourceService {
   static const fallbackPlatforms = ['tx', 'kw', 'wy'];
+  static const _customFailureCooldown = Duration(seconds: 5);
 
   final CustomSourceService _customSourceService;
   final BuiltInSourceManager _builtInSources;
@@ -44,6 +45,9 @@ class MusicSourceService {
   final QualityResolver? _customQualityResolver;
   final CustomSourceQualityResolver? _customSourceQualityResolver;
   final QualityResolver? _builtInQualityResolver;
+  final Map<String, Future<({String url, String? type})?>> _customUrlRequests =
+      {};
+  final Map<String, DateTime> _customFailureUntil = {};
 
   MusicSourceService(
     this._customSourceService, {
@@ -58,7 +62,7 @@ class MusicSourceService {
        _customQualityResolver = customQualityResolver,
        _customSourceQualityResolver = customSourceQualityResolver,
        _builtInSources = builtInSources ?? BuiltInSourceManager(),
-        _builtInQualityResolver = builtInQualityResolver;
+       _builtInQualityResolver = builtInQualityResolver;
 
   BuiltInSourceManager get builtInSources => _builtInSources;
 
@@ -455,7 +459,8 @@ class MusicSourceService {
         actualQuality: attempt.result.actualQuality,
         platform: attempt.result.platform,
         songId: attempt.songId.isNotEmpty ? attempt.songId : songId,
-        validUntil: attempt.result.validUntil ??
+        validUntil:
+            attempt.result.validUntil ??
             DateTime.now().add(const Duration(hours: 3)),
       );
       final normalizedAttempt = _QualityAttempt(
@@ -556,9 +561,11 @@ class MusicSourceService {
             !attemptKeys.add('$sourceId|$effectiveQuality')) {
           continue;
         }
-        final detailed = await _customSourceService
-            .getMusicUrlDetailed(sourceId, musicForScript, quality: quality)
-            .timeout(const Duration(seconds: 20));
+        final detailed = await _getCustomUrlOnce(
+          sourceId,
+          musicForScript,
+          quality,
+        );
         _throwIfCancelled(cancelToken);
         final rawUrl = detailed?.url;
         final url = rawUrl == null ? null : normalizeMediaUrl(rawUrl);
@@ -599,6 +606,48 @@ class MusicSourceService {
       }
     }
     return bestBelow;
+  }
+
+  Future<({String url, String? type})?> _getCustomUrlOnce(
+    String sourceId,
+    MusicItem music,
+    String quality,
+  ) async {
+    final songId = music.songmid?.isNotEmpty == true
+        ? music.songmid!
+        : (music.hash?.isNotEmpty == true ? music.hash! : music.id);
+    final platform = resolvePlatform(music);
+    final key = '$sourceId|$platform|$songId|$quality';
+    final now = DateTime.now();
+    final failureUntil = _customFailureUntil[key];
+    if (failureUntil != null && failureUntil.isAfter(now)) return null;
+    if (failureUntil != null) _customFailureUntil.remove(key);
+
+    final existing = _customUrlRequests[key];
+    if (existing != null) return existing;
+
+    final request = _customSourceService
+        .getMusicUrlDetailed(sourceId, music, quality: quality)
+        .timeout(const Duration(seconds: 20));
+    _customUrlRequests[key] = request;
+    try {
+      final result = await request;
+      if (result == null) {
+        _customFailureUntil[key] = DateTime.now().add(
+          _customFailureCooldown,
+        );
+      }
+      return result;
+    } catch (_) {
+      _customFailureUntil[key] = DateTime.now().add(
+        _customFailureCooldown,
+      );
+      rethrow;
+    } finally {
+      if (identical(_customUrlRequests[key], request)) {
+        _customUrlRequests.removeWhere((requestKey, _) => requestKey == key);
+      }
+    }
   }
 
   Future<_QualityAttempt?> _resolveBuiltInQuality(
