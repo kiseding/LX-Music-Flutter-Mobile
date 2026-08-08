@@ -464,7 +464,7 @@ void main() {
     expect(player.playing, isTrue);
   });
 
-  test('null resolver discards temporary silence keepalive', () async {
+  test('null resolver keeps lock-screen playback alive while skipping', () async {
     final player = _PlaybackStateAudioPlayer()
       ..sourceInstallProcessingState = ProcessingState.ready;
     final handler = LxAudioHandler(player: player);
@@ -482,6 +482,7 @@ void main() {
     await handler.setPlaylist(const [
       MediaItem(id: 'A', title: 'A'),
       MediaItem(id: 'B', title: 'B'),
+      MediaItem(id: 'C', title: 'C'),
     ]);
 
     final navigation = handler.skipToNext();
@@ -492,12 +493,11 @@ void main() {
     releaseResolver.complete();
     await Future<void>.delayed(Duration.zero);
     await pumpEventQueue();
-    expect(player.loadedSource, isA<SilenceAudioSource>());
-    expect(player.playing, isFalse);
-
-    // Drain the multi-item 5s fallback without blocking the assertion above.
-    await Future<void>.delayed(const Duration(seconds: 5));
+    expect(player.loadedSource, isA<ProgressiveAudioSource>());
+    expect(handler.currentQueueIndex, 2);
     await navigation;
+    expect(handler.currentQueueIndex, 2);
+    expect(player.playing, isTrue);
   });
 
   test('selection does not publish metadata before native pause completes',
@@ -743,6 +743,7 @@ void main() {
 
     expect(handler.currentQueueIndex, 2);
     expect(handler.mediaItem.value?.id, 'C');
+    expect(player.playing, isTrue);
     expect(errors, hasLength(1));
     await navigation;
   });

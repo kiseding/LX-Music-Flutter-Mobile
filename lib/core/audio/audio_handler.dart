@@ -2519,21 +2519,21 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
         if (url == null || url.isEmpty) {
           await _discardStagedLease(occurrenceId, stagedLease);
-          if (keepNativePlayingDuringTransition) {
-            await _commands.discardTemporarySource(commandToken);
-          }
-          if (_player.playing) {
-            preservingPauseOwner ??= await _commands.pausePreservingIntent();
-          }
           transactionIndex = activeItemIndex();
           if (transactionIndex < 0) return;
           debugPrint('[AudioHandler] 无法获取播放链接: ${item.title} id=${item.id}');
           onError?.call('无法解析歌曲 "${item.title}" 的播放地址（源无效地址或本地缓存失败，已尝试降级音质）');
           if (_queue.length > 1 && _currentIndex == transactionIndex) {
-            await Future.delayed(const Duration(seconds: 5));
             transactionIndex = activeItemIndex();
             if (transactionIndex >= 0 && _currentIndex == transactionIndex) {
-              await _skipToNextInternal(provenance: startProvenance);
+              if (preservingPauseOwner != null) {
+                await _commands.releasePreservingIntent(preservingPauseOwner);
+                preservingPauseOwner = null;
+              }
+              await _skipToNextInternal(
+                seamless: true,
+                provenance: startProvenance,
+              );
             }
           }
           return;
@@ -2670,20 +2670,18 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         debugPrint('[AudioHandler] 播放失败: $e');
         await _discardStagedLease(occurrenceId, stagedLease);
         if (_disposed) Error.throwWithStackTrace(e, stackTrace);
-        // Lock-screen navigation keeps the old source alive while resolving.
-        // Once resolution/install has failed there is no pending background
-        // work to protect, so stop mismatched old audio before fallback.
-        if (keepNativePlayingDuringTransition && _player.playing) {
-          preservingPauseOwner = await _commands.pausePreservingIntent();
-        }
         var transactionIndex = activeItemIndex();
         if (transactionIndex >= 0 && _currentIndex == transactionIndex) {
           onError?.call('播放歌曲 "${item.title}" 失败: $e');
           if (_queue.length > 1) {
             transactionIndex = activeItemIndex();
             if (transactionIndex >= 0 && _currentIndex == transactionIndex) {
+              if (preservingPauseOwner != null) {
+                await _commands.releasePreservingIntent(preservingPauseOwner);
+                preservingPauseOwner = null;
+              }
               await _skipToNextInternal(
-                seamless: seamless,
+                seamless: true,
                 provenance: startProvenance,
               );
             }
