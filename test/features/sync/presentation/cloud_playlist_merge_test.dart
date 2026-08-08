@@ -208,8 +208,79 @@ void main() {
       decodeSong: decodeCloudSong,
     );
 
-    expect(result.favoriteSongCount, 0);
+    expect(result.favoriteSongCount, 1);
     expect(service.favorites!.songs.single.id, 'local');
+    await service.dispose();
+  });
+
+  test('two-way merge retains distinct local and cloud songs', () async {
+    final local = decodeCloudSong(const {
+      'songmid': 'local-song',
+      'name': 'Local',
+      'singer': 'Artist',
+      'source': 'tx',
+    });
+    final snapshot = _systemSnapshot();
+    final repository = _CountingRepository(
+      PlaylistSnapshot(
+        schemaVersion: 1,
+        playlists: [
+          ...snapshot.playlists.map(
+            (playlist) => playlist.id == 'favorites'
+                ? playlist.copyWith(songs: [local])
+                : playlist,
+          ),
+          Playlist(
+            id: 'shared',
+            name: 'Shared',
+            songs: [local],
+            createdAt: DateTime.utc(2026),
+            updatedAt: DateTime.utc(2026),
+          ),
+        ],
+      ),
+    );
+    final service = PlaylistService(repository: repository);
+    await service.init();
+
+    final result = await mergeAndPersistCloudPlaylists(
+      service: service,
+      love: const [
+        {
+          'songmid': 'cloud-song',
+          'name': 'Cloud',
+          'singer': 'Artist',
+          'source': 'wy',
+        },
+      ],
+      userList: const [
+        {
+          'id': 'shared',
+          'name': 'Cloud name must not overwrite local',
+          'list': [
+            {
+              'songmid': 'cloud-song',
+              'name': 'Cloud',
+              'singer': 'Artist',
+              'source': 'wy',
+            },
+          ],
+        },
+      ],
+      decodeSong: decodeCloudSong,
+    );
+
+    expect(
+      service.favorites!.songs.map((song) => song.id),
+      containsAll(['local-song', 'cloud-song']),
+    );
+    expect(service.getPlaylist('shared')!.name, 'Shared');
+    expect(
+      service.getPlaylist('shared')!.songs.map((song) => song.id),
+      containsAll(['local-song', 'cloud-song']),
+    );
+    expect(result.favoriteSongCount, 2);
+    expect(encodeCloudPlaylists(result.playlists), hasLength(1));
     await service.dispose();
   });
 }

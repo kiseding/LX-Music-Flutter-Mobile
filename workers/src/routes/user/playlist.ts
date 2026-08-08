@@ -106,9 +106,10 @@ export async function handleUserPlaylistSave(request: Request, env: Env, ctx: Ex
   const body = parsed.body as {
     loveList?: unknown;
     pls?: Array<{ id?: unknown; name?: unknown }>;
+    userList?: Array<{ id?: unknown; name?: unknown; list?: unknown }>;
     append?: unknown;
   };
-  const { loveList, pls, append } = body;
+  const { loveList, pls, userList, append } = body;
   const plsArray = Array.isArray(pls) ? pls : [];
   const loveArray = Array.isArray(loveList) ? loveList : [];
 
@@ -122,6 +123,42 @@ export async function handleUserPlaylistSave(request: Request, env: Env, ctx: Ex
     if (pid && name.length > 0 && name.length <= 128) {
       await env.DB.prepare('UPDATE playlists SET name = ?, updated_at = datetime(\'now\') WHERE id = ? AND user_id = ?')
         .bind(name, pid, userId).run();
+    }
+  }
+
+  if (userList != null) {
+    if (!Array.isArray(userList) || userList.length > 200) {
+      return jsonResponse({ error: '歌单数据无效或数量超限' }, 400);
+    }
+    let songCount = 0;
+    const snapshot: Array<{ id: string; name: string; list: SongInfo[] }> = [];
+    const ids = new Set<string>();
+    for (const raw of userList) {
+      const id = String(raw?.id || '').slice(0, 128);
+      const name = String(raw?.name || '').trim().slice(0, 128);
+      const list = raw?.list;
+      if (!id || id === 'love' || id === 'favorites' || id === 'recent' ||
+          id.startsWith('__stage__:') || !name || !Array.isArray(list) || ids.has(id)) {
+        return jsonResponse({ error: '歌单数据无效' }, 400);
+      }
+      ids.add(id);
+      songCount += list.length;
+      if (songCount > 20000) return jsonResponse({ error: '歌曲数量超限' }, 400);
+      snapshot.push({ id, name, list: list as SongInfo[] });
+    }
+    try {
+      for (let position = 0; position < snapshot.length; position++) {
+        const playlist = snapshot[position];
+        await writePlaylistAtomically(env, {
+          id: playlist.id,
+          userId,
+          name: playlist.name,
+          position: position + 1,
+        }, playlist.list, { replace: true });
+      }
+    } catch (error: any) {
+      console.error('[playlist:snapshot] save failed:', error?.message);
+      return jsonResponse({ error: '歌单保存失败' }, 500);
     }
   }
 

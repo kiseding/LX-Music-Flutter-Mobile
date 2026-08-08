@@ -64,10 +64,14 @@ void main() {
     expect(lyrics.lines.length, 1);
     final words = lyrics.lines.first.words!;
     expect(words.map((w) => w.text).join(), '逐字歌');
-    expect(words[0].time,
-        const Duration(minutes: 0, seconds: 12, milliseconds: 340));
-    expect(words[1].time,
-        const Duration(minutes: 0, seconds: 12, milliseconds: 500));
+    expect(
+      words[0].time,
+      const Duration(minutes: 0, seconds: 12, milliseconds: 340),
+    );
+    expect(
+      words[1].time,
+      const Duration(minutes: 0, seconds: 12, milliseconds: 500),
+    );
   });
 
   test('word fill progress for KTV', () {
@@ -77,9 +81,12 @@ void main() {
     final lyrics = LyricParser.parseLrc(raw);
     final line = lyrics.lines.first;
     expect(
-        lyrics.getCurrentWordIndex(
-            const Duration(seconds: 10, milliseconds: 500), 0),
-        0);
+      lyrics.getCurrentWordIndex(
+        const Duration(seconds: 10, milliseconds: 500),
+        0,
+      ),
+      0,
+    );
     expect(
       lyrics.getWordFillProgress(
         const Duration(seconds: 10, milliseconds: 500),
@@ -89,9 +96,12 @@ void main() {
       closeTo(0.5, 0.01),
     );
     expect(
-        lyrics.getCurrentWordIndex(
-            const Duration(seconds: 11, milliseconds: 200), 0),
-        1);
+      lyrics.getCurrentWordIndex(
+        const Duration(seconds: 11, milliseconds: 200),
+        0,
+      ),
+      1,
+    );
     expect(line.words![1].text, 'B');
   });
 
@@ -131,6 +141,14 @@ void main() {
   test('hasWordTiming detects Tencent word tags', () {
     expect(LyricParser.hasWordTiming('[0,5890]A(0,368)B(368,368)'), isTrue);
     expect(LyricParser.hasWordTiming('[00:12.00]plain'), isFalse);
+  });
+
+  test('does not treat a single Kuwo parenthesized value as word timing', () {
+    const raw = '[12340]普通歌词 (制作人: 123,456)';
+    expect(LyricParser.hasWordTiming(raw), isFalse);
+    final lyrics = LyricParser.parseLrc(raw);
+    expect(lyrics.lines.single.text, '普通歌词 (制作人: 123,456)');
+    expect(lyrics.lines.single.hasWordTiming, isFalse);
   });
 
   test('parseQrc real Tencent XML with metadata and punctuation', () {

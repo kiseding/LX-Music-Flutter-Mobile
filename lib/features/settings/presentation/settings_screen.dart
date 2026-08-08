@@ -26,7 +26,8 @@ class SettingsScreen extends ConsumerWidget {
     final themeMode = ref.watch(themeModeProvider);
     final audioQuality = ref.watch(audioQualityProvider);
 
-    final isDark = themeMode == ThemeMode.dark ||
+    final isDark =
+        themeMode == ThemeMode.dark ||
         (themeMode == ThemeMode.system &&
             MediaQuery.platformBrightnessOf(context) == Brightness.dark);
 
@@ -77,9 +78,12 @@ class SettingsScreen extends ConsumerWidget {
                         .setThemeMode(ThemeMode.system);
                   } else {
                     // 退出跟随时，保持当前实际明暗
-                    final darkNow = MediaQuery.platformBrightnessOf(context) ==
+                    final darkNow =
+                        MediaQuery.platformBrightnessOf(context) ==
                         Brightness.dark;
-                    ref.read(themeModeProvider.notifier).setThemeMode(
+                    ref
+                        .read(themeModeProvider.notifier)
+                        .setThemeMode(
                           darkNow ? ThemeMode.dark : ThemeMode.light,
                         );
                   }
@@ -220,20 +224,6 @@ class SettingsScreen extends ConsumerWidget {
                 '查看本次运行的完整实时日志（不保存）',
                 () => context.push('/diagnostic-logs'),
               ),
-              _buildNavTile(context, ref, '开源许可', '', () {
-                final theme = Theme.of(context);
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (ctx) => Theme(
-                      data: theme,
-                      child: LicensePage(
-                        applicationName: 'LX Music',
-                        applicationVersion: '1.0.0',
-                      ),
-                    ),
-                  ),
-                );
-              }),
             ]),
             const SizedBox(height: 40),
           ],
@@ -471,16 +461,12 @@ class SettingsScreen extends ConsumerWidget {
                     ),
                     title: Text(
                       '$minutes 分钟',
-                      style: TextStyle(
-                        color: AppColors.onScaffold(context),
-                      ),
+                      style: TextStyle(color: AppColors.onScaffold(context)),
                     ),
-                    trailing: state is SleepTimerRunning &&
+                    trailing:
+                        state is SleepTimerRunning &&
                             state.duration == Duration(minutes: minutes)
-                        ? Icon(
-                            Icons.check,
-                            color: AppColors.accentOf(context),
-                          )
+                        ? Icon(Icons.check, color: AppColors.accentOf(context))
                         : null,
                     onTap: () {
                       Navigator.pop(context);
@@ -501,9 +487,7 @@ class SettingsScreen extends ConsumerWidget {
                     ),
                     title: Text(
                       '取消睡眠定时',
-                      style: TextStyle(
-                        color: AppColors.onScaffold(context),
-                      ),
+                      style: TextStyle(color: AppColors.onScaffold(context)),
                     ),
                     onTap: () {
                       Navigator.pop(context);
@@ -559,10 +543,7 @@ class SettingsScreen extends ConsumerWidget {
                     ),
                   ),
                   trailing: current == id
-                      ? Icon(
-                          Icons.check,
-                          color: AppColors.accentOf(context),
-                        )
+                      ? Icon(Icons.check, color: AppColors.accentOf(context))
                       : null,
                   onTap: () {
                     ref
@@ -623,10 +604,7 @@ class SettingsScreen extends ConsumerWidget {
                     ),
                   ),
                   trailing: currentQuality == quality
-                      ? Icon(
-                          Icons.check,
-                          color: AppColors.accentOf(context),
-                        )
+                      ? Icon(Icons.check, color: AppColors.accentOf(context))
                       : null,
                   onTap: () {
                     if (isDownload) {
@@ -652,8 +630,9 @@ class SettingsScreen extends ConsumerWidget {
   Future<void> _backupData(BuildContext context, WidgetRef ref) async {
     try {
       final storage = await StorageService.instance;
-      final playlists =
-          await ref.read(playlistServiceProvider).getAllPlaylists();
+      final playlists = await ref
+          .read(playlistServiceProvider)
+          .getAllPlaylists();
       final playlistSnapshot = const PlaylistSnapshotCodec().encode(
         PlaylistSnapshot(schemaVersion: 1, playlists: playlists),
       );
@@ -754,27 +733,24 @@ class SettingsScreen extends ConsumerWidget {
 
   Future<void> _clearCache(BuildContext context, WidgetRef ref) async {
     final selected = <AppCacheCategory>{...AppCacheCategory.values};
-    final choices = <({
-      AppCacheCategory category,
-      String title,
-      String subtitle,
-    })>[
-      (
-        category: AppCacheCategory.playback,
-        title: '歌曲播放缓存',
-        subtitle: '自动缓存的歌曲文件，不包含手动下载的歌曲',
-      ),
-      (
-        category: AppCacheCategory.artwork,
-        title: '封面缓存',
-        subtitle: '专辑封面的磁盘和内存缓存',
-      ),
-      (
-        category: AppCacheCategory.temporaryFiles,
-        title: '临时文件',
-        subtitle: '系统临时目录中的中间文件',
-      ),
-    ];
+    final choices =
+        <({AppCacheCategory category, String title, String subtitle})>[
+          (
+            category: AppCacheCategory.playback,
+            title: '歌曲播放缓存',
+            subtitle: '自动缓存的歌曲文件，不包含手动下载的歌曲',
+          ),
+          (
+            category: AppCacheCategory.artwork,
+            title: '封面缓存',
+            subtitle: '专辑封面的磁盘和内存缓存',
+          ),
+          (
+            category: AppCacheCategory.temporaryFiles,
+            title: '临时文件',
+            subtitle: '系统临时目录中的中间文件',
+          ),
+        ];
     final confirmed = await showDialog<Set<AppCacheCategory>>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
@@ -783,8 +759,8 @@ class SettingsScreen extends ConsumerWidget {
           final selectAllValue = allSelected
               ? true
               : selected.isEmpty
-                  ? false
-                  : null;
+              ? false
+              : null;
           return AlertDialog(
             backgroundColor: AppColors.dialogBg(context),
             shape: RoundedRectangleBorder(
@@ -829,9 +805,7 @@ class SettingsScreen extends ConsumerWidget {
                       activeColor: AppColors.accentOf(context),
                       title: Text(
                         choice.title,
-                        style: TextStyle(
-                          color: AppColors.onScaffold(context),
-                        ),
+                        style: TextStyle(color: AppColors.onScaffold(context)),
                       ),
                       subtitle: Text(
                         choice.subtitle,
@@ -876,9 +850,9 @@ class SettingsScreen extends ConsumerWidget {
                 onPressed: selected.isEmpty
                     ? null
                     : () => Navigator.pop(
-                          dialogContext,
-                          Set<AppCacheCategory>.of(selected),
-                        ),
+                        dialogContext,
+                        Set<AppCacheCategory>.of(selected),
+                      ),
                 child: Text(
                   '清除',
                   style: TextStyle(
@@ -896,7 +870,9 @@ class SettingsScreen extends ConsumerWidget {
 
     if (confirmed != null && confirmed.isNotEmpty && context.mounted) {
       try {
-        final summary = await ref.read(cacheMaintenanceProvider).clear(confirmed);
+        final summary = await ref
+            .read(cacheMaintenanceProvider)
+            .clear(confirmed);
         if (confirmed.contains(AppCacheCategory.artwork)) {
           PaintingBinding.instance.imageCache
             ..clear()
@@ -905,9 +881,7 @@ class SettingsScreen extends ConsumerWidget {
         if (context.mounted) {
           final retained = summary.retainedPlaybackEntries;
           showAppNotification(
-            retained == 0
-                ? '所选缓存已清除'
-                : '缓存已清除，$retained 个正在使用的歌曲缓存已安全保留',
+            retained == 0 ? '所选缓存已清除' : '缓存已清除，$retained 个正在使用的歌曲缓存已安全保留',
             type: AppNotificationType.success,
           );
         }

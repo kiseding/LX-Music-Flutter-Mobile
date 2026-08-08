@@ -86,22 +86,27 @@ class CloudApiClient {
     Future<SharedPreferences> Function()? preferences,
     Future<CloudSessionPreferences> Function()? sessionPreferences,
     Future<CloudSessionPreferences> Function()? baseUrlPreferences,
-  })  : _dio = dio ??
-            AppHttpClient.create(options: BaseOptions(
-              connectTimeout: const Duration(seconds: 12),
-              receiveTimeout: const Duration(seconds: 30),
-              headers: {'Content-Type': 'application/json'},
-            )),
-        _secureStore = secureStore ?? FlutterSecureTokenStore(),
-        _preferences = preferences ?? SharedPreferences.getInstance,
-        _sessionPreferences = sessionPreferences ??
-            (() async => _SharedPreferencesCloudSessionPreferences(
-                  await (preferences ?? SharedPreferences.getInstance)(),
-                )),
-        _baseUrlPreferences = baseUrlPreferences ??
-            (() async => _SharedPreferencesCloudSessionPreferences(
-                  await (preferences ?? SharedPreferences.getInstance)(),
-                ));
+  }) : _dio =
+           dio ??
+           AppHttpClient.create(
+             options: BaseOptions(
+               connectTimeout: const Duration(seconds: 12),
+               receiveTimeout: const Duration(seconds: 30),
+               headers: {'Content-Type': 'application/json'},
+             ),
+           ),
+       _secureStore = secureStore ?? FlutterSecureTokenStore(),
+       _preferences = preferences ?? SharedPreferences.getInstance,
+       _sessionPreferences =
+           sessionPreferences ??
+           (() async => _SharedPreferencesCloudSessionPreferences(
+             await (preferences ?? SharedPreferences.getInstance)(),
+           )),
+       _baseUrlPreferences =
+           baseUrlPreferences ??
+           (() async => _SharedPreferencesCloudSessionPreferences(
+             await (preferences ?? SharedPreferences.getInstance)(),
+           ));
 
   String? get baseUrl => _baseUrl;
   String? get token => _token;
@@ -157,17 +162,18 @@ class CloudApiClient {
     String? token;
     if (baseUrl != null) {
       try {
-        token = await LegacyTokenMigrator(
-          secureStore: _secureStore,
-          preferences: prefs,
-        ).readAndMigrateToOrigin(
-          legacyKey: _kToken,
-          serviceUrl: baseUrl,
-          canMutate: () => _sessionRevision == revision,
-          mutate: _runSessionMutation,
-          discardStaleToken: (value) =>
-              _discardStaleMigrationToken(value, baseUrl),
-        );
+        token =
+            await LegacyTokenMigrator(
+              secureStore: _secureStore,
+              preferences: prefs,
+            ).readAndMigrateToOrigin(
+              legacyKey: _kToken,
+              serviceUrl: baseUrl,
+              canMutate: () => _sessionRevision == revision,
+              mutate: _runSessionMutation,
+              discardStaleToken: (value) =>
+                  _discardStaleMigrationToken(value, baseUrl),
+            );
       } on SecureTokenMigrationException {
         // Keep any already-published in-memory session; require reauth only
         // when this load would have been the first assignment.
@@ -203,8 +209,9 @@ class CloudApiClient {
     final validated = validateHttpsServiceUrl(url);
     final previousBaseUrl = _baseUrl;
     final previousConfigurationError = _configurationError;
-    final previousOrigin =
-        previousBaseUrl == null ? null : normalizedOrigin(previousBaseUrl);
+    final previousOrigin = previousBaseUrl == null
+        ? null
+        : normalizedOrigin(previousBaseUrl);
     final nextOrigin = normalizedOrigin(validated);
     final originChanged =
         previousOrigin != null && previousOrigin != nextOrigin;
@@ -232,14 +239,20 @@ class CloudApiClient {
             await preferences.remove(_kUsername);
             if (!_ownsBaseUrlRevision(baseUrlRevision)) {
               await _restorePreference(
-                  preferences, _kUsername, previousMetaUsername);
+                preferences,
+                _kUsername,
+                previousMetaUsername,
+              );
               await _restorePreference(preferences, _kRole, previousMetaRole);
               return;
             }
             await preferences.remove(_kRole);
             if (!_ownsBaseUrlRevision(baseUrlRevision)) {
               await _restorePreference(
-                  preferences, _kUsername, previousMetaUsername);
+                preferences,
+                _kUsername,
+                previousMetaUsername,
+              );
               await _restorePreference(preferences, _kRole, previousMetaRole);
               return;
             }
@@ -250,12 +263,16 @@ class CloudApiClient {
           } catch (_) {
             try {
               await _restorePreference(
-                  preferences, _kUsername, previousMetaUsername);
+                preferences,
+                _kUsername,
+                previousMetaUsername,
+              );
               await _restorePreference(preferences, _kRole, previousMetaRole);
             } catch (_) {}
             if (_ownsBaseUrlRevision(baseUrlRevision)) {
               _baseUrl = previousBaseUrl;
-              _configurationError = previousConfigurationError ??
+              _configurationError =
+                  previousConfigurationError ??
                   'Cloud server address could not be saved. Please try again.';
             }
             rethrow;
@@ -276,12 +293,14 @@ class CloudApiClient {
     final revision = ++_baseUrlRevision;
     _baseUrl = validated;
     _configurationError = null;
-    await _runBaseUrlMutation(() => _persistBaseUrlLocked(
-          validated: validated,
-          expectedRevision: revision,
-          previousBaseUrl: previousBaseUrl,
-          previousConfigurationError: previousConfigurationError,
-        ));
+    await _runBaseUrlMutation(
+      () => _persistBaseUrlLocked(
+        validated: validated,
+        expectedRevision: revision,
+        previousBaseUrl: previousBaseUrl,
+        previousConfigurationError: previousConfigurationError,
+      ),
+    );
   }
 
   Future<T> _runBaseUrlMutation<T>(Future<T> Function() operation) {
@@ -316,7 +335,8 @@ class CloudApiClient {
     } catch (_) {
       if (!_ownsBaseUrlRevision(expectedRevision)) return;
       _baseUrl = previousBaseUrl;
-      _configurationError = previousConfigurationError ??
+      _configurationError =
+          previousConfigurationError ??
           'Cloud server address could not be saved. Please try again.';
       rethrow;
     }
@@ -456,12 +476,14 @@ class CloudApiClient {
     required String? role,
     int? expectedRevision,
   }) {
-    return _runSessionMutation(() => _persistSessionLocked(
-          token: token,
-          username: username,
-          role: role,
-          expectedRevision: expectedRevision,
-        ));
+    return _runSessionMutation(
+      () => _persistSessionLocked(
+        token: token,
+        username: username,
+        role: role,
+        expectedRevision: expectedRevision,
+      ),
+    );
   }
 
   Future<void> _persistSessionLocked({
@@ -589,10 +611,12 @@ class CloudApiClient {
 
   Future<void> clearSession({String? expectedToken, int? expectedRevision}) {
     final revision = expectedRevision ?? ++_sessionRevision;
-    return _runSessionMutation(() => _clearSessionLocked(
-          expectedToken: expectedToken,
-          expectedRevision: revision,
-        ));
+    return _runSessionMutation(
+      () => _clearSessionLocked(
+        expectedToken: expectedToken,
+        expectedRevision: revision,
+      ),
+    );
   }
 
   Future<void> _clearSessionLocked({
@@ -635,8 +659,7 @@ class CloudApiClient {
       )) {
         // Origin/session superseded mid-cleanup: leave durable origin partition
         // as-is and do not resurrect old-origin metadata into the new authority.
-        if (snapshot.tokenKey != null &&
-            snapshot.tokenKey != _activeTokenKey) {
+        if (snapshot.tokenKey != null && snapshot.tokenKey != _activeTokenKey) {
           final restored = await _restoreSecureToken(
             snapshot.token,
             tokenKey: snapshot.tokenKey,
@@ -657,8 +680,7 @@ class CloudApiClient {
         expectedRevision,
         tokenKey: tokenKey,
       )) {
-        if (snapshot.tokenKey != null &&
-            snapshot.tokenKey != _activeTokenKey) {
+        if (snapshot.tokenKey != null && snapshot.tokenKey != _activeTokenKey) {
           final restored = await _restoreSecureToken(
             snapshot.token,
             tokenKey: snapshot.tokenKey,
@@ -679,8 +701,7 @@ class CloudApiClient {
         expectedRevision,
         tokenKey: tokenKey,
       )) {
-        if (snapshot.tokenKey != null &&
-            snapshot.tokenKey != _activeTokenKey) {
+        if (snapshot.tokenKey != null && snapshot.tokenKey != _activeTokenKey) {
           final restored = await _restoreSecureToken(
             snapshot.token,
             tokenKey: snapshot.tokenKey,
@@ -701,8 +722,7 @@ class CloudApiClient {
         expectedRevision,
         tokenKey: tokenKey,
       )) {
-        if (snapshot.tokenKey != null &&
-            snapshot.tokenKey != _activeTokenKey) {
+        if (snapshot.tokenKey != null && snapshot.tokenKey != _activeTokenKey) {
           final restored = await _restoreSecureToken(
             snapshot.token,
             tokenKey: snapshot.tokenKey,
@@ -756,10 +776,13 @@ class CloudApiClient {
   }
 
   Options _authOptions() {
-    return Options(headers: {
-      'Content-Type': 'application/json',
-      if (_token != null && _baseUrl != null) 'Authorization': 'Bearer $_token',
-    });
+    return Options(
+      headers: {
+        'Content-Type': 'application/json',
+        if (_token != null && _baseUrl != null)
+          'Authorization': 'Bearer $_token',
+      },
+    );
   }
 
   String _url(String path) {
@@ -810,7 +833,9 @@ class CloudApiClient {
   }
 
   Future<Map<String, dynamic>> register(
-      String username, String password) async {
+    String username,
+    String password,
+  ) async {
     final revision = ++_sessionRevision;
     final resp = await _dio.post(
       _url('/api/user/register'),
@@ -835,8 +860,10 @@ class CloudApiClient {
     final token = _token!;
     final revision = _sessionRevision;
     try {
-      final resp = await _dio.get(_url('/api/user/auth/verify'),
-          options: _authOptions());
+      final resp = await _dio.get(
+        _url('/api/user/auth/verify'),
+        options: _authOptions(),
+      );
       final data = resp.data;
       if (data is Map && data['valid'] == true) {
         await _persistSession(
@@ -860,9 +887,25 @@ class CloudApiClient {
   }
 
   Future<Map<String, dynamic>> fetchUserList() async {
-    final resp =
-        await _dio.get(_url('/api/user/list'), options: _authOptions());
+    final resp = await _dio.get(
+      _url('/api/user/list'),
+      options: _authOptions(),
+    );
     return Map<String, dynamic>.from(resp.data as Map);
+  }
+
+  /// Stores the merged cloud snapshot. The server upserts every playlist, so
+  /// callers must fetch and merge before saving to avoid losing another device's
+  /// additions.
+  Future<void> saveUserList({
+    required List<Map<String, dynamic>> loveList,
+    required List<Map<String, dynamic>> userList,
+  }) async {
+    await _dio.post(
+      _url('/api/user/list'),
+      data: {'loveList': loveList, 'userList': userList},
+      options: _authOptions(),
+    );
   }
 
   /// Phase1 preview: {songs, name, source, listId}
@@ -872,10 +915,7 @@ class CloudApiClient {
   }) async {
     final resp = await _dio.post(
       _url('/api/music/playlist/import'),
-      data: {
-        'url': urlOrId,
-        if (platform != null) 'platform': platform,
-      },
+      data: {'url': urlOrId, if (platform != null) 'platform': platform},
       options: _authOptions(),
     );
     return Map<String, dynamic>.from(resp.data as Map);
@@ -902,8 +942,10 @@ class CloudApiClient {
   }
 
   Future<List<Map<String, dynamic>>> adminListUsers() async {
-    final resp =
-        await _dio.get(_url('/api/admin/users'), options: _authOptions());
+    final resp = await _dio.get(
+      _url('/api/admin/users'),
+      options: _authOptions(),
+    );
     final data = resp.data;
     if (data is Map && data['users'] is List) {
       return (data['users'] as List)

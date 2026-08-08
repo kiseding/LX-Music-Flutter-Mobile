@@ -16,8 +16,12 @@ class LyricParser {
     if (RegExp(r'<-?\d+,-?\d+(?:,-?\d+)?>').hasMatch(raw)) return true;
     // QRC: <mm:ss.xx>字 或 <mm:ss.xxx,ddd>
     if (RegExp(r'<\d{2}:\d{2}\.\d{2,3}(?:,\d+)?>').hasMatch(raw)) return true;
-    // Tencent QRC / Migu MRC: [1234,5678]text(0,180)...
-    if (RegExp(r'\[\d+,\d+\][^\n]*\(\d+,\d+\)').hasMatch(raw)) return true;
+    // Tencent QRC / Migu MRC uses at least two word timing tags per line.
+    // A single parenthesized number pair is common in ordinary Kuwo lyrics and
+    // must not switch the entire payload to the word-timed parser.
+    if (RegExp(r'\[\d+,\d+\][^\n]*(?:\(\d+,\d+\)[^\n]*){2}').hasMatch(raw)) {
+      return true;
+    }
     return false;
   }
 
@@ -74,12 +78,14 @@ class LyricParser {
         i++;
       }
 
-      lines.add(LyricLine(
-        time: current.time,
-        text: current.text,
-        translation: translation,
-        words: current.words,
-      ));
+      lines.add(
+        LyricLine(
+          time: current.time,
+          text: current.text,
+          translation: translation,
+          words: current.words,
+        ),
+      );
     }
 
     return Lyrics(raw: lrc, lines: lines);
@@ -87,8 +93,10 @@ class LyricParser {
 
   /// LRC 全局偏移，如 `[offset:500]` / `[offset:-200]`
   static Duration _parseOffset(String raw) {
-    final m = RegExp(r'\[offset\s*:\s*(-?\d+)\]', caseSensitive: false)
-        .firstMatch(raw);
+    final m = RegExp(
+      r'\[offset\s*:\s*(-?\d+)\]',
+      caseSensitive: false,
+    ).firstMatch(raw);
     if (m == null) return Duration.zero;
     final ms = int.tryParse(m.group(1) ?? '') ?? 0;
     return Duration(milliseconds: ms);
@@ -96,8 +104,9 @@ class LyricParser {
 
   static _ParsedLine? _parseLrcLine(String line) {
     // Kuwo LRCX can use a millisecond-only row marker such as `[12345]`.
-    final RegExp timeRegExp =
-        RegExp(r'\[(?:(\d{2}):(\d{2})\.?(\d{0,3})|(\d+))\]');
+    final RegExp timeRegExp = RegExp(
+      r'\[(?:(\d{2}):(\d{2})\.?(\d{0,3})|(\d+))\]',
+    );
     final matches = timeRegExp.allMatches(line);
 
     if (matches.isEmpty) {
@@ -154,8 +163,10 @@ class LyricParser {
   /// - LRCX 前置：`<0,180>词<180,200>语`
   /// - QRC 时钟：`<00:12.34>字` 或 `<00:12.34,180>字`
   /// - 绝对毫秒：`<12100,180>字`（start 很大时按绝对时间）
-  static List<LyricWord>? _parseWordTags(String body,
-      {required Duration lineStart}) {
+  static List<LyricWord>? _parseWordTags(
+    String body, {
+    required Duration lineStart,
+  }) {
     // QRC 时钟格式
     final qrcClock = RegExp(r'<(\d{2}):(\d{2})\.(\d{2,3})(?:,(\d+))?>([^<]*)');
     if (qrcClock.hasMatch(body)) {
@@ -167,11 +178,17 @@ class LyricParser {
         final durMs = m.group(4) != null ? int.tryParse(m.group(4)!) : null;
         final text = m.group(5) ?? '';
         if (text.isEmpty) continue;
-        words.add(LyricWord(
-          time: Duration(minutes: minutes, seconds: seconds, milliseconds: ms),
-          text: text,
-          duration: durMs != null ? Duration(milliseconds: durMs) : null,
-        ));
+        words.add(
+          LyricWord(
+            time: Duration(
+              minutes: minutes,
+              seconds: seconds,
+              milliseconds: ms,
+            ),
+            text: text,
+            duration: durMs != null ? Duration(milliseconds: durMs) : null,
+          ),
+        );
       }
       return words.isEmpty ? null : words;
     }
@@ -185,9 +202,11 @@ class LyricParser {
     if (matches.isEmpty) return null;
 
     // yrc：正文以非 < 开头，且整体为「字<start,dur>」重复（字在标签前）
-    final yrcLike = !body.trimLeft().startsWith('<') &&
-        RegExp(r'^(?:[^<]+<-?\d+,-?\d+(?:,-?\d+)?>)+\s*[^<]*$')
-            .hasMatch(body.trim());
+    final yrcLike =
+        !body.trimLeft().startsWith('<') &&
+        RegExp(
+          r'^(?:[^<]+<-?\d+,-?\d+(?:,-?\d+)?>)+\s*[^<]*$',
+        ).hasMatch(body.trim());
 
     if (yrcLike) {
       final yrc = RegExp(r'([^<]+)<(-?\d+),(-?\d+)(?:,-?\d+)?>');
@@ -197,12 +216,14 @@ class LyricParser {
         final startMs = int.tryParse(m.group(2) ?? '') ?? 0;
         final durMs = int.tryParse(m.group(3) ?? '') ?? 0;
         if (text.isEmpty) continue;
-        words.add(_wordFromOffset(
-          lineStart: lineStart,
-          startMs: startMs,
-          durMs: durMs,
-          text: text,
-        ));
+        words.add(
+          _wordFromOffset(
+            lineStart: lineStart,
+            startMs: startMs,
+            durMs: durMs,
+            text: text,
+          ),
+        );
       }
       // 末尾无标签的残余字
       if (yrcMatches.isNotEmpty) {
@@ -221,12 +242,14 @@ class LyricParser {
       final durMs = int.tryParse(m.group(2) ?? '') ?? 0;
       final text = m.group(3) ?? '';
       if (text.isEmpty) continue;
-      words.add(_wordFromOffset(
-        lineStart: lineStart,
-        startMs: startMs,
-        durMs: durMs,
-        text: text,
-      ));
+      words.add(
+        _wordFromOffset(
+          lineStart: lineStart,
+          startMs: startMs,
+          durMs: durMs,
+          text: text,
+        ),
+      );
     }
     return words.isEmpty ? null : words;
   }
@@ -279,10 +302,13 @@ class LyricParser {
     return raw.substring(contentStart, end);
   }
 
-  static LyricLine? _parseQrcLine(String line,
-      {Duration offset = Duration.zero}) {
-    final tencentMatch =
-        RegExp(r'^\[\s*(\d+)\s*,\s*(\d+)\s*\]').firstMatch(line);
+  static LyricLine? _parseQrcLine(
+    String line, {
+    Duration offset = Duration.zero,
+  }) {
+    final tencentMatch = RegExp(
+      r'^\[\s*(\d+)\s*,\s*(\d+)\s*\]',
+    ).firstMatch(line);
     if (tencentMatch != null) {
       final startMs = int.parse(tencentMatch.group(1)!);
       var time = Duration(milliseconds: startMs) + offset;
@@ -318,7 +344,8 @@ class LyricParser {
     final minutes = int.parse(match.group(1)!);
     final seconds = int.parse(match.group(2)!);
     final milliseconds = int.parse(match.group(3)!.padRight(3, '0'));
-    var time = Duration(
+    var time =
+        Duration(
           minutes: minutes,
           seconds: seconds,
           milliseconds: milliseconds,
@@ -336,11 +363,7 @@ class LyricParser {
 
     final words = [
       for (final w in wordsRaw)
-        LyricWord(
-          time: w.time + offset,
-          text: w.text,
-          duration: w.duration,
-        ),
+        LyricWord(time: w.time + offset, text: w.text, duration: w.duration),
     ];
     if (words.first.time > time) {
       time = words.first.time;
@@ -362,11 +385,13 @@ class LyricParser {
       if (text.isEmpty) continue;
       final startMs = int.parse(m.group(2)!);
       final durMs = int.parse(m.group(3)!);
-      words.add(LyricWord(
-        time: Duration(milliseconds: startMs),
-        text: text,
-        duration: durMs > 0 ? Duration(milliseconds: durMs) : null,
-      ));
+      words.add(
+        LyricWord(
+          time: Duration(milliseconds: startMs),
+          text: text,
+          duration: durMs > 0 ? Duration(milliseconds: durMs) : null,
+        ),
+      );
     }
     return words.isEmpty ? null : words;
   }

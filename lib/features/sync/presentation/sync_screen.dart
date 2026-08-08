@@ -4,6 +4,7 @@ import '../../../core/theme/app_colors.dart';
 import '../../cloud/presentation/cloud_provider.dart';
 import '../../cloud/domain/cloud_api_client.dart';
 import '../../playlist/presentation/playlist_provider.dart';
+import '../../playlist/domain/playlist.dart';
 import 'cloud_playlist_merge.dart';
 
 /// 同步页：对接 workers 云端（账号 + 歌单），不再强制首次启动登录。
@@ -211,9 +212,9 @@ class _SyncScreenState extends ConsumerState<SyncScreen> {
             backgroundColor: Theme.of(context).colorScheme.primary,
             foregroundColor: Theme.of(context).colorScheme.onPrimary,
           ),
-          onPressed: _busy ? null : _pullPlaylists,
+          onPressed: _busy ? null : _syncPlaylists,
           icon: Icon(Icons.cloud_download),
-          label: Text(_busy ? '同步中…' : '从云端拉取歌单'),
+          label: Text(_busy ? '同步中…' : '双向同步歌单'),
         ),
         const SizedBox(height: 12),
         TextButton(
@@ -291,7 +292,8 @@ class _SyncScreenState extends ConsumerState<SyncScreen> {
         setState(() => _message = alive ? '服务器可达' : '保存成功，但健康检查失败（部署后重试）');
       } on ArgumentError catch (error) {
         setState(
-            () => _message = error.message?.toString() ?? '服务器地址必须使用 HTTPS');
+          () => _message = error.message?.toString() ?? '服务器地址必须使用 HTTPS',
+        );
       }
     }
   }
@@ -316,7 +318,7 @@ class _SyncScreenState extends ConsumerState<SyncScreen> {
     });
   }
 
-  Future<void> _pullPlaylists() async {
+  Future<void> _syncPlaylists() async {
     setState(() {
       _busy = true;
       _message = null;
@@ -331,10 +333,24 @@ class _SyncScreenState extends ConsumerState<SyncScreen> {
         userList: userList,
         decodeSong: decodeCloudSong,
       );
+      Playlist? favorites;
+      for (final playlist in result.playlists) {
+        if (playlist.id == 'favorites') {
+          favorites = playlist;
+          break;
+        }
+      }
+      await _api.saveUserList(
+        loveList: [
+          for (final song in favorites?.songs ?? const [])
+            encodeCloudSong(song),
+        ],
+        userList: encodeCloudPlaylists(result.playlists),
+      );
       if (!mounted) return;
       setState(
         () => _message =
-            '已同步：收藏 ${result.favoriteSongCount} 首，歌单 ${result.acceptedPlaylistCount} 个',
+            '已双向同步：收藏 ${result.favoriteSongCount} 首，歌单 ${result.acceptedPlaylistCount} 个',
       );
     } catch (e) {
       if (!mounted) return;

@@ -8,10 +8,12 @@ final class CloudPlaylistMergeResult {
   const CloudPlaylistMergeResult({
     required this.favoriteSongCount,
     required this.acceptedPlaylistCount,
+    required this.playlists,
   });
 
   final int favoriteSongCount;
   final int acceptedPlaylistCount;
+  final List<Playlist> playlists;
 }
 
 MusicItem decodeCloudSong(Object? raw) {
@@ -108,10 +110,10 @@ Future<CloudPlaylistMergeResult> mergeAndPersistCloudPlaylists({
       playlist.id: playlist,
   };
   final favorites = playlists['favorites'];
-  final mergedFavoriteSongs =
-      favoriteSongs.isEmpty && favorites != null && favorites.songs.isNotEmpty
-          ? favorites.songs
-          : favoriteSongs;
+  final mergedFavoriteSongs = _mergeSongs(
+    favorites?.songs ?? const [],
+    favoriteSongs,
+  );
   if (favorites != null) {
     playlists['favorites'] = favorites.copyWith(
       songs: List<MusicItem>.unmodifiable(mergedFavoriteSongs),
@@ -124,8 +126,9 @@ Future<CloudPlaylistMergeResult> mergeAndPersistCloudPlaylists({
     final timestamp = now();
     playlists[candidate.id] = existing != null
         ? existing.copyWith(
-            name: candidate.name,
-            songs: List<MusicItem>.unmodifiable(candidate.songs),
+            songs: List<MusicItem>.unmodifiable(
+              _mergeSongs(existing.songs, candidate.songs),
+            ),
             updatedAt: timestamp,
           )
         : Playlist(
@@ -138,11 +141,65 @@ Future<CloudPlaylistMergeResult> mergeAndPersistCloudPlaylists({
           );
   }
 
-  await service.replaceAll(playlists.values.toList());
+  final merged = playlists.values.toList();
+  await service.replaceAll(merged);
   return CloudPlaylistMergeResult(
-    favoriteSongCount: favoriteSongs.length,
+    favoriteSongCount: mergedFavoriteSongs.length,
     acceptedPlaylistCount: candidates.length,
+    playlists: merged,
   );
+}
+
+List<MusicItem> _mergeSongs(
+  Iterable<MusicItem> local,
+  Iterable<MusicItem> cloud,
+) {
+  final seen = <String>{};
+  final result = <MusicItem>[];
+  for (final song in [...local, ...cloud]) {
+    final identity = _songIdentity(song);
+    if (seen.add(identity)) result.add(song);
+  }
+  return List<MusicItem>.unmodifiable(result);
+}
+
+String _songIdentity(MusicItem song) {
+  final id = song.songmid?.isNotEmpty == true
+      ? song.songmid!
+      : song.hash?.isNotEmpty == true
+      ? song.hash!
+      : song.id;
+  return '${song.source}|$id';
+}
+
+Map<String, dynamic> encodeCloudSong(MusicItem song) {
+  final songmid = song.songmid?.isNotEmpty == true
+      ? song.songmid!
+      : song.hash?.isNotEmpty == true
+      ? song.hash!
+      : song.id;
+  return {
+    'name': song.name,
+    'singer': song.singer,
+    'source': song.source,
+    'songmid': songmid,
+    'albumName': song.album,
+    'img': song.artwork ?? '',
+    'interval': song.duration.inSeconds.toString(),
+    'hash': song.hash ?? songmid,
+  };
+}
+
+List<Map<String, dynamic>> encodeCloudPlaylists(Iterable<Playlist> playlists) {
+  return [
+    for (final playlist in playlists)
+      if (playlist.id != 'favorites' && playlist.id != 'recent')
+        {
+          'id': playlist.id,
+          'name': playlist.name,
+          'list': [for (final song in playlist.songs) encodeCloudSong(song)],
+        },
+  ];
 }
 
 MusicItem _decodeAt(CloudSongDecoder decodeSong, Object? raw, String path) {

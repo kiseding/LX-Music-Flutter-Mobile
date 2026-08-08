@@ -13,14 +13,13 @@ class LyricService {
   final MusicSourceService? _musicSourceService;
   final TtlCache<Lyrics> _cache;
 
-  LyricService([
-    this._musicSourceService,
-    TtlCache<Lyrics>? cache,
-  ]) : _cache = cache ?? TtlCache<Lyrics>(ttl: TtlCache.defaultTtl);
+  LyricService([this._musicSourceService, TtlCache<Lyrics>? cache])
+    : _cache = cache ?? TtlCache<Lyrics>(ttl: TtlCache.defaultTtl);
 
   Future<Lyrics> fetchLyric(MusicItem music) async {
     debugPrint(
-        '[LyricService] fetchLyric: ${music.name}, platform=${music.platform}, songmid=${music.songmid}, source=${music.source}');
+      '[LyricService] fetchLyric: ${music.name}, platform=${music.platform}, songmid=${music.songmid}, source=${music.source}',
+    );
 
     final cacheKey = _cacheKey(music);
     final cached = _cache.get(cacheKey);
@@ -51,7 +50,8 @@ class LyricService {
         if (lyricStr != null && lyricStr.isNotEmpty) {
           final lyrics = _parseLyricString(lyricStr);
           debugPrint(
-              '[LyricService] MusicSourceService 获取成功, ${lyrics.lines.length} 行');
+            '[LyricService] MusicSourceService 获取成功, ${lyrics.lines.length} 行',
+          );
           _cache.set(cacheKey, lyrics);
           return lyrics;
         } else {
@@ -69,8 +69,9 @@ class LyricService {
 
   String _cacheKey(MusicItem music) {
     final platform = music.platform.isNotEmpty ? music.platform : music.source;
-    final songId =
-        music.songmid?.isNotEmpty == true ? music.songmid! : music.id;
+    final songId = music.songmid?.isNotEmpty == true
+        ? music.songmid!
+        : music.id;
     return '$platform|$songId|${music.id}';
   }
 
@@ -86,8 +87,7 @@ class LyricService {
     if (LyricParser.hasWordTiming(lyricStr)) {
       final hasLrcTimeTag =
           RegExp(r'\[\d{2}:\d{2}[\.\d]*\]').hasMatch(lyricStr) ||
-              RegExp(r'^\[\d+\].*(?:<\-?\d+,\-?\d+>)', multiLine: true)
-                  .hasMatch(lyricStr);
+          RegExp(r'^\[\d+\]', multiLine: true).hasMatch(lyricStr);
       if (hasLrcTimeTag) {
         // LRC + LRCX/QRC 字标签：parseLrc 已支持字级
         return LyricParser.parseLrc(lyricStr);
@@ -95,7 +95,9 @@ class LyricService {
       return LyricParser.parseQrc(lyricStr);
     }
 
-    final hasLrcTimeTag = RegExp(r'\[\d{2}:\d{2}[\.\d]*\]').hasMatch(lyricStr);
+    final hasLrcTimeTag =
+        RegExp(r'\[\d{2}:\d{2}[\.\d]*\]').hasMatch(lyricStr) ||
+        RegExp(r'^\[\d+\]', multiLine: true).hasMatch(lyricStr);
     if (hasLrcTimeTag) {
       return LyricParser.parseLrc(lyricStr);
     }
