@@ -80,7 +80,6 @@ final class AppLog with WidgetsBindingObserver {
     AppLogLevel level = AppLogLevel.info,
     StackTrace? stackTrace,
   }) {
-    if (identical(this, instance) && !_installed) return;
     var text = _redact(message?.toString() ?? '');
     if (text.length > 8000) {
       text = '${text.substring(0, 8000)}\n… message truncated';
