@@ -136,6 +136,54 @@ void main() {
     );
   });
 
+  test('terminal HTTP failures are exposed only to playback resolution',
+      () async {
+    for (final statusCode in [403, 404]) {
+      var requests = 0;
+      final dio = Dio();
+      dio.httpClientAdapter = _RangeResponseAdapter((options) {
+        requests++;
+        return ResponseBody.fromString('denied', statusCode);
+      });
+      final service = PlaybackCacheService(
+        dio: dio,
+        cacheRootOverride: tempDir.path,
+        indexStore: MemoryPlaybackCacheIndexStore(),
+      );
+      try {
+        await expectLater(
+          service.acquireOrDownloadForResolution(
+            remoteUrl: 'https://cdn.example/$statusCode.mp3',
+            platform: 'tx',
+            songId: 'terminal-$statusCode',
+            quality: '320k',
+          ),
+          throwsA(
+            isA<PlaybackCacheTerminalHttpException>().having(
+              (error) => error.statusCode,
+              'statusCode',
+              statusCode,
+            ),
+          ),
+        );
+        expect(requests, 1);
+
+        expect(
+          await service.acquireOrDownload(
+            remoteUrl: 'https://cdn.example/public-$statusCode.mp3',
+            platform: 'tx',
+            songId: 'public-terminal-$statusCode',
+            quality: '320k',
+          ),
+          isNull,
+        );
+        expect(requests, 2);
+      } finally {
+        await service.dispose();
+      }
+    }
+  });
+
   test('getOrDownload downloads once and reuses local file', () async {
     final path1 = await cache.getOrDownload(
       remoteUrl: 'https://cdn.example.com/a.mp3',

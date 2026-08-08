@@ -236,7 +236,7 @@ void main() async {
             allowQualityFallback: false,
           );
         },
-        acquireOrDownload: playbackCache.acquireOrDownload,
+        acquireOrDownload: playbackCache.acquireOrDownloadForResolution,
         validateStream: playbackCache.validateStream,
         cancelCacheKey: playbackCache.cancelKey,
         songIdFor: (music) {

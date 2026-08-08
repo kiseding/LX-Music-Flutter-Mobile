@@ -62,6 +62,7 @@ void main() {
   group('PlaybackUrlResolver', () {
     test('denied QQ HTTP media never reaches the native player', () async {
       final cancelled = <String>[];
+      var validationCalls = 0;
       final resolver = PlaybackUrlResolver<MusicItem>(
         resolvePlayableUrl: (music, {required preferredQuality}) async =>
             _playResult(
@@ -73,13 +74,15 @@ void main() {
           required platform,
           required songId,
           required quality,
-        }) async =>
-            null,
+        }) async => throw const PlaybackCacheTerminalHttpException(403),
         validateStream: ({
           required remoteUrl,
           required platform,
           required quality,
-        }) async => false,
+        }) async {
+          validationCalls++;
+          return false;
+        },
         cancelCacheKey: cancelled.add,
         songIdFor: (music) => music.songmid ?? music.id,
       );
@@ -87,6 +90,53 @@ void main() {
       final result = await resolver.resolve(_item(), preferredQuality: '320k');
 
       expect(result, isNull);
+      expect(validationCalls, 0);
+    });
+
+    test('not-found media skips stream validation and tries lower quality',
+        () async {
+      final qualities = <String>[];
+      var validationCalls = 0;
+      final resolver = PlaybackUrlResolver<MusicItem>(
+        resolvePlayableUrl: (music, {required preferredQuality}) async {
+          qualities.add(preferredQuality);
+          return _playResult(
+            url: 'https://cdn.example/$preferredQuality.mp3',
+            quality: preferredQuality,
+          );
+        },
+        acquireOrDownload: ({
+          required remoteUrl,
+          required platform,
+          required songId,
+          required quality,
+        }) async {
+          if (quality == '320k') {
+            throw const PlaybackCacheTerminalHttpException(404);
+          }
+          return _FakeLease(
+            '/tmp/$quality.mp3',
+            'key-$quality',
+            (_) {},
+          ).asLease();
+        },
+        validateStream: ({
+          required remoteUrl,
+          required platform,
+          required quality,
+        }) async {
+          validationCalls++;
+          return true;
+        },
+        songIdFor: (music) => music.songmid ?? music.id,
+      );
+
+      final result = await resolver.resolve(_item(), preferredQuality: '320k');
+
+      expect(qualities, ['320k', '128k']);
+      expect(validationCalls, 0);
+      expect(result, isA<CachedPlayback>());
+      expect(result?.qualityExtras['actualQuality'], '128k');
     });
 
     test('validated HTTP media can stream when cache transport is blocked',

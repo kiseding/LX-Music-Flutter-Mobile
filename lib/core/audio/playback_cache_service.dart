@@ -22,6 +22,15 @@ typedef PlaybackDownloader =
 typedef PlaybackCacheKeyHook = Future<void> Function(String key);
 typedef BackgroundFileProtector = Future<void> Function(String path);
 
+final class PlaybackCacheTerminalHttpException implements Exception {
+  final int statusCode;
+
+  const PlaybackCacheTerminalHttpException(this.statusCode);
+
+  @override
+  String toString() => 'Playback cache request rejected with HTTP $statusCode';
+}
+
 const _fileProtectionChannel = MethodChannel('lx_music/file_protection');
 
 Future<void> ensureBackgroundReadable(String path) async {
@@ -329,12 +338,17 @@ class PlaybackUrlResolver<T> {
           return null;
         }
 
-        final lease = await acquireOrDownload(
-          remoteUrl: result.url,
-          platform: result.platform,
-          songId: resolvedSongId,
-          quality: qualityKey,
-        );
+        PlaybackCacheLease? lease;
+        try {
+          lease = await acquireOrDownload(
+            remoteUrl: result.url,
+            platform: result.platform,
+            songId: resolvedSongId,
+            quality: qualityKey,
+          );
+        } on PlaybackCacheTerminalHttpException {
+          continue;
+        }
         if (!_generationKeys.containsKey(gen)) {
           if (lease != null) await lease.release();
           cancelCacheKey?.call(key);
@@ -701,6 +715,24 @@ class PlaybackCacheService {
     required String platform,
     required String songId,
     required String quality,
+  }) async {
+    try {
+      return await acquireOrDownloadForResolution(
+        remoteUrl: remoteUrl,
+        platform: platform,
+        songId: songId,
+        quality: quality,
+      );
+    } on PlaybackCacheTerminalHttpException {
+      return null;
+    }
+  }
+
+  Future<PlaybackCacheLease?> acquireOrDownloadForResolution({
+    required String remoteUrl,
+    required String platform,
+    required String songId,
+    required String quality,
   }) {
     return _trackAcquisition<PlaybackCacheLease?>(
       () => _acquireOrDownload(
@@ -1052,6 +1084,8 @@ class PlaybackCacheService {
             : await _validatedStableEntry(entry);
         return validated?.path == path ? validated!.path : null;
       });
+    } on PlaybackCacheTerminalHttpException {
+      rethrow;
     } catch (error) {
       debugPrint(
         '[PlaybackCache] operation failed key=${operation.key}: $error',
@@ -1281,6 +1315,10 @@ class PlaybackCacheService {
         key,
         () => _cleanupTransientFilesLocked(partPath, stagePath),
       );
+      final statusCode = error.response?.statusCode;
+      if (statusCode == 403 || statusCode == 404) {
+        throw PlaybackCacheTerminalHttpException(statusCode!);
+      }
       return null;
     } catch (error) {
       debugPrint('[PlaybackCache] download error key=$key: $error');
