@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:path_provider/path_provider.dart';
 
 import '../widgets/artwork_disk_cache.dart';
