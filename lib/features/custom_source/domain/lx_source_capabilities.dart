@@ -36,7 +36,7 @@ class LxSourceCapabilities {
   bool supports(String source, String action, [String? quality]) {
     final platform = source.toLowerCase();
     if (_actions[platform]?.contains(action) != true) return false;
-    // musicUrl：未声明 qualitys 视为支持全部官方音质（与桌面一致）
+    // musicUrl:??? qualitys ??????????(?????)
     if (action != 'musicUrl' || quality == null) return true;
     final qs = _qualities[platform];
     if (qs == null || qs.isEmpty) return true;
@@ -53,9 +53,12 @@ class LxSourceCapabilities {
     if (declared == null || declared.isEmpty || declared.contains(requested)) {
       return requested;
     }
-    const order = ['hires', 'flac24bit', 'flac', '320k', '128k'];
+    const order = ['hires', 'flac24bit', 'flac', '320k', '192k', '128k'];
+    const fallbackOrder = ['hires', 'flac24bit', 'flac', '320k', '128k'];
     final requestedIndex = order.indexOf(requested);
-    final candidates = order.where(declared.contains).toList(growable: false);
+    final candidates = fallbackOrder
+        .where(declared.contains)
+        .toList(growable: false);
     if (candidates.isEmpty) return null;
     if (requestedIndex < 0) return candidates.first;
     final atOrBelow = candidates
