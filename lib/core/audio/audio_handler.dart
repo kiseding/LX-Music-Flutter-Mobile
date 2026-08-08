@@ -4,6 +4,7 @@ import 'package:audio_service/audio_service.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:just_audio/just_audio.dart';
+import 'package:rxdart/rxdart.dart';
 
 import '../logging/app_log.dart';
 import 'playback_cache_service.dart';
@@ -279,9 +280,11 @@ class _ForegroundResolutionRequest {
 
 class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   late AudioPlayer _player;
+  late final BehaviorSubject<AudioPlayer> _playerSubject;
   late PlaybackCommandCoordinator _commands;
   final AudioPlayer Function()? _replacementPlayerFactory;
   final PrepareForPlayback? _prepareForPlayback;
+  final Duration _outputRouteRecoveryTimeout;
   final AudioInterruptionPolicy _interruptionPolicy = AudioInterruptionPolicy();
   final List<MediaItem> _queue = [];
   final List<int> _queueOccurrenceIds = [];
@@ -321,7 +324,13 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   int? _interruptionUserIntentGeneration;
   String? _interruptionMediaId;
   bool _outputRouteRecoveryPending = false;
+  Duration? _outputRouteRecoveryPosition;
+  int _outputRouteRecoveryGeneration = 0;
+  Future<void>? _outputRouteRecoveryValidation;
+  int? _outputRouteRecoveryValidationGeneration;
   Future<void>? _nativePlayerReset;
+  static const Duration _outputRouteRecoveryMinimumProgress =
+      Duration(milliseconds: 120);
 
   // 注入 URL 解析器
   UrlResolver? urlResolver;
@@ -710,11 +719,14 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     AudioPlayer? player,
     AudioPlayer Function()? playerFactory,
     PrepareForPlayback? prepareForPlayback,
+    Duration outputRouteRecoveryTimeout = const Duration(milliseconds: 1200),
   })  : assert(player == null || playerFactory == null),
         _replacementPlayerFactory =
             player == null ? (playerFactory ?? _createDefaultPlayer) : null,
-        _prepareForPlayback = prepareForPlayback {
+        _prepareForPlayback = prepareForPlayback,
+        _outputRouteRecoveryTimeout = outputRouteRecoveryTimeout {
     _player = player ?? (playerFactory ?? _createDefaultPlayer)();
+    _playerSubject = BehaviorSubject<AudioPlayer>.seeded(_player);
     _commands = _createCommandCoordinator(_player);
     _publishPlaybackState();
     _init();
@@ -745,6 +757,12 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       );
 
   AudioPlayer get player => _player;
+
+  Stream<AudioPlayer> get playerStream => _playerSubject.stream;
+
+  @visibleForTesting
+  Future<void> get debugOutputRouteRecoverySettled =>
+      _outputRouteRecoveryValidation ?? Future<void>.value();
 
   int _newOccurrenceId() => ++_nextQueueOccurrenceId;
 
@@ -849,23 +867,158 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     });
   }
 
-  Future<void>? _recoverNativePlayerAfterOutputRouteChange() {
-    if (!_outputRouteRecoveryPending || _disposed) return null;
+  void _clearOutputRouteRecovery() {
     _outputRouteRecoveryPending = false;
-    if (_replacementPlayerFactory == null) {
+    _outputRouteRecoveryPosition = null;
+    _outputRouteRecoveryGeneration++;
+  }
+
+  bool _ownsOutputRouteRecovery({
+    required int generation,
+    required int occurrenceId,
+    required String itemId,
+    required int userIntentGeneration,
+  }) =>
+      !_disposed &&
+      _outputRouteRecoveryPending &&
+      generation == _outputRouteRecoveryGeneration &&
+      occurrenceId == _activeOccurrenceId &&
+      itemId == _activeItemId &&
+      userIntentGeneration == _userIntentGeneration &&
+      _userWantsPlay &&
+      !interruptionActive;
+
+  Future<bool> _waitForOutputRouteProgress({
+    required AudioPlayer player,
+    required Duration baseline,
+  }) async {
+    bool advanced(Duration position) =>
+        position - baseline >= _outputRouteRecoveryMinimumProgress;
+    if (advanced(player.position)) return true;
+    try {
+      await player.positionStream
+          .firstWhere(advanced)
+          .timeout(_outputRouteRecoveryTimeout);
+      return true;
+    } on TimeoutException {
+      return advanced(player.position);
+    } catch (error, stackTrace) {
       AppLog.instance.record(
         'audio.recovery',
-        'native player recovery unavailable for the injected player',
+        'output route progress verification failed: $error',
         level: AppLogLevel.warning,
+        stackTrace: stackTrace,
       );
-      return null;
+      return advanced(player.position);
     }
-    AppLog.instance.record(
-      'audio.recovery',
-      'starting native player reconstruction after output route change',
-      level: AppLogLevel.warning,
-    );
-    return _resetNativePlayer();
+  }
+
+  void _validateOutputRouteRecovery(Duration recoveryPosition) {
+    if (!_outputRouteRecoveryPending) return;
+    final generation = _outputRouteRecoveryGeneration;
+    if (_outputRouteRecoveryValidation != null &&
+        _outputRouteRecoveryValidationGeneration == generation) {
+      return;
+    }
+    final occurrenceId = _activeOccurrenceId;
+    final itemId = _activeItemId;
+    final userIntentGeneration = _userIntentGeneration;
+    if (occurrenceId == null || itemId == null) return;
+    late final Future<void> validation;
+    validation = _trackOperation(() async {
+      try {
+        var observedPlayer = _player;
+        if (await _waitForOutputRouteProgress(
+          player: observedPlayer,
+          baseline: recoveryPosition,
+        )) {
+          if (_ownsOutputRouteRecovery(
+            generation: generation,
+            occurrenceId: occurrenceId,
+            itemId: itemId,
+            userIntentGeneration: userIntentGeneration,
+          )) {
+            AppLog.instance.record(
+              'audio.recovery',
+              'output route recovered on the existing player',
+            );
+            _clearOutputRouteRecovery();
+          }
+          return;
+        }
+        if (!_ownsOutputRouteRecovery(
+          generation: generation,
+          occurrenceId: occurrenceId,
+          itemId: itemId,
+          userIntentGeneration: userIntentGeneration,
+        )) {
+          return;
+        }
+        AppLog.instance.record(
+          'audio.recovery',
+          'existing player made no progress; reloading current source',
+          level: AppLogLevel.warning,
+        );
+        await _recoverAuthoritativeSource(
+          provenance: _captureStartProvenance(),
+          initialPosition: recoveryPosition,
+        );
+        if (!_ownsOutputRouteRecovery(
+          generation: generation,
+          occurrenceId: occurrenceId,
+          itemId: itemId,
+          userIntentGeneration: userIntentGeneration,
+        )) {
+          return;
+        }
+        observedPlayer = _player;
+        if (await _waitForOutputRouteProgress(
+          player: observedPlayer,
+          baseline: recoveryPosition,
+        )) {
+          if (_ownsOutputRouteRecovery(
+            generation: generation,
+            occurrenceId: occurrenceId,
+            itemId: itemId,
+            userIntentGeneration: userIntentGeneration,
+          )) {
+            AppLog.instance.record(
+              'audio.recovery',
+              'output route recovered after reloading the current source',
+            );
+            _clearOutputRouteRecovery();
+          }
+          return;
+        }
+        if (!_ownsOutputRouteRecovery(
+          generation: generation,
+          occurrenceId: occurrenceId,
+          itemId: itemId,
+          userIntentGeneration: userIntentGeneration,
+        )) {
+          return;
+        }
+        await _rebuildNativePlayerForCurrentItem(
+          initialPosition: recoveryPosition,
+          provenance: _captureStartProvenance(),
+        );
+      } catch (error, stackTrace) {
+        AppLog.instance.record(
+          'audio.recovery',
+          'output route recovery failed: $error',
+          level: AppLogLevel.error,
+          stackTrace: stackTrace,
+        );
+      }
+    }).whenComplete(() {
+      if (identical(_outputRouteRecoveryValidation, validation)) {
+        _outputRouteRecoveryValidation = null;
+        _outputRouteRecoveryValidationGeneration = null;
+      }
+    });
+    _outputRouteRecoveryValidation = validation;
+    _outputRouteRecoveryValidationGeneration = generation;
+    validation.ignore();
   }
 
   Future<void> _resetNativePlayer() {
@@ -923,11 +1076,62 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     _player = replacementFactory();
     _commands = _createCommandCoordinator(_player);
     _init();
+    _playerSubject.add(_player);
     _publishPlaybackState(
       override: AudioProcessingState.idle,
       playingOverride: false,
     );
     AppLog.instance.record('audio.recovery', 'native player reconstruction completed');
+  }
+
+  Future<void> _rebuildNativePlayerForCurrentItem({
+    required Duration initialPosition,
+    required PlaybackStartProvenance provenance,
+  }) async {
+    final occurrenceId = _activeOccurrenceId;
+    final itemId = _activeItemId;
+    final index = _currentIndex;
+    if (occurrenceId == null ||
+        itemId == null ||
+        index < 0 ||
+        index >= _queue.length ||
+        _occurrenceIdAt(index) != occurrenceId ||
+        _queue[index].id != itemId) {
+      return;
+    }
+    if (_replacementPlayerFactory == null) {
+      AppLog.instance.record(
+        'audio.recovery',
+        'native player recovery unavailable for the injected player',
+        level: AppLogLevel.warning,
+      );
+      return;
+    }
+    AppLog.instance.record(
+      'audio.recovery',
+      'starting native player reconstruction after playback recovery failed '
+          'positionMs=${initialPosition.inMilliseconds}',
+      level: AppLogLevel.warning,
+    );
+    await _resetNativePlayer();
+    if (_disposed ||
+        _activeOccurrenceId != occurrenceId ||
+        _activeItemId != itemId ||
+        _currentIndex != index) {
+      return;
+    }
+    await _loadQueueItem(
+      index,
+      preserveUserIntent: true,
+      recoverStaleInstall: false,
+      initialPosition: initialPosition,
+      provenance: provenance,
+    );
+    if (_installedPlaybackGeneration == _playGeneration &&
+        _installedMediaId == itemId &&
+        _player.processingState != ProcessingState.idle) {
+      _clearOutputRouteRecovery();
+    }
   }
 
   void _onTrackCompleted() {
@@ -1003,6 +1207,9 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     final generation = _playGeneration;
     final occurrenceId = _activeOccurrenceId;
     final itemId = _activeItemId;
+    final routeRecoveryPending = _outputRouteRecoveryPending;
+    final recoveryPosition =
+        _outputRouteRecoveryPosition ?? _player.position;
     _installedPlaybackGeneration = -1;
     _installedMediaId = null;
     _publishPlaybackState(
@@ -1020,9 +1227,14 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
           !_userWantsPlay) {
         return;
       }
+      if (routeRecoveryPending) {
+        _validateOutputRouteRecovery(recoveryPosition);
+        return;
+      }
       try {
         await _recoverAuthoritativeSource(
           provenance: _captureStartProvenance(),
+          initialPosition: recoveryPosition,
         );
       } catch (recoveryError) {
         debugPrint('[AudioHandler] playback recovery failed: $recoveryError');
@@ -1083,8 +1295,6 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       'play requested media=${_activeItemId ?? 'none'} '
           'routeRecoveryPending=$_outputRouteRecoveryPending',
     );
-    final nativePlayerRecovery = _recoverNativePlayerAfterOutputRouteChange();
-    if (nativePlayerRecovery != null) await nativePlayerRecovery;
     if (_disposed) return;
     _userIntentGeneration++;
     _userWantsPlay = true;
@@ -1098,8 +1308,15 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         _currentIndex < _queue.length &&
         _installedPlaybackGeneration == _playGeneration &&
         _installedMediaId == _queue[_currentIndex].id;
-    if (_player.processingState == ProcessingState.idle ||
-        !hasInstalledCurrentSource) {
+    final needsSourceReload =
+        _player.processingState == ProcessingState.idle ||
+            !hasInstalledCurrentSource;
+    final routeRecoveryPosition = _outputRouteRecoveryPending
+        ? (needsSourceReload
+            ? (_outputRouteRecoveryPosition ?? _player.position)
+            : _player.position)
+        : null;
+    if (needsSourceReload) {
       unawaited(_commands.recordExplicitPlayIntent());
       if (selectionTransferPending) return;
       if (currentOccurrenceId != null &&
@@ -1108,8 +1325,12 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         await _loadQueueItem(
           _currentIndex,
           preserveUserIntent: true,
+          initialPosition: routeRecoveryPosition ?? Duration.zero,
           provenance: _captureStartProvenance(),
         );
+        if (routeRecoveryPosition != null) {
+          _validateOutputRouteRecovery(routeRecoveryPosition);
+        }
         // _loadQueueItem commits through PlaybackCommandCoordinator, which
         // installs the source and starts it after installation. Calling
         // super.play here races iOS setAudioSource during restored playback.
@@ -1122,6 +1343,9 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     }
     if (_disposed) return;
     await super.play();
+    if (routeRecoveryPosition != null) {
+      _validateOutputRouteRecovery(routeRecoveryPosition);
+    }
   }
 
   /// 供测试：模拟当前曲播放完成（锁屏自动下一曲路径）。
@@ -1277,24 +1501,39 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         disposedValue: null,
       );
 
-  Future<void> _handleAudioOutputRouteChanged() async {
+  void _markOutputRouteRecoveryPending(
+    String reason, {
+    bool force = false,
+  }) {
+    if (force || !_outputRouteRecoveryPending) {
+      _outputRouteRecoveryPosition = _player.position;
+      _outputRouteRecoveryGeneration++;
+    }
     _outputRouteRecoveryPending = true;
+    final recoveryPosition = _outputRouteRecoveryPosition!;
     AppLog.instance.record(
       'audio.route',
-      'output route changed; recovery marked pending',
+      '$reason; recovery marked pending '
+          'positionMs=${recoveryPosition.inMilliseconds}',
       level: AppLogLevel.warning,
     );
-    await _commands.handleOutputRouteChanged();
+    if (!force &&
+        _userWantsPlay &&
+        !interruptionActive &&
+        _player.playing &&
+        _player.processingState != ProcessingState.idle) {
+      _validateOutputRouteRecovery(recoveryPosition);
+    }
+  }
+
+  Future<void> _handleAudioOutputRouteChanged() {
+    _markOutputRouteRecoveryPending('output route changed');
+    return Future<void>.value();
   }
 
   Future<void> _handleBecomingNoisy() async {
     if (_disposed) return;
-    _outputRouteRecoveryPending = true;
-    AppLog.instance.record(
-      'audio.route',
-      'output became noisy; recovery marked pending',
-      level: AppLogLevel.warning,
-    );
+    _markOutputRouteRecoveryPending('output became noisy', force: true);
     if (_interruptionPolicy.onBecomingNoisy() ==
         InterruptionAction.pausePreservingIntent) {
       final userIntentGeneration = _recordExplicitPlaybackIntent(true);
@@ -1512,8 +1751,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       'skip next requested seamless=$seamless '
           'routeRecoveryPending=$_outputRouteRecoveryPending',
     );
-    final nativePlayerRecovery = _recoverNativePlayerAfterOutputRouteChange();
-    if (nativePlayerRecovery != null) await nativePlayerRecovery;
+    _clearOutputRouteRecovery();
     if (_disposed) return;
     final provenance = _captureStartProvenance();
     _recordExplicitPlayIntent();
@@ -1606,8 +1844,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       'audio.command',
       'skip previous requested routeRecoveryPending=$_outputRouteRecoveryPending',
     );
-    final nativePlayerRecovery = _recoverNativePlayerAfterOutputRouteChange();
-    if (nativePlayerRecovery != null) await nativePlayerRecovery;
+    _clearOutputRouteRecovery();
     if (_disposed) return;
     final provenance = _captureStartProvenance();
     _recordExplicitPlayIntent();
@@ -1965,6 +2202,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     await cleanup(_drainLeaseReleases);
     await cleanup(_commands.stopAndWait);
     await cleanup(_player.dispose);
+    await cleanup(_playerSubject.close);
 
     if (firstError case final error?) {
       Error.throwWithStackTrace(error, firstStackTrace!);
@@ -1995,8 +2233,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     bool playAfterLoad = true,
   }) async {
     if (_disposed) return;
-    final nativePlayerRecovery = _recoverNativePlayerAfterOutputRouteChange();
-    if (nativePlayerRecovery != null) await nativePlayerRecovery;
+    _clearOutputRouteRecovery();
     if (_disposed) return;
     final provenance = _captureStartProvenance();
     _recordExplicitPlaybackIntent(playAfterLoad);
@@ -2130,7 +2367,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       final manualBufferingPublication = _publishPlaybackState(
         override: AudioProcessingState.buffering,
         playingOverride: keepPlaying ? true : false,
-        positionOverride: Duration.zero,
+        positionOverride: initialPosition,
       );
       final cachedUrl = item.extras?['url']?.toString();
       final cachedQ = item.extras?['requestedQuality']?.toString();
@@ -2317,7 +2554,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         _publishPlaybackState(
           override: AudioProcessingState.buffering,
           playingOverride: keepPlaying ? true : false,
-          positionOverride: Duration.zero,
+          positionOverride: initialPosition,
         );
         foregroundRequest.item = updatedItem;
         _activeItemId = itemId;
@@ -2406,7 +2643,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         }
         _publishPlaybackState(
           playingOverride: _commands.effectivePlaying ? true : null,
-          positionOverride: Duration.zero,
+          positionOverride: initialPosition,
         );
         if (!_isStale(gen)) _schedulePreload();
       } catch (e, stackTrace) {
@@ -2456,6 +2693,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
   Future<void> _recoverAuthoritativeSource({
     required PlaybackStartProvenance provenance,
+    Duration? initialPosition,
   }) async {
     if (_commands.desiredSourceOccurrenceId != _activeOccurrenceId) return;
     final authoritativeItem = mediaItem.value;
@@ -2472,6 +2710,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       authoritativeIndex,
       preserveUserIntent: true,
       recoverStaleInstall: false,
+      initialPosition: initialPosition ?? Duration.zero,
       provenance: provenance,
     );
   }
@@ -2497,8 +2736,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     bool playWhenReady = true,
   }) async {
     if (_disposed) return;
-    final nativePlayerRecovery = _recoverNativePlayerAfterOutputRouteChange();
-    if (nativePlayerRecovery != null) await nativePlayerRecovery;
+    _clearOutputRouteRecovery();
     if (_disposed) return;
     final provenance = _captureStartProvenance();
     _recordExplicitPlaybackIntent(playWhenReady);

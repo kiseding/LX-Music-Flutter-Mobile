@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_app_group_directory/flutter_app_group_directory.dart';
 import 'package:home_widget/home_widget.dart';
 import 'package:live_activities/live_activities.dart';
+import 'package:rxdart/rxdart.dart';
 
 import '../../../core/audio/audio_handler.dart';
 import '../../../core/widgets/artwork_disk_cache.dart';
@@ -57,7 +58,9 @@ class LockScreenSyncService {
     _subscriptions.add(_handler.mediaItem.listen((_) => _syncNow()));
     _subscriptions.add(_handler.playbackState.listen((_) => _syncNow()));
     _subscriptions.add(
-      _handler.player.positionDiscontinuityStream.listen((_) => _syncNow()),
+      _handler.playerStream
+          .switchMap((player) => player.positionDiscontinuityStream)
+          .listen((_) => _syncNow()),
     );
     _positionTimer = Timer.periodic(
       const Duration(seconds: 1),

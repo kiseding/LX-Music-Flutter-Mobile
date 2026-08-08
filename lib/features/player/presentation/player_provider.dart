@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:just_audio/just_audio.dart';
+import 'package:rxdart/rxdart.dart';
 
 import '../../../core/audio/audio_handler.dart';
 import '../../../core/audio/playback_command_coordinator.dart';
@@ -64,7 +65,7 @@ final playbackStateProvider = StreamProvider<PlaybackState>((ref) {
 final playerPositionProvider =
     StateNotifierProvider<PositionNotifier, Duration>((ref) {
   if (audioHandler is LxAudioHandler) {
-    return PositionNotifier((audioHandler as LxAudioHandler).player);
+    return PositionNotifier(audioHandler as LxAudioHandler);
   }
   return PositionNotifier(null);
 });
@@ -81,7 +82,9 @@ final isPlayingProvider = Provider<AsyncValue<bool>>((ref) {
 // 播放器实际音频时长（从 just_audio 获取）
 final audioDurationProvider = StreamProvider<Duration?>((ref) {
   if (audioHandler is LxAudioHandler) {
-    return (audioHandler as LxAudioHandler).player.durationStream;
+    return (audioHandler as LxAudioHandler)
+        .playerStream
+        .switchMap((player) => player.durationStream);
   }
   return Stream.value(null);
 });
@@ -123,42 +126,69 @@ final playModeProvider = Provider<PlayMode>((ref) {
 /// 进度条 / 时间 / 歌词全部只读这里，禁止各自维护另一套时钟。
 class PositionNotifier extends StateNotifier<Duration>
     implements ScrubPosition {
-  final AudioPlayer? _player;
+  final LxAudioHandler? _handler;
+  AudioPlayer? _player;
   Timer? _timer;
+  StreamSubscription<AudioPlayer>? _playerSub;
   StreamSubscription<Duration>? _posSub;
   StreamSubscription<PositionDiscontinuity>? _discSub;
   bool _frozen = false;
+  bool _disposed = false;
+  int _playerBindingGeneration = 0;
 
-  PositionNotifier(this._player) : super(Duration.zero) {
-    final player = _player;
-    if (player == null) return;
-    update(player.position);
+  PositionNotifier(this._handler) : super(Duration.zero) {
+    final handler = _handler;
+    if (handler == null) return;
+    _bindPlayer(handler.player);
+    _playerSub = handler.playerStream.listen(_bindPlayer);
 
-    // 官方 positionStream（内部 createPositionStream），seek 后会跟 updatePosition
-    _posSub = player.positionStream.listen((p) {
-      if (_frozen) return;
-      if ((p - state).inMilliseconds.abs() >= 16) update(p);
-    });
-
-    // seek 不连续：立刻跳到目标，歌词/进度同步
-    _discSub = player.positionDiscontinuityStream.listen((d) {
-      if (_frozen) return;
-      final p = player.position;
-      update(p);
-    });
-
-    // 兜底轮询（部分 iOS 场景 stream 间隙）
+    // 兜底轮询，覆盖部分 iOS 场景下 positionStream 间歇停更。
     _timer = Timer.periodic(const Duration(milliseconds: 100), (_) {
-      if (_frozen) return;
+      if (_disposed || _frozen) return;
+      final player = _player;
+      if (player == null) return;
       final p = player.position;
       if ((p - state).inMilliseconds.abs() >= 30) update(p);
+    });
+  }
+
+  void _bindPlayer(AudioPlayer player) {
+    if (_disposed || identical(_player, player)) return;
+    final bindingGeneration = ++_playerBindingGeneration;
+    final oldPositionSubscription = _posSub;
+    final oldDiscontinuitySubscription = _discSub;
+    _posSub = null;
+    _discSub = null;
+    _player = player;
+    if (oldPositionSubscription != null) {
+      unawaited(oldPositionSubscription.cancel());
+    }
+    if (oldDiscontinuitySubscription != null) {
+      unawaited(oldDiscontinuitySubscription.cancel());
+    }
+    update(player.position);
+    _posSub = player.positionStream.listen((position) {
+      if (_disposed ||
+          _frozen ||
+          bindingGeneration != _playerBindingGeneration) {
+        return;
+      }
+      if ((position - state).inMilliseconds.abs() >= 16) update(position);
+    });
+    _discSub = player.positionDiscontinuityStream.listen((_) {
+      if (_disposed ||
+          _frozen ||
+          bindingGeneration != _playerBindingGeneration) {
+        return;
+      }
+      update(player.position);
     });
   }
 
   Duration get position => state;
 
   void update(Duration next) {
-    if (next == state) return;
+    if (_disposed || next == state) return;
     state = next;
   }
 
@@ -180,7 +210,10 @@ class PositionNotifier extends StateNotifier<Duration>
 
   @override
   void dispose() {
+    _disposed = true;
+    _playerBindingGeneration++;
     _timer?.cancel();
+    _playerSub?.cancel();
     _posSub?.cancel();
     _discSub?.cancel();
     super.dispose();

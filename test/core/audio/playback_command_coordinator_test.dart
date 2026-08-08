@@ -612,17 +612,17 @@ void main() {
     expect(player.calls.where((call) => call == 'source').length, 2);
   });
 
-  test('output route recovery restarts a stalled native player', () async {
+  test('becoming noisy pauses without reinstalling the source', () async {
     final player = _LifecycleAudioPlayer();
     final coordinator = PlaybackCommandCoordinator(player);
     addTearDown(player.dispose);
     await _install(coordinator);
     await coordinator.recordExplicitPlayIntent();
 
-    await coordinator.handleOutputRouteChanged();
+    await coordinator.becomingNoisy();
     await coordinator.recordExplicitPlayIntent();
 
-    expect(player.calls, ['source', 'play', 'stop', 'source', 'play']);
+    expect(player.calls, ['source', 'play', 'pause', 'play']);
     expect(player.playing, isTrue);
   });
 

@@ -90,8 +90,6 @@ class PlaybackCommandCoordinator {
   int? _failedPlaySourceToken;
   int? _failedSourceToken;
   SourceCommitFailed? _failedSourceCommit;
-  bool _outputRouteRecoveryPending = false;
-  bool _forceNativeSourceReset = false;
   bool _shutdown = false;
   bool _stoppingAndWaiting = false;
   Object? _shutdownError;
@@ -261,15 +259,7 @@ class PlaybackCommandCoordinator {
     _intentRevision++;
     _desiredPlaying = true;
     _stopDesired = false;
-    if (_outputRouteRecoveryPending) {
-      _outputRouteRecoveryPending = false;
-      _forceNativeSourceReset = true;
-      _invalidateActivePlayLifecycle();
-      _installedSourceToken = null;
-      _temporarySourceToken = null;
-    } else {
-      _retireInactivePlayLifecycle();
-    }
+    _retireInactivePlayLifecycle();
     _failedPlayIntentRevision = null;
     _failedPlaySourceToken = null;
     if (_failedSourceToken == _desiredSource?.token) {
@@ -442,7 +432,6 @@ class PlaybackCommandCoordinator {
 
   Future<void> becomingNoisy() {
     if (_shutdown) return Future<void>.value();
-    _outputRouteRecoveryPending = true;
     _retireInactivePlayLifecycle();
     _interruptionDepth = 0;
     _interruptionMayResume = true;
@@ -450,13 +439,6 @@ class PlaybackCommandCoordinator {
     _desiredPlaying = false;
     _resumeDeniedIntentRevision = _intentRevision;
     return _markDirty();
-  }
-
-  Future<void> handleOutputRouteChanged() {
-    if (_shutdown) return Future<void>.value();
-    _outputRouteRecoveryPending = true;
-    _retireInactivePlayLifecycle();
-    return Future<void>.value();
   }
 
   Future<void> _markDirty({
@@ -524,15 +506,8 @@ class PlaybackCommandCoordinator {
       if (desiredSource != null &&
           desiredSource.source != null &&
           _failedSourceToken != desiredSource.token &&
-          (_forceNativeSourceReset ||
-              _installedSourceToken != desiredSource.token)) {
+          _installedSourceToken != desiredSource.token) {
         try {
-          if (_forceNativeSourceReset) {
-            _forceNativeSourceReset = false;
-            try {
-              await _player.stop();
-            } catch (_) {}
-          }
           final duration = await _player
               .setAudioSource(
                 desiredSource.source!,

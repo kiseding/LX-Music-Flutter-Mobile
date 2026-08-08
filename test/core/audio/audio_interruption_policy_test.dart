@@ -719,19 +719,96 @@ void main() {
     expect(player.playing, isFalse);
   });
 
-  test('output route recovery rebuilds the production audio player', () async {
-    final firstPlayer = _InterruptionAudioPlayer();
-    final replacementPlayer = _InterruptionAudioPlayer();
-    final players = [firstPlayer, replacementPlayer];
-    final handler = LxAudioHandler(playerFactory: () => players.removeAt(0));
+  test('output route recovery keeps the player and preserves progress', () async {
+    var playerCreations = 0;
+    final handler = LxAudioHandler(playerFactory: () {
+      playerCreations++;
+      return _InterruptionAudioPlayer();
+    });
     addTearDown(handler.dispose);
+    final firstPlayer = handler.player as _InterruptionAudioPlayer;
     await handler.setPlaylist([_item('A')]);
+    await firstPlayer.seek(const Duration(seconds: 42));
+    firstPlayer.advanceOnPlay = true;
+    final positionNotifier = PositionNotifier(handler);
+    addTearDown(positionNotifier.dispose);
 
+    expect(positionNotifier.state, const Duration(seconds: 42));
+
+    await handler.handleBecomingNoisy();
+    await handler.handleAudioOutputRouteChanged();
     await handler.handleAudioOutputRouteChanged();
     await handler.play();
+    await handler.debugOutputRouteRecoverySettled;
 
-    expect(handler.player, same(replacementPlayer));
-    expect(replacementPlayer.playing, isTrue);
+    expect(playerCreations, 1);
+    expect(handler.player, same(firstPlayer));
+    expect(firstPlayer.playing, isTrue);
+    expect(firstPlayer.position, const Duration(seconds: 43));
+    expect(positionNotifier.state, const Duration(seconds: 43));
+
+    await firstPlayer.seek(const Duration(seconds: 45));
+    expect(positionNotifier.state, const Duration(seconds: 45));
+  });
+
+  test('output route rebuild is used only after an existing player stall',
+      () async {
+    var playerCreations = 0;
+    final handler = LxAudioHandler(
+      playerFactory: () {
+        playerCreations++;
+        return _InterruptionAudioPlayer()
+          ..advanceOnPlay = playerCreations > 1;
+      },
+      outputRouteRecoveryTimeout: const Duration(milliseconds: 5),
+    );
+    addTearDown(handler.dispose);
+    final firstPlayer = handler.player as _InterruptionAudioPlayer;
+    await handler.setPlaylist([_item('A')]);
+    await firstPlayer.seek(const Duration(seconds: 42));
+    final positionNotifier = PositionNotifier(handler);
+    addTearDown(positionNotifier.dispose);
+
+    await handler.handleBecomingNoisy();
+    await handler.play();
+    await handler.debugOutputRouteRecoverySettled;
+
+    expect(playerCreations, 2);
+    expect(handler.player, isNot(same(firstPlayer)));
+    expect(handler.player.playing, isTrue);
+    expect(handler.player.position, const Duration(seconds: 43));
+    expect(positionNotifier.state, const Duration(seconds: 43));
+  });
+
+  test('device change cannot clear noisy recovery before pause completes',
+      () async {
+    var playerCreations = 0;
+    final handler = LxAudioHandler(
+      playerFactory: () {
+        playerCreations++;
+        return _InterruptionAudioPlayer()
+          ..advanceOnPlay = playerCreations > 1;
+      },
+      outputRouteRecoveryTimeout: const Duration(milliseconds: 5),
+    );
+    addTearDown(handler.dispose);
+    final firstPlayer = handler.player as _InterruptionAudioPlayer;
+    await handler.setPlaylist([_item('A')]);
+    await firstPlayer.seek(const Duration(seconds: 42));
+    final pauseGate = _Gate();
+    firstPlayer.gateNextPause(pauseGate);
+
+    final becomingNoisy = handler.handleBecomingNoisy();
+    await pauseGate.started.future;
+    await handler.handleAudioOutputRouteChanged();
+    pauseGate.release.complete();
+    await becomingNoisy;
+    await handler.play();
+    await handler.debugOutputRouteRecoverySettled;
+
+    expect(playerCreations, 2);
+    expect(handler.player, isNot(same(firstPlayer)));
+    expect(handler.player.position, const Duration(seconds: 43));
   });
 
   for (final denial in ['non-resumable interruption', 'becoming noisy']) {
@@ -902,6 +979,7 @@ MediaItem _item(String id) => MediaItem(
 
 class _InterruptionAudioPlayer extends AudioPlayer {
   final _events = StreamController<PlaybackEvent>.broadcast();
+  final _positions = StreamController<Duration>.broadcast();
   final _processingStates = StreamController<ProcessingState>.broadcast();
   AudioSource? _source;
   bool _playing = false;
@@ -914,6 +992,7 @@ class _InterruptionAudioPlayer extends AudioPlayer {
   _Gate? _stopGate;
   int pauseCalls = 0;
   int playCalls = 0;
+  bool advanceOnPlay = false;
 
   void gateNextPause(_Gate gate) => _pauseGates.add(gate);
 
@@ -943,6 +1022,9 @@ class _InterruptionAudioPlayer extends AudioPlayer {
   Stream<PlaybackEvent> get playbackEventStream => _events.stream;
 
   @override
+  Stream<Duration> get positionStream => _positions.stream;
+
+  @override
   Stream<ProcessingState> get processingStateStream => _processingStates.stream;
 
   @override
@@ -960,6 +1042,8 @@ class _InterruptionAudioPlayer extends AudioPlayer {
       await gate.release.future;
     }
     _source = source;
+    _position = initialPosition ?? Duration.zero;
+    _positions.add(_position);
     _processingState = ProcessingState.ready;
     return null;
   }
@@ -973,6 +1057,10 @@ class _InterruptionAudioPlayer extends AudioPlayer {
       await gate.release.future;
     }
     _playing = true;
+    if (advanceOnPlay) {
+      _position += const Duration(seconds: 1);
+      _positions.add(_position);
+    }
   }
 
   @override
@@ -994,7 +1082,10 @@ class _InterruptionAudioPlayer extends AudioPlayer {
       gate.started.complete();
       await gate.release.future;
     }
-    if (position != null) _position = position;
+    if (position != null) {
+      _position = position;
+      _positions.add(_position);
+    }
   }
 
   @override
@@ -1012,6 +1103,7 @@ class _InterruptionAudioPlayer extends AudioPlayer {
   @override
   Future<void> dispose() async {
     await _events.close();
+    await _positions.close();
     await _processingStates.close();
     await super.dispose();
   }
