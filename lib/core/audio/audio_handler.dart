@@ -328,6 +328,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   int _outputRouteRecoveryGeneration = 0;
   Future<void>? _outputRouteRecoveryValidation;
   int? _outputRouteRecoveryValidationGeneration;
+  int? _outputRouteRecoveryValidationUserIntentGeneration;
   Future<void>? _nativePlayerReset;
   static const Duration _outputRouteRecoveryMinimumProgress =
       Duration(milliseconds: 120);
@@ -916,13 +917,15 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   void _validateOutputRouteRecovery(Duration recoveryPosition) {
     if (!_outputRouteRecoveryPending) return;
     final generation = _outputRouteRecoveryGeneration;
+    final userIntentGeneration = _userIntentGeneration;
     if (_outputRouteRecoveryValidation != null &&
-        _outputRouteRecoveryValidationGeneration == generation) {
+        _outputRouteRecoveryValidationGeneration == generation &&
+        _outputRouteRecoveryValidationUserIntentGeneration ==
+            userIntentGeneration) {
       return;
     }
     final occurrenceId = _activeOccurrenceId;
     final itemId = _activeItemId;
-    final userIntentGeneration = _userIntentGeneration;
     if (occurrenceId == null || itemId == null) return;
     late final Future<void> validation;
     validation = _trackOperation(() async {
@@ -1014,10 +1017,13 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       if (identical(_outputRouteRecoveryValidation, validation)) {
         _outputRouteRecoveryValidation = null;
         _outputRouteRecoveryValidationGeneration = null;
+        _outputRouteRecoveryValidationUserIntentGeneration = null;
       }
     });
     _outputRouteRecoveryValidation = validation;
     _outputRouteRecoveryValidationGeneration = generation;
+    _outputRouteRecoveryValidationUserIntentGeneration =
+        userIntentGeneration;
     validation.ignore();
   }
 
@@ -1091,6 +1097,7 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     final occurrenceId = _activeOccurrenceId;
     final itemId = _activeItemId;
     final index = _currentIndex;
+    final userIntentGeneration = _userIntentGeneration;
     if (occurrenceId == null ||
         itemId == null ||
         index < 0 ||
@@ -1117,7 +1124,20 @@ class LxAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     if (_disposed ||
         _activeOccurrenceId != occurrenceId ||
         _activeItemId != itemId ||
-        _currentIndex != index) {
+        _currentIndex != index ||
+        _userIntentGeneration != userIntentGeneration ||
+        !_userWantsPlay ||
+        interruptionActive) {
+      return;
+    }
+    await _commands.recordExplicitPlayIntent();
+    if (_disposed ||
+        _activeOccurrenceId != occurrenceId ||
+        _activeItemId != itemId ||
+        _currentIndex != index ||
+        _userIntentGeneration != userIntentGeneration ||
+        !_userWantsPlay ||
+        interruptionActive) {
       return;
     }
     await _loadQueueItem(
