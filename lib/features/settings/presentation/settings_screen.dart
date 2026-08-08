@@ -4,9 +4,9 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:file_picker/file_picker.dart';
 import '../../../core/io/bounded_input.dart';
+import '../../../core/storage/cache_maintenance_service.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/widgets/app_notification.dart';
 import '../../../core/storage/storage_service.dart';
@@ -203,8 +203,8 @@ class SettingsScreen extends ConsumerWidget {
                 context,
                 ref,
                 '清除缓存',
-                '清除下载缓存和临时文件',
-                () => _clearCache(context),
+                '清除歌曲播放缓存、封面缓存和临时文件',
+                () => _clearCache(context, ref),
               ),
             ]),
             _buildSection(context, '关于', [
@@ -752,50 +752,164 @@ class SettingsScreen extends ConsumerWidget {
     }
   }
 
-  Future<void> _clearCache(BuildContext context) async {
-    final confirmed = await showDialog<bool>(
+  Future<void> _clearCache(BuildContext context, WidgetRef ref) async {
+    final selected = <AppCacheCategory>{...AppCacheCategory.values};
+    final choices = <({
+      AppCacheCategory category,
+      String title,
+      String subtitle,
+    })>[
+      (
+        category: AppCacheCategory.playback,
+        title: '歌曲播放缓存',
+        subtitle: '自动缓存的歌曲文件，不包含手动下载的歌曲',
+      ),
+      (
+        category: AppCacheCategory.artwork,
+        title: '封面缓存',
+        subtitle: '专辑封面的磁盘和内存缓存',
+      ),
+      (
+        category: AppCacheCategory.temporaryFiles,
+        title: '临时文件',
+        subtitle: '系统临时目录中的中间文件',
+      ),
+    ];
+    final confirmed = await showDialog<Set<AppCacheCategory>>(
       context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: AppColors.dialogBg(context),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-        ),
-        title: Text(
-          '清除缓存',
-          style: TextStyle(color: AppColors.onScaffold(context)),
-        ),
-        content: Text(
-          '确定要清除所有缓存数据吗？下载的文件不会被删除。',
-          style: TextStyle(color: AppColors.secondaryText(context)),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: Text(
-              '取消',
-              style: TextStyle(color: AppColors.mutedText(context)),
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setState) {
+          final allSelected = selected.length == AppCacheCategory.values.length;
+          final selectAllValue = allSelected
+              ? true
+              : selected.isEmpty
+                  ? false
+                  : null;
+          return AlertDialog(
+            backgroundColor: AppColors.dialogBg(context),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
             ),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: Text(
-              '确定',
-              style: TextStyle(color: AppColors.accentOf(context)),
+            title: Text(
+              '选择要清除的内容',
+              style: TextStyle(color: AppColors.onScaffold(context)),
             ),
-          ),
-        ],
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  CheckboxListTile(
+                    value: selectAllValue,
+                    tristate: true,
+                    contentPadding: EdgeInsets.zero,
+                    controlAffinity: ListTileControlAffinity.leading,
+                    activeColor: AppColors.accentOf(context),
+                    title: Text(
+                      '全选',
+                      style: TextStyle(
+                        color: AppColors.onScaffold(context),
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    onChanged: (value) {
+                      setState(() {
+                        selected.clear();
+                        if (value != false) {
+                          selected.addAll(AppCacheCategory.values);
+                        }
+                      });
+                    },
+                  ),
+                  const Divider(height: 1),
+                  ...choices.map((choice) {
+                    return CheckboxListTile(
+                      value: selected.contains(choice.category),
+                      contentPadding: EdgeInsets.zero,
+                      controlAffinity: ListTileControlAffinity.leading,
+                      activeColor: AppColors.accentOf(context),
+                      title: Text(
+                        choice.title,
+                        style: TextStyle(
+                          color: AppColors.onScaffold(context),
+                        ),
+                      ),
+                      subtitle: Text(
+                        choice.subtitle,
+                        style: TextStyle(
+                          color: AppColors.secondaryText(context),
+                          fontSize: 12,
+                        ),
+                      ),
+                      onChanged: (value) {
+                        setState(() {
+                          if (value == true) {
+                            selected.add(choice.category);
+                          } else {
+                            selected.remove(choice.category);
+                          }
+                        });
+                      },
+                    );
+                  }),
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(
+                      '手动下载的歌曲不会被删除；正在播放的歌曲缓存会安全保留。',
+                      style: TextStyle(
+                        color: AppColors.secondaryText(context),
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: Text(
+                  '取消',
+                  style: TextStyle(color: AppColors.mutedText(context)),
+                ),
+              ),
+              TextButton(
+                onPressed: selected.isEmpty
+                    ? null
+                    : () => Navigator.pop(
+                          dialogContext,
+                          Set<AppCacheCategory>.of(selected),
+                        ),
+                child: Text(
+                  '清除',
+                  style: TextStyle(
+                    color: selected.isEmpty
+                        ? AppColors.mutedText(context)
+                        : AppColors.accentOf(context),
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
       ),
     );
 
-    if (confirmed == true && context.mounted) {
+    if (confirmed != null && confirmed.isNotEmpty && context.mounted) {
       try {
-        final cacheDir = await getTemporaryDirectory();
-        if (cacheDir.existsSync()) {
-          cacheDir.deleteSync(recursive: true);
-          cacheDir.createSync();
+        final summary = await ref.read(cacheMaintenanceProvider).clear(confirmed);
+        if (confirmed.contains(AppCacheCategory.artwork)) {
+          PaintingBinding.instance.imageCache
+            ..clear()
+            ..clearLiveImages();
         }
         if (context.mounted) {
-          showAppNotification('缓存已清除', type: AppNotificationType.success);
+          final retained = summary.retainedPlaybackEntries;
+          showAppNotification(
+            retained == 0
+                ? '所选缓存已清除'
+                : '缓存已清除，$retained 个正在使用的歌曲缓存已安全保留',
+            type: AppNotificationType.success,
+          );
         }
       } catch (e) {
         if (context.mounted) {

@@ -7,6 +7,7 @@ import 'package:lx_music_flutter/core/audio/audio_handler.dart';
 import 'package:lx_music_flutter/core/audio/audio_runtime.dart';
 import 'package:lx_music_flutter/core/audio/playback_cache_service.dart';
 import 'package:lx_music_flutter/core/logging/app_log.dart';
+import 'package:lx_music_flutter/core/storage/cache_maintenance_service.dart';
 import 'package:lx_music_flutter/features/custom_source/presentation/custom_source_provider.dart';
 import 'package:lx_music_flutter/features/search/presentation/search_provider.dart';
 import 'package:lx_music_flutter/features/playlist/presentation/playlist_provider.dart';
@@ -37,11 +38,13 @@ void main() async {
     directory: () async => documents,
     preferences: preferences,
   );
+  final cacheMaintenance = CacheMaintenanceService();
   final disposals = ResourceDisposalTracker();
   final container = ProviderContainer(
     overrides: [
-    playlistRepositoryProvider.overrideWithValue(playlistRepository),
-    resourceDisposalTrackerProvider.overrideWithValue(disposals),
+      playlistRepositoryProvider.overrideWithValue(playlistRepository),
+      resourceDisposalTrackerProvider.overrideWithValue(disposals),
+      cacheMaintenanceProvider.overrideWithValue(cacheMaintenance),
     ],
   );
   final lifecycle = StartupLifecycle(container, disposals);
@@ -217,6 +220,9 @@ void main() async {
     final playbackCache = PlaybackCacheService();
     runtime.ownCache(playbackCache.dispose);
     await playbackCache.init();
+    disposals.register(
+      cacheMaintenance.attachPlaybackCache(playbackCache.clear),
+    );
 
     {
       final sourceService = container.read(musicSourceServiceProvider);

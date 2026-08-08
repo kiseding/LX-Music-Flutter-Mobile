@@ -122,4 +122,17 @@ class ArtworkDiskCache {
     if (file == null) return Uri.tryParse(normalizeOutboundUrl(remoteUrl));
     return Uri.file(file.path);
   }
+
+  Future<void> clear() async {
+    await ensureReady();
+    _memory.clear();
+    _diskTouched.clear();
+    final root = _root;
+    if (root == null) return;
+    final directory = Directory(root);
+    await directory.create(recursive: true);
+    await for (final entity in directory.list(followLinks: false)) {
+      await entity.delete(recursive: true);
+    }
+  }
 }

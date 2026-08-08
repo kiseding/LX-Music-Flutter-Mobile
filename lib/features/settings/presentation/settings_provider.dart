@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/audio/audio_handler.dart';
+import '../../../core/storage/cache_maintenance_service.dart';
 import '../../../core/storage/storage_service.dart';
 
 // 音质选择
@@ -45,6 +46,10 @@ final autoResumePlaybackProvider =
 final defaultSearchPlatformProvider =
     StateNotifierProvider<DefaultSearchPlatformNotifier, String>((ref) {
   return DefaultSearchPlatformNotifier();
+});
+
+final cacheMaintenanceProvider = Provider<CacheMaintenanceService>((ref) {
+  return CacheMaintenanceService();
 });
 
 // ---- Notifiers ----

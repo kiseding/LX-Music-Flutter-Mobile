@@ -491,6 +491,9 @@ class PlaybackCacheService {
   static final _stableCacheName = RegExp(
     r'^([0-9a-f]{40})\.(flac|m4a|mp3|aac|ogg|wav|ape)$',
   );
+  static final _transientCacheName = RegExp(
+    r'^([0-9a-f]{40})\.\d+\.(?:part|(?:stage|previous)\.(?:flac|m4a|mp3|aac|ogg|wav|ape))$',
+  );
 
   final Dio _dio;
   final PlaybackDownloader? _downloader;
@@ -1098,6 +1101,31 @@ class PlaybackCacheService {
     await _saveIndex();
   }
 
+  Future<int> clear() async {
+    if (_disposed) return 0;
+    await init();
+    if (_disposed) return 0;
+    final retainedKeys = <String>{..._inflight.keys};
+    final candidates = _index.values.toList(growable: false);
+    for (final candidate in candidates) {
+      await _withKeyTransaction(candidate.key, () async {
+        final current = _index[candidate.key];
+        if (current == null || current.generation != candidate.generation) {
+          return;
+        }
+        if (_isProtected(candidate.key)) {
+          retainedKeys.add(candidate.key);
+          return;
+        }
+        await _removeEntryLocked(candidate.key, expected: current);
+      });
+    }
+    await _cleanupUnindexedStableFiles();
+    await _cleanupOrphanedTransientFiles();
+    await _saveIndex();
+    return retainedKeys.length;
+  }
+
   Future<void> debugBackdateEntry(String key, {required int daysAgo}) async {
     if (_disposed) return;
     await _withKeyTransaction(key, () async {
@@ -1469,6 +1497,23 @@ class PlaybackCacheService {
           return;
         }
         await _deleteOwnedStablePath(key, path);
+      });
+    }
+  }
+
+  Future<void> _cleanupOrphanedTransientFiles() async {
+    final root = _root;
+    if (root == null) return;
+    await for (final entity in Directory(root).list(followLinks: false)) {
+      if (entity is! File) continue;
+      final name = entity.uri.pathSegments.last;
+      final match = _transientCacheName.firstMatch(name);
+      if (match == null) continue;
+      final key = match.group(1)!;
+      final path = _normalizeAbsolute(entity.path);
+      await _withKeyTransaction(key, () async {
+        if (_isProtected(key)) return;
+        await _deleteSafe(path);
       });
     }
   }

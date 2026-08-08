@@ -416,6 +416,88 @@ void main() {
     expect(File(first.path).existsSync(), isFalse);
   });
 
+  test('clear removes unused entries and retains an active lease', () async {
+    final active = await cache.acquireOrDownload(
+      remoteUrl: 'https://cdn.example.com/active.mp3',
+      platform: 'tx',
+      songId: 'active',
+      quality: '320k',
+    );
+    final unused = await cache.acquireOrDownload(
+      remoteUrl: 'https://cdn.example.com/unused.mp3',
+      platform: 'tx',
+      songId: 'unused',
+      quality: '320k',
+    );
+    expect(active, isNotNull);
+    expect(unused, isNotNull);
+    await unused!.release();
+
+    final retained = await cache.clear();
+
+    expect(retained, 1);
+    expect(File(active!.path).existsSync(), isTrue);
+    expect(File(unused.path).existsSync(), isFalse);
+
+    await active.release();
+    expect(await cache.clear(), 0);
+    expect(File(active.path).existsSync(), isFalse);
+  });
+
+  test('clear removes orphaned transient playback files', () async {
+    const key = '0123456789abcdef0123456789abcdef01234567';
+    final part = File('${tempDir.path}/$key.1.part');
+    final stage = File('${tempDir.path}/$key.1.stage.mp3');
+    final previous = File('${tempDir.path}/$key.1.previous.mp3');
+    final unrelated = File('${tempDir.path}/notes.part');
+    for (final file in [part, stage, previous, unrelated]) {
+      await file.writeAsBytes(List<int>.filled(32, 1));
+    }
+
+    await cache.clear();
+
+    expect(part.existsSync(), isFalse);
+    expect(stage.existsSync(), isFalse);
+    expect(previous.existsSync(), isFalse);
+    expect(unrelated.existsSync(), isTrue);
+  });
+
+  test('clear preserves transient files for an active download', () async {
+    final downloadStarted = Completer<void>();
+    final finishDownload = Completer<void>();
+    final downloadingCache = PlaybackCacheService(
+      cacheRootOverride: tempDir.path,
+      indexStore: MemoryPlaybackCacheIndexStore(),
+      downloader: (url, savePath, {cancelToken}) async {
+        await File(savePath).writeAsBytes(List<int>.filled(32, 1));
+        downloadStarted.complete();
+        await finishDownload.future;
+      },
+    );
+    await cache.dispose();
+    cache = downloadingCache;
+
+    final acquisition = cache.acquireOrDownload(
+      remoteUrl: 'https://cdn.example.com/downloading.mp3',
+      platform: 'tx',
+      songId: 'downloading',
+      quality: '320k',
+    );
+    await downloadStarted.future;
+    final transient = tempDir
+        .listSync()
+        .whereType<File>()
+        .singleWhere((file) => file.path.endsWith('.part'));
+
+    expect(await cache.clear(), 1);
+    expect(transient.existsSync(), isTrue);
+
+    finishDownload.complete();
+    final lease = await acquisition;
+    expect(lease, isNotNull);
+    await lease!.release();
+  });
+
   test(
     'acquireExisting re-leases the exact indexed stable cache path',
     () async {
