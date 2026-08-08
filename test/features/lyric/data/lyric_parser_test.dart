@@ -44,6 +44,52 @@ void main() {
     expect(lyrics.lines.first.hasWordTiming, isTrue);
   });
 
+  test('parseLrc converts Kuwo encoded word timing using its scale tag', () {
+    const raw = r'''
+[kuwo:13]
+[00:10.000]<1000,200>你<1800,200>好
+[00:12.000]普通兜底
+''';
+    final lyrics = LyricParser.parseLrc(raw);
+    expect(lyrics.lines[0].time, const Duration(milliseconds: 10000));
+    expect(lyrics.lines[0].text, '你好');
+    expect(lyrics.lines[0].hasWordTiming, isTrue);
+    expect(lyrics.lines[0].words![0].time, const Duration(milliseconds: 10600));
+    expect(
+      lyrics.lines[0].words![0].duration,
+      const Duration(milliseconds: 400),
+    );
+    expect(lyrics.lines[0].words![1].time, const Duration(milliseconds: 11000));
+    expect(
+      lyrics.lines[0].words![1].duration,
+      const Duration(milliseconds: 800),
+    );
+    expect(lyrics.lines[1].text, '普通兜底');
+    expect(lyrics.lines[1].hasWordTiming, isFalse);
+  });
+
+  test('invalid Kuwo timing scale falls back to plain line lyrics', () {
+    const raw = r'''
+[kuwo:invalid]
+[00:10.000]<1000,200>普<1800,200>通
+''';
+    final lyrics = LyricParser.parseLrc(raw);
+    expect(lyrics.lines.single.text, '普通');
+    expect(lyrics.lines.single.hasWordTiming, isFalse);
+    expect(lyrics.lines.single.time, const Duration(seconds: 10));
+  });
+
+  test('Kuwo final word cannot run beyond the next lyric line', () {
+    const raw = r'''
+[kuwo:13]
+[00:10.000]<1000,200>前<1800,-800>句
+[00:11.500]<0,0>后
+''';
+    final lyrics = LyricParser.parseLrc(raw);
+    final last = lyrics.lines.first.words!.last;
+    expect(last.time + last.duration!, lyrics.lines[1].time);
+  });
+
   test('parseLrc yrc style word-before-tag', () {
     const raw = r'''
 [00:05.00]你<0,180>好<180,220>吗

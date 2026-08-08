@@ -47,7 +47,9 @@ final class AppLog with WidgetsBindingObserver {
   bool Function(Object error, StackTrace stackTrace)? _previousPlatformError;
   bool _installed = false;
 
-  void install() {
+  bool get isActive => _installed;
+
+  void start() {
     if (_installed) return;
     _installed = true;
     _previousDebugPrint = debugPrint;
@@ -60,12 +62,25 @@ final class AppLog with WidgetsBindingObserver {
     record('app', 'diagnostic logging started');
   }
 
+  void stop() {
+    if (!_installed) return;
+    WidgetsBinding.instance.removeObserver(this);
+    if (_previousDebugPrint != null) debugPrint = _previousDebugPrint!;
+    FlutterError.onError = _previousFlutterError;
+    PlatformDispatcher.instance.onError = _previousPlatformError;
+    _previousDebugPrint = null;
+    _previousFlutterError = null;
+    _previousPlatformError = null;
+    _installed = false;
+  }
+
   void record(
     String category,
     Object? message, {
     AppLogLevel level = AppLogLevel.info,
     StackTrace? stackTrace,
   }) {
+    if (identical(this, instance) && !_installed) return;
     var text = _redact(message?.toString() ?? '');
     if (text.length > 8000) {
       text = '${text.substring(0, 8000)}\n… message truncated';
@@ -76,8 +91,7 @@ final class AppLog with WidgetsBindingObserver {
         level: level,
         category: category,
         message: text,
-        stackTrace:
-            stackTrace == null ? null : _redact(stackTrace.toString()),
+        stackTrace: stackTrace == null ? null : _redact(stackTrace.toString()),
       ),
     );
     if (_items.length > maximumEntries) {

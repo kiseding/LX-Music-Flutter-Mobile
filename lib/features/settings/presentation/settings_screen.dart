@@ -17,6 +17,7 @@ import '../../playlist/presentation/playlist_provider.dart';
 import '../../player/presentation/player_provider.dart';
 import '../../download/presentation/download_provider.dart';
 import '../domain/playlist_backup.dart';
+import 'app_log_screen.dart';
 
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
@@ -212,17 +213,13 @@ class SettingsScreen extends ConsumerWidget {
               ),
             ]),
             _buildSection(context, '关于', [
-              const _SettingRow(
-                icon: Icons.info_outline,
-                name: '版本',
-                value: '1.0.0',
-              ),
+              const _SettingRow(name: '版本', value: '1.0.0'),
               _buildNavTile(
                 context,
                 ref,
                 '实时诊断日志',
-                '查看本次运行的完整实时日志（不保存）',
-                () => context.push('/diagnostic-logs'),
+                '点开开始记录，最小化后继续记录（不保存）',
+                () => showDiagnosticLogOverlay(context),
               ),
             ]),
             const SizedBox(height: 40),
@@ -895,15 +892,10 @@ class SettingsScreen extends ConsumerWidget {
 }
 
 class _SettingRow extends StatelessWidget {
-  final IconData icon;
   final String name;
   final String value;
 
-  const _SettingRow({
-    required this.icon,
-    required this.name,
-    required this.value,
-  });
+  const _SettingRow({required this.name, required this.value});
 
   @override
   Widget build(BuildContext context) {
@@ -911,8 +903,6 @@ class _SettingRow extends StatelessWidget {
       padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: Row(
         children: [
-          Icon(icon, size: 18, color: AppColors.mutedText(context)),
-          const SizedBox(width: 12),
           Expanded(
             child: Text(
               name,

@@ -8,13 +8,22 @@ import '../../../core/network/music_source_service.dart';
 import '../../../core/network/outbound_url.dart';
 import '../../../core/storage/ttl_cache.dart';
 
+typedef PreferredLyricLoader = Future<String?> Function(MusicItem music);
+
 class LyricService {
-  final Dio _dio = AppHttpClient.create();
+  final Dio _dio;
   final MusicSourceService? _musicSourceService;
+  final PreferredLyricLoader? _preferredLyricLoader;
   final TtlCache<Lyrics> _cache;
 
-  LyricService([this._musicSourceService, TtlCache<Lyrics>? cache])
-    : _cache = cache ?? TtlCache<Lyrics>(ttl: TtlCache.defaultTtl);
+  LyricService([
+    this._musicSourceService,
+    TtlCache<Lyrics>? cache,
+    Dio? dio,
+    PreferredLyricLoader? preferredLyricLoader,
+  ]) : _dio = dio ?? AppHttpClient.create(),
+       _preferredLyricLoader = preferredLyricLoader,
+       _cache = cache ?? TtlCache<Lyrics>(ttl: TtlCache.defaultTtl);
 
   Future<Lyrics> fetchLyric(MusicItem music) async {
     debugPrint(
@@ -28,25 +37,12 @@ class LyricService {
       return cached;
     }
 
-    if (music.lyricsUrl != null && music.lyricsUrl!.isNotEmpty) {
-      try {
-        debugPrint('[LyricService] 尝试从 lyricsUrl 获取: ${music.lyricsUrl}');
-        final response = await _dio.get(normalizeOutboundUrl(music.lyricsUrl!));
-        if (response.statusCode == 200 && response.data is String) {
-          final lyrics = _parseLyricString(response.data);
-          debugPrint('[LyricService] lyricsUrl 获取成功, ${lyrics.lines.length} 行');
-          _cache.set(cacheKey, lyrics);
-          return lyrics;
-        }
-      } catch (e) {
-        debugPrint('[LyricService] lyricsUrl 获取失败: $e');
-      }
-    }
-
-    if (_musicSourceService != null) {
+    if (_preferredLyricLoader != null || _musicSourceService != null) {
       try {
         debugPrint('[LyricService] 尝试从 MusicSourceService 获取歌词');
-        final lyricStr = await _musicSourceService.getLyric(music);
+        final lyricStr =
+            await (_preferredLyricLoader?.call(music) ??
+                _musicSourceService!.getLyric(music));
         if (lyricStr != null && lyricStr.isNotEmpty) {
           final lyrics = _parseLyricString(lyricStr);
           debugPrint(
@@ -59,6 +55,23 @@ class LyricService {
         }
       } catch (e) {
         debugPrint('[LyricService] MusicSourceService 获取失败: $e');
+      }
+    }
+
+    // Built-in sources are attempted first because their lyric endpoint may
+    // provide word timing while lyricsUrl is commonly only plain LRC.
+    if (music.lyricsUrl != null && music.lyricsUrl!.isNotEmpty) {
+      try {
+        debugPrint('[LyricService] 尝试从 lyricsUrl 获取: ${music.lyricsUrl}');
+        final response = await _dio.get(normalizeOutboundUrl(music.lyricsUrl!));
+        if (response.statusCode == 200 && response.data is String) {
+          final lyrics = _parseLyricString(response.data);
+          debugPrint('[LyricService] lyricsUrl 获取成功, ${lyrics.lines.length} 行');
+          _cache.set(cacheKey, lyrics);
+          return lyrics;
+        }
+      } catch (e) {
+        debugPrint('[LyricService] lyricsUrl 获取失败: $e');
       }
     }
 

@@ -30,10 +30,12 @@ class LyricParser {
     final lines = <LyricLine>[];
     final List<String> lineList = lrc.split('\n');
     final offset = _parseOffset(lrc);
+    final isKuwo = RegExp(r'\[kuwo\s*:', caseSensitive: false).hasMatch(lrc);
+    final kuwoScale = _parseKuwoScale(lrc);
 
     final parsedLines = <_ParsedLine>[];
     for (final line in lineList) {
-      final parsed = _parseLrcLine(line);
+      final parsed = _parseLrcLine(line, isKuwo: isKuwo, kuwoScale: kuwoScale);
       if (parsed != null) {
         parsedLines.add(parsed);
       }
@@ -54,7 +56,7 @@ class LyricParser {
         ];
         final firstWord = words.first.time;
         // 行时间明显落后于首字（含行戳为 0）时以首字为准
-        if (firstWord > t) {
+        if (!isKuwo && firstWord > t) {
           t = firstWord;
         }
       }
@@ -63,6 +65,7 @@ class LyricParser {
     }).toList();
 
     adjusted.sort((a, b) => a.time.compareTo(b.time));
+    if (isKuwo) _clampKuwoWordsToNextLine(adjusted);
 
     int i = 0;
     while (i < adjusted.length) {
@@ -91,6 +94,24 @@ class LyricParser {
     return Lyrics(raw: lrc, lines: lines);
   }
 
+  static void _clampKuwoWordsToNextLine(List<_ParsedLine> lines) {
+    for (var i = 0; i + 1 < lines.length; i++) {
+      final words = lines[i].words;
+      if (words == null || words.isEmpty) continue;
+      final last = words.last;
+      final duration = last.duration;
+      if (duration == null || last.time + duration <= lines[i + 1].time) {
+        continue;
+      }
+      final available = lines[i + 1].time - last.time;
+      words[words.length - 1] = LyricWord(
+        time: last.time,
+        text: last.text,
+        duration: available > Duration.zero ? available : Duration.zero,
+      );
+    }
+  }
+
   /// LRC 全局偏移，如 `[offset:500]` / `[offset:-200]`
   static Duration _parseOffset(String raw) {
     final m = RegExp(
@@ -102,7 +123,24 @@ class LyricParser {
     return Duration(milliseconds: ms);
   }
 
-  static _ParsedLine? _parseLrcLine(String line) {
+  static (int, int)? _parseKuwoScale(String raw) {
+    final match = RegExp(
+      r'\[kuwo\s*:\s*([^\]]+)\]',
+      caseSensitive: false,
+    ).firstMatch(raw);
+    if (match == null) return null;
+    final value = int.tryParse(match.group(1)!.trim(), radix: 8);
+    if (value == null) return null;
+    final first = value ~/ 10;
+    final second = value % 10;
+    return first > 0 && second > 0 ? (first, second) : null;
+  }
+
+  static _ParsedLine? _parseLrcLine(
+    String line, {
+    required bool isKuwo,
+    required (int, int)? kuwoScale,
+  }) {
     // Kuwo LRCX can use a millisecond-only row marker such as `[12345]`.
     final RegExp timeRegExp = RegExp(
       r'\[(?:(\d{2}):(\d{2})\.?(\d{0,3})|(\d+))\]',
@@ -140,7 +178,11 @@ class LyricParser {
     final body = line.replaceAll(timeRegExp, '').trim();
     if (body.isEmpty) return null;
 
-    final words = _parseWordTags(body, lineStart: time);
+    final words = isKuwo
+        ? kuwoScale == null
+              ? null
+              : _parseKuwoWordTags(body, lineStart: time, scale: kuwoScale)
+        : _parseWordTags(body, lineStart: time);
     if (words != null && words.isNotEmpty) {
       final text = words.map((w) => w.text).join();
       if (text.isEmpty) return null;
@@ -154,6 +196,57 @@ class LyricParser {
         .trim();
     if (text.isEmpty) return null;
     return _ParsedLine(time: time, text: text);
+  }
+
+  static List<LyricWord>? _parseKuwoWordTags(
+    String body, {
+    required Duration lineStart,
+    required (int, int) scale,
+  }) {
+    final matches = RegExp(
+      r'<(-?\d+),(-?\d+)(?:,-?\d+)?>([^<]*)',
+    ).allMatches(body).toList();
+    if (matches.isEmpty) return null;
+
+    final words = <LyricWord>[];
+    for (final match in matches) {
+      final text = match.group(3) ?? '';
+      if (text.isEmpty) continue;
+      final first = int.parse(match.group(1)!);
+      final second = int.parse(match.group(2)!);
+      final relativeStart = ((first + second) / (scale.$1 * 2)).abs();
+      final relativeEnd =
+          relativeStart + ((first - second) / (scale.$2 * 2)).abs();
+      final startMs = relativeStart.round();
+      final endMs = relativeEnd.round();
+
+      if (words.isNotEmpty) {
+        final previous = words.last;
+        final previousStart =
+            previous.time.inMilliseconds - lineStart.inMilliseconds;
+        final previousEnd =
+            previousStart + (previous.duration?.inMilliseconds ?? 0);
+        if (startMs < previousEnd) {
+          final adjustedStart = previousStart.clamp(0, startMs);
+          words[words.length - 1] = LyricWord(
+            time: lineStart + Duration(milliseconds: adjustedStart),
+            text: previous.text,
+            duration: Duration(milliseconds: startMs - adjustedStart),
+          );
+        }
+      }
+
+      words.add(
+        LyricWord(
+          time: lineStart + Duration(milliseconds: startMs),
+          text: text,
+          duration: endMs > startMs
+              ? Duration(milliseconds: endMs - startMs)
+              : null,
+        ),
+      );
+    }
+    return words.isEmpty ? null : words;
   }
 
   /// 解析 LRCX / QRC 字级标签。
@@ -260,7 +353,8 @@ class LyricParser {
     required int durMs,
     required String text,
   }) {
-    // start 很大（> 行起点秒级）时视为绝对时间戳
+    // Generic LRCX/YRC labels are relative to the line. Large values used by
+    // converted formats may already be absolute media timestamps.
     final lineMs = lineStart.inMilliseconds;
     final Duration time;
     if (startMs >= lineMs && startMs > 10000) {

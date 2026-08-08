@@ -1,3 +1,4 @@
+import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lx_music_flutter/core/storage/ttl_cache.dart';
 import 'package:lx_music_flutter/features/lyric/domain/lyric.dart';
@@ -5,14 +6,102 @@ import 'package:lx_music_flutter/features/lyric/domain/lyric_service.dart';
 import 'package:lx_music_flutter/features/player/domain/music_item.dart';
 
 void main() {
+  test(
+    'preferred word-timed lyric wins over plain lyricsUrl fallback',
+    () async {
+      var fallbackRequests = 0;
+      final dio = Dio()
+        ..interceptors.add(
+          InterceptorsWrapper(
+            onRequest: (options, handler) {
+              fallbackRequests++;
+              handler.resolve(
+                Response(
+                  requestOptions: options,
+                  statusCode: 200,
+                  data: '[00:10.00]普通歌词',
+                ),
+              );
+            },
+          ),
+        );
+      final service = LyricService(
+        null,
+        TtlCache<Lyrics>(ttl: const Duration(hours: 1)),
+        dio,
+        (_) async => '[kuwo:13]\n[00:10.000]<1000,200>逐<1800,200>字',
+      );
+
+      final lyrics = await service.fetchLyric(
+        MusicItem(
+          id: 'kw-song',
+          name: 'song',
+          singer: 'artist',
+          source: 'kw',
+          platform: 'kw',
+          lyricsUrl: 'https://example.test/plain.lrc',
+        ),
+      );
+
+      expect(lyrics.lines.single.hasWordTiming, isTrue);
+      expect(lyrics.lines.single.text, '逐字');
+      expect(fallbackRequests, 0);
+    },
+  );
+
+  test(
+    'plain lyricsUrl is used only when preferred lyric is unavailable',
+    () async {
+      var fallbackRequests = 0;
+      final dio = Dio()
+        ..interceptors.add(
+          InterceptorsWrapper(
+            onRequest: (options, handler) {
+              fallbackRequests++;
+              handler.resolve(
+                Response(
+                  requestOptions: options,
+                  statusCode: 200,
+                  data: '[00:10.00]普通歌词',
+                ),
+              );
+            },
+          ),
+        );
+      final service = LyricService(
+        null,
+        TtlCache<Lyrics>(ttl: const Duration(hours: 1)),
+        dio,
+        (_) async => null,
+      );
+
+      final lyrics = await service.fetchLyric(
+        MusicItem(
+          id: 'kw-plain',
+          name: 'song',
+          singer: 'artist',
+          source: 'kw',
+          platform: 'kw',
+          lyricsUrl: 'https://example.test/plain.lrc',
+        ),
+      );
+
+      expect(lyrics.lines.single.hasWordTiming, isFalse);
+      expect(lyrics.lines.single.text, '普通歌词');
+      expect(fallbackRequests, 1);
+    },
+  );
+
   test('netease yrc payload parses into word-timed lyrics', () async {
     // 网易云 /api/song/lyric/v1 的 yrc.lyric 为 YRC 字级格式
     const yrc = r'''
 [00:05.00]你<0,180>好<180,220>世<400,200>界
 [00:09.00]下<0,180>一<180,220>行
 ''';
-    final service =
-        LyricService(null, TtlCache<Lyrics>(ttl: const Duration(hours: 1)));
+    final service = LyricService(
+      null,
+      TtlCache<Lyrics>(ttl: const Duration(hours: 1)),
+    );
     final music = MusicItem(
       id: 'yrc-song',
       name: 't',
@@ -59,9 +148,7 @@ void main() {
       'tx|song-1|song-1',
       Lyrics(
         raw: '[00:00.00]hello',
-        lines: const [
-          LyricLine(time: Duration.zero, text: 'hello'),
-        ],
+        lines: const [LyricLine(time: Duration.zero, text: 'hello')],
       ),
     );
     final hit = await service.fetchLyric(music);
@@ -81,14 +168,16 @@ void main() {
     );
     cache.set('tx|same|same', lyric);
 
-    final result = await service.fetchLyric(MusicItem(
-      id: 'same',
-      songmid: 'same',
-      name: 't',
-      singer: 's',
-      source: 'tx',
-      platform: 'tx',
-    ));
+    final result = await service.fetchLyric(
+      MusicItem(
+        id: 'same',
+        songmid: 'same',
+        name: 't',
+        singer: 's',
+        source: 'tx',
+        platform: 'tx',
+      ),
+    );
 
     expect(result.lines.single.text, 'tx');
   });

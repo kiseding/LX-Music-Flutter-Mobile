@@ -28,9 +28,6 @@ import 'package:lx_music_flutter/startup_lifecycle.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  AppLog.instance.install();
-  AppLog.instance.record('app', 'application startup started');
-
   // 创建 Riverpod Container 以在应用启动前访问 Providers
   final preferences = await SharedPreferences.getInstance();
   final documents = await getApplicationDocumentsDirectory();
@@ -63,8 +60,8 @@ void main() async {
 
     try {
       recordNetworkTransports(await connectivity.checkConnectivity());
-      final connectivitySubscription =
-          connectivity.onConnectivityChanged.listen(recordNetworkTransports);
+      final connectivitySubscription = connectivity.onConnectivityChanged
+          .listen(recordNetworkTransports);
       disposals.register(connectivitySubscription.cancel);
     } catch (error, stackTrace) {
       AppLog.instance.record(
@@ -80,7 +77,10 @@ void main() async {
     AppLog.instance.record('audio.session', 'audio session configured');
     final lxHandler = LxAudioHandler(
       prepareForPlayback: () async {
-        AppLog.instance.record('audio.session', 'audio session activation requested');
+        AppLog.instance.record(
+          'audio.session',
+          'audio session activation requested',
+        );
         final activated = await session.setActive(true);
         AppLog.instance.record(
           'audio.session',
@@ -126,8 +126,8 @@ void main() async {
         'audio.state',
         'processing=${state.processingState.name} playing=${state.playing} '
             'queueIndex=${state.queueIndex}',
-        level: state.processingState == AudioProcessingState.idle &&
-                state.playing
+        level:
+            state.processingState == AudioProcessingState.idle && state.playing
             ? AppLogLevel.warning
             : AppLogLevel.info,
       );
@@ -147,7 +147,8 @@ void main() async {
       interruptionEvents: session.interruptionEventStream,
       noisyEvents: session.becomingNoisyEventStream,
       onInterruption: (event) async {
-        final ignored = event.type == AudioInterruptionType.duck ||
+        final ignored =
+            event.type == AudioInterruptionType.duck ||
             event.type == AudioInterruptionType.unknown;
         AppLog.instance.record(
           'audio.interruption',
@@ -190,6 +191,7 @@ void main() async {
           );
           return summaries.isEmpty ? 'none' : summaries.join('; ');
         }
+
         AppLog.instance.record(
           'audio.route',
           'outputs added=[${outputDeviceSummary(addedOutputs)}] '
@@ -254,7 +256,8 @@ void main() async {
       lxHandler.urlResolver = (mediaId, [extras]) async {
         debugPrint('[urlResolver] 开始解析: mediaId=$mediaId');
         // 优先用调用方传入的 extras（预加载下一首时 mediaItem 仍是当前曲）
-        final Map<String, dynamic>? rawExtras = extras ??
+        final Map<String, dynamic>? rawExtras =
+            extras ??
             (lxHandler.mediaItem.value?.id == mediaId
                 ? lxHandler.mediaItem.value?.extras
                 : null) ??
@@ -338,10 +341,10 @@ void main() async {
     // 渲染，造成启动白屏。
     unawaited(
       restorePlaybackSession(
-      container: container,
-      autoplay: preferences.getBool('auto_resume_playback') ?? false,
-    ).catchError((Object e) {
-      debugPrint('[startup] 恢复播放会话失败: $e');
+        container: container,
+        autoplay: preferences.getBool('auto_resume_playback') ?? false,
+      ).catchError((Object e) {
+        debugPrint('[startup] 恢复播放会话失败: $e');
       }),
     );
 

@@ -8,7 +8,6 @@ import '../features/search/presentation/search_screen.dart';
 import '../features/playlist/presentation/playlist_screen.dart';
 import '../features/playlist/presentation/playlist_detail_screen.dart';
 import '../features/settings/presentation/settings_screen.dart';
-import '../features/settings/presentation/app_log_screen.dart';
 import '../features/download/presentation/download_screen.dart';
 import '../features/custom_source/presentation/custom_source_screen.dart';
 import '../features/leaderboard/presentation/leaderboard_screen.dart';
@@ -65,10 +64,7 @@ final appRouter = GoRouter(
       branches: [
         StatefulShellBranch(
           routes: [
-            GoRoute(
-              path: '/',
-              builder: (context, state) => const HomeScreen(),
-            ),
+            GoRoute(path: '/', builder: (context, state) => const HomeScreen()),
           ],
         ),
         StatefulShellBranch(
@@ -127,8 +123,10 @@ final appRouter = GoRouter(
             reverseCurve: Curves.easeInCubic,
           );
           return SlideTransition(
-            position: Tween<Offset>(begin: const Offset(0, 1), end: Offset.zero)
-                .animate(curved),
+            position: Tween<Offset>(
+              begin: const Offset(0, 1),
+              end: Offset.zero,
+            ).animate(curved),
             child: child,
           );
         },
@@ -143,11 +141,6 @@ final appRouter = GoRouter(
       path: '/custom-source',
       parentNavigatorKey: _rootNavigatorKey,
       builder: (context, state) => const CustomSourceScreen(),
-    ),
-    GoRoute(
-      path: '/diagnostic-logs',
-      parentNavigatorKey: _rootNavigatorKey,
-      builder: (context, state) => AppLogScreen(),
     ),
     GoRoute(
       path: '/leaderboard/detail',

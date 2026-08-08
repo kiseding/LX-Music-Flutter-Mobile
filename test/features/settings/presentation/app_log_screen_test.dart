@@ -4,24 +4,51 @@ import 'package:lx_music_flutter/core/logging/app_log.dart';
 import 'package:lx_music_flutter/features/settings/presentation/app_log_screen.dart';
 
 void main() {
-  testWidgets('shows live entries and enables copy when available', (tester) async {
+  testWidgets('shows live entries and enables copy when available', (
+    tester,
+  ) async {
     final log = AppLog();
     log.record('audio', 'route changed');
 
-    await tester.pumpWidget(
-      MaterialApp(home: AppLogScreen(log: log)),
-    );
+    await tester.pumpWidget(MaterialApp(home: AppLogScreen(log: log)));
 
     expect(find.textContaining('route changed'), findsOneWidget);
     expect(find.byTooltip('复制全部'), findsOneWidget);
-    final copyButton = find.widgetWithIcon(
-      IconButton,
-      Icons.copy_all_outlined,
-    );
+    final copyButton = find.widgetWithIcon(IconButton, Icons.copy_all_outlined);
     expect(copyButton, findsOneWidget);
-    expect(
-      tester.widget<IconButton>(copyButton).onPressed,
-      isNotNull,
-    );
+    expect(tester.widget<IconButton>(copyButton).onPressed, isNotNull);
   });
+
+  testWidgets(
+    'diagnostic overlay minimizes while recording and stops on close',
+    (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (context) => ElevatedButton(
+              onPressed: () => showDiagnosticLogOverlay(context),
+              child: const Text('open'),
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(find.text('open'));
+      await tester.pump();
+      expect(AppLog.instance.isActive, isTrue);
+      expect(find.text('实时诊断日志'), findsOneWidget);
+
+      await tester.tap(find.byTooltip('最小化'));
+      await tester.pump();
+      expect(find.textContaining('诊断 '), findsOneWidget);
+      expect(AppLog.instance.isActive, isTrue);
+
+      await tester.tap(find.textContaining('诊断 '));
+      await tester.pump();
+      await tester.tap(find.byTooltip('关闭诊断日志'));
+      await tester.pump();
+      expect(find.text('实时诊断日志'), findsNothing);
+      expect(AppLog.instance.isActive, isFalse);
+    },
+  );
 }
